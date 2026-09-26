@@ -99,6 +99,16 @@ def test_deliveries_idempotent(repo, meeting):
     assert len(repo.list_deliveries(meeting.id)) == 1
 
 
+def test_upsert_delivery_replaces_pointer(repo, meeting):
+    repo.save_meeting(meeting)
+    key = "mtg:k3v7q2ab:notes"
+    repo.upsert_delivery(meeting.id, "discord", key, external_id="a", url="u1")
+    repo.upsert_delivery(meeting.id, "discord", key, external_id="b", url="u2")
+    row = repo.get_delivery("discord", key)
+    assert (row["external_id"], row["url"]) == ("b", "u2")
+    assert len(repo.list_deliveries(meeting.id)) == 1
+
+
 def test_action_items(repo, meeting, notes):
     repo.save_meeting(meeting)
     repo.sync_action_items(meeting.id, notes.action_items)

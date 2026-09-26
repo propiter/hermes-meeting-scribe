@@ -264,6 +264,13 @@ class Repository:
         self._x("INSERT OR IGNORE INTO deliveries (meeting_id, sink, key, external_id, url, created_at)"
                 " VALUES (?,?,?,?,?,?)", (meeting_id, sink, key, external_id, url, time.time()))
 
+    def upsert_delivery(self, meeting_id: str, sink: str, key: str, *, external_id: Optional[str],
+                        url: Optional[str]) -> None:
+        """Mutable pointer (e.g. the Discord notes message that later reprocesses edit in place)."""
+        self._x("INSERT INTO deliveries (meeting_id, sink, key, external_id, url, created_at) VALUES (?,?,?,?,?,?)"
+                " ON CONFLICT(sink, key) DO UPDATE SET external_id=excluded.external_id, url=excluded.url",
+                (meeting_id, sink, key, external_id, url, time.time()))
+
     def list_deliveries(self, meeting_id: str) -> list[dict[str, Any]]:
         return [dict(r) for r in self._x("SELECT * FROM deliveries WHERE meeting_id=? ORDER BY id",
                                          (meeting_id,)).fetchall()]
