@@ -1,4 +1,13 @@
 {
+  "capture.announce": "🔴 Recording **{channel}** for meeting notes. Everyone in this voice channel is recorded per speaker and transcribed locally. Use `/meeting stop` to end it.",
+  "capture.busy": "I'm already connected to a voice channel in this server (for example via `/voice join`). Run `/voice leave` first, then start the recording again.",
+  "capture.reason_disconnected": "voice connection lost",
+  "capture.reason_empty": "nobody left in the channel",
+  "capture.reason_error": "internal error",
+  "capture.reason_max_duration": "maximum duration reached",
+  "capture.reason_shutdown": "gateway shutting down",
+  "capture.reason_stopped": "stopped by command",
+  "capture.stopped": "⏹️ Recording stopped ({reason}). Meeting `{id}` is being processed; notes will be posted here.",
   "cli.exported": "Exported to {path}",
   "cli.model_estimate": "{model}: ~{factor}× real time on {threads} CPU threads (estimate).",
   "cli.no_meetings": "No meetings.",

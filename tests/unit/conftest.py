@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 from datetime import datetime, timezone
 
 import subprocess
@@ -11,6 +13,17 @@ from meeting_scribe.audio.ffmpeg import FfmpegNotFound, resolve_ffmpeg
 from meeting_scribe.domain.models import (
     ActionItem, Meeting, MeetingState, Notes, Speaker, Topic, Utterance,
 )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem):
+    """Run ``async def`` tests on a fresh event loop (no pytest-asyncio dependency)."""
+    if not inspect.iscoroutinefunction(pyfuncitem.obj):
+        return None
+    names = pyfuncitem._fixtureinfo.argnames
+    kwargs = {n: pyfuncitem.funcargs[n] for n in names}
+    asyncio.run(asyncio.wait_for(pyfuncitem.obj(**kwargs), timeout=20))
+    return True
 
 
 @pytest.fixture

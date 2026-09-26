@@ -1,4 +1,13 @@
 {
+  "capture.announce": "🔴 Grabando **{channel}** para tomar notas de la reunión. Se graba a cada participante de este canal de voz por separado y se transcribe localmente. Usa `/meeting stop` para terminar.",
+  "capture.busy": "Ya estoy conectado a un canal de voz en este servidor (por ejemplo con `/voice join`). Ejecuta `/voice leave` primero y vuelve a iniciar la grabación.",
+  "capture.reason_disconnected": "se perdió la conexión de voz",
+  "capture.reason_empty": "no queda nadie en el canal",
+  "capture.reason_error": "error interno",
+  "capture.reason_max_duration": "se alcanzó la duración máxima",
+  "capture.reason_shutdown": "el gateway se está apagando",
+  "capture.reason_stopped": "detenida por comando",
+  "capture.stopped": "⏹️ Grabación detenida ({reason}). La reunión `{id}` se está procesando; las notas se publicarán aquí.",
   "cli.exported": "Exportado a {path}",
   "cli.model_estimate": "{model}: ~{factor}× tiempo real con {threads} hilos de CPU (estimación).",
   "cli.no_meetings": "No hay reuniones.",
