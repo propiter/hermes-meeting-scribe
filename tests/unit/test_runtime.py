@@ -5,7 +5,6 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 
 from meeting_scribe.runtime import Host, Runtime
 from meeting_scribe.sinks.linear import LinearGraphQL, LinearMcp

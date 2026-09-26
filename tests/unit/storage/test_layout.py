@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from meeting_scribe.storage.layout import Layout
 

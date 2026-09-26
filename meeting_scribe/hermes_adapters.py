@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from .domain.models import Candidate, Meeting
@@ -76,13 +78,13 @@ def secret(name: str) -> Optional[str]:
     return get_secret(name)
 
 
-def data_dir():  # -> Path
+def data_dir() -> Path:
     from plugins.plugin_storage import plugin_data_dir
 
     return plugin_data_dir("meeting-scribe")
 
 
-def context_spawner(target: Callable[[], None], *, name: str, daemon: bool = True):
+def context_spawner(target: Callable[[], None], *, name: str, daemon: bool = True) -> threading.Thread:
     """Thread factory that carries the profile contextvars into the pipeline worker."""
     from agent.memory_provider import spawn_context_thread
 

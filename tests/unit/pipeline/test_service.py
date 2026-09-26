@@ -1,9 +1,8 @@
 from dataclasses import replace
-from datetime import timedelta
 
 import pytest
 
-from meeting_scribe.domain.models import ActionStatus, Candidate, MeetingState, SinkResult, Speaker
+from meeting_scribe.domain.models import ActionStatus, MeetingState, Speaker
 from meeting_scribe.pipeline.service import MeetingService
 from meeting_scribe.storage.artifacts import read_meta, read_notes
 
