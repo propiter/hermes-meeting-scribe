@@ -19,6 +19,7 @@ class FakeCtx:
         self.tools, self.commands, self.cli, self.skills, self.aux = {}, {}, {}, {}, {}
         self.llm = SimpleNamespace()
         self.plugin_id = "meeting-scribe"
+        self.platform_handlers, self.unload = {}, []
 
     def get_config(self, key, default=None):
         return self.cfg.get(key, default)
@@ -45,6 +46,12 @@ class FakeCtx:
     def call_mcp(self, server, tool, arguments=None, timeout=30):
         raise PermissionError("not allowlisted")
 
+    def register_platform_handler(self, platform, factory):
+        self.platform_handlers.setdefault(platform, []).append(factory)
+
+    def on_unload(self, callback):
+        self.unload.append(callback)
+
 
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
@@ -66,7 +73,9 @@ def test_register_wires_everything(ctx):
     assert set(ctx.commands) == {"meeting", "meet", "rec"}
     assert ctx.commands["meeting"][1]  # args hint so Discord shows an argument field
     assert "meeting-scribe" in ctx.cli and set(ctx.skills) == {"meeting-scribe"}
-    assert rt.capture is None  # Phase B packages expose no install() yet
+    assert rt.capture is not None and hasattr(rt.capture, "start")  # Phase B installed
+    assert len(ctx.platform_handlers["discord"]) == 1 and len(ctx.unload) == 2
+    assert any(getattr(s, "name", "") == "discord" for s in rt.sinks())
 
 
 def test_aliases_from_config(tmp_path, monkeypatch):
@@ -84,7 +93,7 @@ def test_command_handler_uses_session_caller(ctx, monkeypatch):
     monkeypatch.setattr(plugin, "caller_from_session", lambda: plugin.Caller("discord", "1", "2"))
     handler = ctx.commands["rec"][0]
     assert "/rec" in handler("help")
-    assert "not available" in handler("")
+    assert "not connected" in handler("")  # capture installed, gateway not connected in unit tests
 
 
 def test_tool_handlers_return_json(ctx):

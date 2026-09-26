@@ -65,13 +65,13 @@ class CaptureManager:
 
     def __init__(self, *, service: Callable[[], Any], settings: Callable[[], Settings],
                  ffmpeg: Callable[[], Optional[Ffmpeg]], writer_factory: WriterFactory = default_writer,
-                 compat: Callable[[Any], CompatResult] = compat_for_adapter, tick: float = 0.5,
+                 compat: Optional[Callable[[Any], CompatResult]] = None, tick: float = 0.5,
                  clock: Callable[[], float] = time.time) -> None:
         self._service = service
         self._settings = settings
         self._ffmpeg = ffmpeg
         self._writer_factory = writer_factory
-        self._compat = compat
+        self._compat = compat or (lambda adapter: compat_for_adapter(adapter))  # late-bound for probes
         self._tick = tick
         self._clock = clock
         self._adapter_ref: Optional[weakref.ReferenceType] = None

@@ -174,7 +174,11 @@ class Runtime:
     def capture_status(self) -> tuple[bool, str]:
         if self.capture is None:
             return False, "live capture not installed (meeting_scribe.capture is Phase B); processing works"
-        return True, "capture controller installed"
+        status = getattr(self.capture, "status", None)
+        if not callable(status):
+            return True, "capture controller installed"
+        ok, detail = status()
+        return bool(ok), str(detail)
 
     def close(self) -> None:
         with self._lock:
