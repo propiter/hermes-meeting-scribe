@@ -33,7 +33,7 @@ def host(tmp_path: Path, config=None, secrets=None, mcp_allowed=False):
         llm=lambda: SimpleNamespace(),
         secret=lambda name: sec.get(name),
         spawner=lambda target, *, name, daemon=True: threading.Thread(target=target, name=name, daemon=daemon),
-        call_mcp=(lambda server, tool, args: {"ok": True, "result": "{}"}) if mcp_allowed else None,
+        call_mcp=lambda: (lambda server, tool, args: {"ok": True, "result": "{}"}) if mcp_allowed else None,
         kanban=FakeKanban(),
         project_sources=lambda: [],
         llm_ready=lambda: (True, "ok"),
@@ -126,3 +126,14 @@ def test_catalogs_include_learned_and_linear(tmp_path):
     h, _ = host(tmp_path)
     names = [c.name for c in Runtime(h).catalogs()]
     assert names == ["learned", "linear"]
+
+
+def test_runtime_is_a_doctor_env(tmp_path):
+    h, cfg = host(tmp_path)
+    rt = Runtime(h)
+    env = rt.doctor_env()
+    assert env.data_dir() == tmp_path / "data"
+    assert env.kanban_boards()[0]["slug"] == "default"
+    assert env.llm_status() == (True, "ok")
+    rt.set_config("kanban.mode", "off")
+    assert cfg["kanban.mode"] == "off"

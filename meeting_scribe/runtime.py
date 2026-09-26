@@ -39,7 +39,8 @@ class SystemClock:
 
 @dataclass
 class Host:
-    """Everything the plugin needs from Hermes. ``call_mcp`` is None unless allowlisted."""
+    """Everything the plugin needs from Hermes. ``call_mcp()`` returns None unless the operator
+    allowlisted the ``linear`` MCP server (re-evaluated per call; config can change at runtime)."""
 
     get_config: Callable[[str, Any], Any]
     set_config: Callable[[str, Any], None]
@@ -47,7 +48,7 @@ class Host:
     llm: Callable[[], Any]
     secret: Callable[[str], Optional[str]]
     spawner: Callable[..., threading.Thread]
-    call_mcp: Optional[Callable[[str, str, dict], Any]]
+    call_mcp: Callable[[], Optional[Callable[[str, str, dict], Any]]]
     kanban: KanbanGateway
     project_sources: Callable[[], list[CallableCatalog]]
     llm_ready: Callable[[], tuple[bool, str]]
@@ -78,7 +79,7 @@ class Runtime:
         return Layout(self.host.data_dir)
 
     def linear_backend(self) -> Optional[LinearBackend]:
-        return select_backend(lambda: self.host.secret("LINEAR_API_KEY"), self.host.call_mcp)
+        return select_backend(lambda: self.host.secret("LINEAR_API_KEY"), self.host.call_mcp())
 
     def repo(self) -> Repository:
         path = self.layout().db_path()
@@ -147,6 +148,28 @@ class Runtime:
 
     def pipeline_running(self) -> bool:
         return self._service is not None and self._service.runner.running
+
+    # -- doctor / CLI surface -------------------------------------------------------------------
+    def data_dir(self) -> Path:
+        return self.host.data_dir()
+
+    def kanban_boards(self) -> list[dict[str, Any]]:
+        return self.host.kanban.list_boards()
+
+    def llm_status(self) -> tuple[bool, str]:
+        return self.host.llm_ready()
+
+    def set_config(self, key: str, value: Any) -> None:
+        self.host.set_config(key, value)
+
+    def doctor_env(self) -> "Runtime":
+        return self
+
+    def ensure_pipeline(self) -> None:
+        """Start the worker lazily in the gateway (commands call this); Phase B starts it on connect."""
+        if not self.pipeline_running():
+            live = self.capture.live_meeting_ids() if self.capture is not None else set()
+            self.start_pipeline(live)
 
     def capture_status(self) -> tuple[bool, str]:
         if self.capture is None:
