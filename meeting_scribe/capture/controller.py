@@ -102,6 +102,15 @@ class CaptureManager:
         return self._adapter_ref() if self._adapter_ref is not None else None
 
     @property
+    def loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        """The gateway loop the adapter runs on (set by :meth:`attach`)."""
+        return self._loop
+
+    @property
+    def compat_result(self) -> Optional[CompatResult]:
+        return self._compat_result
+
+    @property
     def lang(self) -> str:
         return self._settings().ui_language
 

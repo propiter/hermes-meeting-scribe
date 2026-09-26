@@ -175,3 +175,10 @@ async def test_shutdown_finalizes_live_sessions(world):
     await in_thread(mgr.start, caller(), None)
     await in_thread(mgr.shutdown)
     assert world["svc"].finished[0][1] is True and mgr.live_meeting_ids() == set()
+
+
+async def test_attach_exposes_loop_and_compat(world):
+    mgr = world["mgr"]
+    assert mgr.loop is None and mgr.compat_result is None
+    mgr.attach(world["adapter"]._client, world["adapter"])
+    assert mgr.loop is asyncio.get_running_loop() and mgr.compat_result.ok
