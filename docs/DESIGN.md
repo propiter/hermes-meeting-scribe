@@ -263,4 +263,5 @@ SMTP?". Plugin skill `meeting-scribe:meeting-scribe` explains usage.
   `service.approve_item/approve_all/dismiss_item`.
 - Doctor: `meeting_scribe.doctor.register_check(name, fn)`, `fn(env) -> Check`.
 - Integration tests run under Hermes' interpreter via `scripts/test-integration.sh`
-  (pytest in a repo-local, gitignored `.hermes-test-deps/`).
+  (pytest in `~/.cache/meeting-scribe/hermes-test-deps`, outside the plugin root
+  because `plugins validate` security-scans every file under it).
