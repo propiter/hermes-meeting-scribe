@@ -223,6 +223,12 @@ class Repository:
                        tuple(states)).fetchall()
         return [self._job(r) for r in rows]
 
+    def claim_job(self, job_id: int, *, now: datetime) -> bool:
+        """Atomically move ``queued -> running``; False when another worker got it first."""
+        cur = self._x("UPDATE jobs SET state='running', updated_at=? WHERE id=? AND state='queued'",
+                      (_ts(now), job_id))
+        return cur.rowcount == 1
+
     def mark_job_running(self, job_id: int, *, now: datetime) -> None:
         self._x("UPDATE jobs SET state='running', updated_at=? WHERE id=?", (_ts(now), job_id))
 

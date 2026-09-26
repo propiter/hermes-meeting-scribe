@@ -131,3 +131,13 @@ def test_migration_from_older_version(tmp_path):
     r = Repository(db)
     assert r.user_version() == SCHEMA_VERSION
     r.close()
+
+
+def test_claim_job_is_exclusive(repo, meeting):
+    # Two processes (gateway worker + `hermes meeting-scribe process`) may race for one job.
+    repo.save_meeting(meeting)
+    repo.enqueue_job(meeting.id, Stage.TRANSCRIBE, now=NOW)
+    job = repo.next_job(now=NOW)
+    assert repo.claim_job(job.id, now=NOW) is True
+    assert repo.claim_job(job.id, now=NOW) is False
+    assert repo.get_job(meeting.id).state == "running"

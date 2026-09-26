@@ -121,6 +121,8 @@ class PipelineRunner:
         job = self.repo.next_job(now=self.clock.now())
         if job is None:
             return False
+        if not self.repo.claim_job(job.id, now=self.clock.now()):
+            return True  # another process took it; look again
         self._busy.set()
         try:
             self._run_job(job.id, job.meeting_id, job.stage, job.attempts)
@@ -129,7 +131,6 @@ class PipelineRunner:
         return True
 
     def _run_job(self, job_id: int, meeting_id: str, first: Stage, attempts: int) -> None:
-        self.repo.mark_job_running(job_id, now=self.clock.now())
         meeting = self._meeting(meeting_id)
         stage = first
         try:
