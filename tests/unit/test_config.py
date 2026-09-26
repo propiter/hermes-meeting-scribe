@@ -77,3 +77,14 @@ def test_plugin_yaml_config_schema_in_sync_with_settings():
         assert schema[key].get("description"), key
         if spec.choices:
             assert schema[key]["choices"] == list(spec.choices), key
+
+
+def test_validate_value_for_cli():
+    from meeting_scribe.config import validate_value
+    assert validate_value("kanban.mode", "auto") == "auto"
+    assert validate_value("autojoin.enabled", "no") is False
+    assert validate_value("owners", "1, 2") == ["1", "2"]  # YAML-friendly list, not tuple
+    with pytest.raises(ValueError, match="kanban.mode"):
+        validate_value("kanban.mode", "sometimes")
+    with pytest.raises(KeyError):
+        validate_value("nope", "x")

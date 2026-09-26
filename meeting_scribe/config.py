@@ -208,3 +208,16 @@ def schema_for_manifest() -> dict[str, dict[str, Any]]:
 def settings_from_mapping(values: Mapping[str, Any]) -> Settings:
     """Convenience for tests/CLI: load from a flat dotted mapping."""
     return Settings.load(lambda key, default=None: values.get(key, default))
+
+
+def validate_value(key: str, raw: Any) -> Any:
+    """Coerce one user-supplied value (CLI ``config set`` / setup) into what we store in config.yaml.
+
+    Raises ``KeyError`` for unknown keys and ``ValueError`` (naming the key) for invalid values.
+    """
+    opt = SPEC[key]
+    try:
+        value = _coerce(opt, raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{key}: {exc}") from exc
+    return list(value) if isinstance(value, tuple) else value
