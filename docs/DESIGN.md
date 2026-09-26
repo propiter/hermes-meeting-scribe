@@ -37,25 +37,33 @@ meeting_scribe/
   i18n/        es.json, en.json (+ loader, fallback en)
   storage/     layout.py (paths), repo.py (SQLite index + FTS5 + job table),
                artifacts.py (meta.json, transcript.jsonl/.md, notes.md, tasks.json)
-  capture/     compat.py, receiver.py (ScribeReceiver + TimedBuffer),
+  audio/       ffmpeg.py (binary resolution: PATH → ~/.hermes/tools/ffmpeg-*/bin →
+               audio.ffmpeg_path; decode, probe), archive.py (final packaging per
+               retention, stream extraction for reprocess)
+  capture/     (Phase B) compat.py, receiver.py (ScribeReceiver + TimedBuffer),
                tracks.py (live ffmpeg opus writer per speaker, timeline-aligned),
-               session.py (RecordingSession lifecycle), autojoin.py,
-               ffmpeg.py (binary resolution)
+               session.py (RecordingSession lifecycle), autojoin.py
   transcribe/  worker.py (subprocess entry: faster-whisper, segments+words),
+               client.py (launches worker, timeout scaled by duration),
                merge.py (per-speaker segments -> ordered utterances),
                filters.py (hallucination filters)
-  analyze/     chunking.py, prompts.py, extract.py (complete_structured,
+  analyze/     chunking.py, prompts.py, schemas.py, extract.py (complete_structured,
                map-reduce), projects.py (candidate gathering + resolution,
                learned channel->project map)
-  sinks/       base.py, files.py, discord_notes.py, kanban.py, linear.py,
-               obsidian.py
-  pipeline/    runner.py (single worker, resumable job queue), stages.py
+  sinks/       base.py, files.py, kanban.py, linear.py, obsidian.py,
+               discord_notes.py (Phase B; interface in base.DiscordNotesSink)
+  pipeline/    runner.py (single worker, resumable job queue), stages.py,
+               service.py (MeetingService: the API capture/UI/CLI call)
+  commands.py  platform-agnostic /meeting router (Caller from session env)
   discord_ui/  commands.py (slash command router + aliases), views.py
                (persistent DynamicItem buttons), resolve.py (guild/voice)
   tools.py     agent tools: meeting_search, meeting_get
   cli.py       hermes meeting-scribe setup|doctor|status|list|show|reprocess|export|config
-  archive.py   final audio packaging
-__init__.py    register(ctx)
+  doctor.py    check registry (Phase B adds compat/intents checks)
+  runtime.py   composition root (adapters built from a Host of Hermes callables)
+  hermes_adapters.py  lazy Hermes imports (LLM, projects, kanban, secrets, threads)
+  plugin.py    register(ctx, root): wires tools/commands/CLI/skill, then Phase B install()
+__init__.py    register(ctx) → meeting_scribe.plugin.register
 skills/meeting-scribe/SKILL.md
 ```
 
@@ -235,3 +243,24 @@ SMTP?". Plugin skill `meeting-scribe:meeting-scribe` explains usage.
 - First ~100 ms of a new speaker can be lost until SPEAKING maps its SSRC
   (DAVE needs the mapping).
 - CPU transcription of `medium` ≈ 1–3× real time on a 16-core CPU.
+
+## 13. Phase B contract (implemented in Phase A, consumed by capture/UI)
+
+- `meeting_scribe.capture` / `meeting_scribe.discord_ui` may expose
+  `install(ctx, runtime)`; `plugin.register` calls it after the core is wired and
+  logs (never raises) if it is missing or fails.
+- Capture sets `runtime.capture` to a `commands.CaptureController`
+  (`start(caller, target) -> str`, `stop(caller) -> str`, `live_meeting_ids() -> set[str]`).
+  Until then `/meeting start|stop` answer `capture.unavailable`.
+- Recording handoff (`runtime.service()`, a `MeetingService`):
+  `begin_recording(meeting)` (state `recording`) → write each speaker to
+  `track_path(meeting, user_id)` (`tracks/<user_id>.ogg`) →
+  `finish_recording(meeting_id, speakers=..., partial=...)` enqueues the job.
+- On gateway connect call `runtime.start_pipeline(capture.live_meeting_ids())`
+  (commands also start it lazily via `runtime.ensure_pipeline()`).
+- Discord notes sink: satisfy `sinks.base.DiscordNotesSink` and register with
+  `runtime.add_sink(sink)`; approvals from buttons call
+  `service.approve_item/approve_all/dismiss_item`.
+- Doctor: `meeting_scribe.doctor.register_check(name, fn)`, `fn(env) -> Check`.
+- Integration tests run under Hermes' interpreter via `scripts/test-integration.sh`
+  (pytest in a repo-local, gitignored `.hermes-test-deps/`).
