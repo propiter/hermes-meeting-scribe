@@ -72,11 +72,21 @@
   "sink.linear_inactive": "Linear no está conectado (sin LINEAR_API_KEY ni servidor MCP `linear` permitido).",
   "sink.linear_issue_body": "{description}\n\n> {quote}\n\nReunión: {title} ({date}) en {ts}",
   "transcript.title": "Transcripción — {title}",
+  "ui.action_failed": "No se pudo hacer: {error}",
+  "ui.approved": "Enviada a {sink}: {ref}",
+  "ui.approved_all": "{count} tarea(s) enviadas a {sink}.",
   "ui.btn_all_kanban": "Aprobar todas → Kanban",
   "ui.btn_all_linear": "Aprobar todas → Linear",
   "ui.btn_dismiss": "Descartar",
   "ui.btn_kanban": "Kanban",
   "ui.btn_linear": "Linear",
   "ui.btn_project": "Proyecto",
-  "ui.bulk_line": "📁 Proyecto: **{project}**"
+  "ui.bulk_line": "📁 Proyecto: **{project}**",
+  "ui.dismissed": "Tarea descartada.",
+  "ui.no_projects": "No hay proyectos disponibles (proyectos de Hermes, tableros Kanban o Linear).",
+  "ui.no_selection": "no se eligió ningún proyecto",
+  "ui.not_allowed": "No tienes permiso para usar estos botones.",
+  "ui.owner_only": "Solo los dueños de la reunión pueden enviar tareas al Kanban.",
+  "ui.pick_project": "Elige el proyecto de esta reunión:",
+  "ui.project_saved": "Proyecto asignado: “{project}”; este canal lo usará por defecto a partir de ahora."
 }

@@ -72,11 +72,21 @@
   "sink.linear_inactive": "Linear is not connected (no LINEAR_API_KEY and no allowlisted `linear` MCP server).",
   "sink.linear_issue_body": "{description}\n\n> {quote}\n\nMeeting: {title} ({date}) at {ts}",
   "transcript.title": "Transcript — {title}",
+  "ui.action_failed": "Could not do that: {error}",
+  "ui.approved": "Sent to {sink}: {ref}",
+  "ui.approved_all": "Sent {count} task(s) to {sink}.",
   "ui.btn_all_kanban": "Approve all → Kanban",
   "ui.btn_all_linear": "Approve all → Linear",
   "ui.btn_dismiss": "Dismiss",
   "ui.btn_kanban": "Kanban",
   "ui.btn_linear": "Linear",
   "ui.btn_project": "Project",
-  "ui.bulk_line": "📁 Project: **{project}**"
+  "ui.bulk_line": "📁 Project: **{project}**",
+  "ui.dismissed": "Task dismissed.",
+  "ui.no_projects": "No projects available (Hermes projects, Kanban boards or Linear).",
+  "ui.no_selection": "no project selected",
+  "ui.not_allowed": "You are not allowed to use these buttons.",
+  "ui.owner_only": "Only meeting owners can send tasks to Kanban.",
+  "ui.pick_project": "Pick the project for this meeting:",
+  "ui.project_saved": "Project set to “{project}”; this channel will default to it from now on."
 }
