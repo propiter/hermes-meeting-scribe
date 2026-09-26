@@ -1,0 +1,155 @@
+import json
+
+import pytest
+
+from meeting_scribe.domain.models import ActionStatus, Candidate, Speaker
+from meeting_scribe.sinks.linear import (
+    LinearError, LinearGraphQL, LinearMcp, LinearSink, match_linear_user, select_backend,
+)
+
+TEAMS = [{"id": "team_1", "key": "ENG", "name": "Engineering"}, {"id": "team_2", "key": "OPS", "name": "Ops"}]
+USERS = [{"id": "u_ana", "name": "Ana María Ruiz", "displayName": "ana", "email": "ana@x.io", "active": True},
+         {"id": "u_luis", "name": "Luis Pérez", "displayName": "luisp", "email": "luis@x.io", "active": True},
+         {"id": "u_old", "name": "Luis Perez", "displayName": "old", "email": "o@x.io", "active": False}]
+
+
+class FakeTransport:
+    def __init__(self):
+        self.requests = []
+
+    def __call__(self, url, headers, body):
+        req = json.loads(body)
+        self.requests.append((url, headers, req))
+        q = req["query"]
+        if "issueCreate" in q:
+            inp = req["variables"]["input"]
+            return {"data": {"issueCreate": {"success": True, "issue": {
+                "id": "iss_1", "identifier": "ENG-1", "url": "https://linear.app/x/issue/ENG-1", "_in": inp}}}}
+        if "projects" in q:
+            return {"data": {"projects": {"nodes": [{"id": "prj_9", "name": "Infra",
+                                                     "teams": {"nodes": [{"id": "team_2"}]}}]}}}
+        if "teams" in q:
+            return {"data": {"teams": {"nodes": TEAMS}}}
+        if "users" in q:
+            return {"data": {"users": {"nodes": USERS}}}
+        if "viewer" in q:
+            return {"data": {"viewer": {"id": "me", "name": "Pedro", "email": "p@x.io"}}}
+        raise AssertionError(q)
+
+
+def gql(transport=None):
+    return LinearGraphQL(lambda: "lin_api_KEY", transport=transport or FakeTransport())
+
+
+def test_graphql_auth_header_has_no_bearer():
+    t = FakeTransport()
+    gql(t).viewer()
+    url, headers, _ = t.requests[0]
+    assert url == "https://api.linear.app/graphql" and headers["Authorization"] == "lin_api_KEY"
+
+
+def test_graphql_errors_raise():
+    client = LinearGraphQL(lambda: "k", transport=lambda u, h, b: {"errors": [{"message": "bad"}]})
+    with pytest.raises(LinearError, match="bad"):
+        client.teams()
+
+
+def test_graphql_lists_and_create():
+    client = gql()
+    assert [t["key"] for t in client.teams()] == ["ENG", "OPS"]
+    assert client.projects()[0]["team_ids"] == ["team_2"]
+    issue = client.create_issue({"teamId": "team_1", "title": "T"})
+    assert issue["url"].endswith("ENG-1") and issue["id"] == "iss_1"
+
+
+def test_match_linear_user_precedence():
+    ana = Speaker("10", "Ana")
+    assert match_linear_user(ana, USERS, link={"linear_user_id": "u_luis"})["id"] == "u_luis"
+    assert match_linear_user(ana, USERS, link={"email": "ANA@x.io"})["id"] == "u_ana"
+    assert match_linear_user(ana, USERS, link=None)["id"] == "u_ana"  # displayName exact
+    assert match_linear_user(Speaker("11", "Luis Perez"), USERS, None)["id"] == "u_luis"  # fuzzy, active only
+    assert match_linear_user(Speaker("12", "Zed"), USERS, None) is None
+
+
+class FakeMcp:
+    def __init__(self, tools):
+        self.tools = tools
+        self.calls = []
+
+    def __call__(self, server, tool, args):
+        self.calls.append((server, tool, args))
+        if tool not in self.tools:
+            return {"ok": False, "error": f"Unknown tool {tool}"}
+        return {"ok": True, "result": self.tools[tool](args)}
+
+
+def test_mcp_backend_discovers_tool_names():
+    mcp = FakeMcp({"save_issue": lambda a: json.dumps({"id": "i9", "url": "https://linear.app/i9"}),
+                   "list_teams": lambda a: json.dumps({"teams": TEAMS})})
+    backend = LinearMcp(mcp)
+    assert backend.create_issue({"teamId": "team_1", "title": "x"})["url"] == "https://linear.app/i9"
+    assert [c[1] for c in mcp.calls] == ["create_issue", "save_issue"]
+    backend.create_issue({"teamId": "team_1", "title": "y"})
+    assert mcp.calls[-1][1] == "save_issue"  # remembered
+    assert [t["key"] for t in backend.teams()] == ["ENG", "OPS"]
+    assert mcp.calls[-1][2] == {}
+
+
+def test_select_backend():
+    assert isinstance(select_backend(lambda: "k", None), LinearGraphQL)
+    assert isinstance(select_backend(lambda: None, FakeMcp({})), LinearMcp)
+    assert select_backend(lambda: None, None) is None
+
+
+def _sink(repo, settings, backend, resolve=lambda m, n, i: None):
+    return LinearSink(settings, repo, lambda: backend, project_for=resolve)
+
+
+def test_sink_inactive_without_backend(repo, settings_of):
+    sink = LinearSink(settings_of(linear__mode="auto"), repo, lambda: None, project_for=lambda m, n, i: None)
+    assert sink.enabled() is False
+    assert _sink(repo, settings_of(linear__mode="off"), gql()).enabled() is False
+
+
+def test_sink_auto_creates_issue_with_team_project_assignee(tmp_path, repo, meeting, notes, settings_of):
+    t = FakeTransport()
+    infra = Candidate("linear:prj_9", "Infra", "linear", {"project_id": "prj_9", "team_ids": ["team_2"]})
+    repo.sync_action_items(meeting.id, notes.action_items)
+    sink = _sink(repo, settings_of(linear__mode="auto"), gql(t), resolve=lambda m, n, i: infra)
+    res = sink.deliver(meeting, notes, tmp_path)
+    creates = [r[2]["variables"]["input"] for r in t.requests if "issueCreate" in r[2]["query"]]
+    assert len(creates) == 2 and res.ok
+    first = creates[0]
+    assert first["teamId"] == "team_2" and first["projectId"] == "prj_9" and first["assigneeId"] == "u_luis"
+    assert first["dueDate"] == "2026-10-02" and "Yo envío las credenciales" in first["description"]
+    assert "assigneeId" not in creates[1]
+    sink.deliver(meeting, notes, tmp_path)
+    assert len([r for r in t.requests if "issueCreate" in r[2]["query"]]) == 2  # idempotent
+    assert repo.get_delivery("linear", "mtg:k3v7q2ab:a0000000001")["url"].endswith("ENG-1")
+
+
+def test_sink_default_team_and_approve_mode(tmp_path, repo, meeting, notes, settings_of):
+    t = FakeTransport()
+    repo.sync_action_items(meeting.id, notes.action_items)
+    sink = _sink(repo, settings_of(linear__mode="approve", linear__default_team="OPS"), gql(t))
+    sink.deliver(meeting, notes, tmp_path)
+    assert not [r for r in t.requests if "issueCreate" in r[2]["query"]]
+    repo.set_action_status(meeting.id, "a0000000002", ActionStatus.APPROVED)
+    sink.deliver(meeting, notes, tmp_path)
+    creates = [r[2]["variables"]["input"] for r in t.requests if "issueCreate" in r[2]["query"]]
+    assert len(creates) == 1 and creates[0]["teamId"] == "team_2" and "projectId" not in creates[0]
+
+
+def test_sink_without_team_reports_error(tmp_path, repo, meeting, notes, settings_of):
+    repo.sync_action_items(meeting.id, notes.action_items)
+    res = _sink(repo, settings_of(linear__mode="auto"), gql()).deliver(meeting, notes, tmp_path)
+    assert not res.ok and "team" in res.errors[0]
+
+
+def test_learned_link_wins(tmp_path, repo, meeting, notes, settings_of):
+    t = FakeTransport()
+    repo.set_link("11", linear_user_id="u_ana")
+    _sink(repo, settings_of(linear__mode="auto", linear__default_team="ENG"), gql(t)).deliver_item(
+        meeting, notes, notes.action_items[0], tmp_path)
+    create = [r[2]["variables"]["input"] for r in t.requests if "issueCreate" in r[2]["query"]][0]
+    assert create["assigneeId"] == "u_ana"
