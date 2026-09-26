@@ -71,5 +71,12 @@
   "sink.kanban_task_body": "{description}\n\n> {quote}\n\nReunión: {title} ({date}) en {ts}\nCarpeta: {folder}",
   "sink.linear_inactive": "Linear no está conectado (sin LINEAR_API_KEY ni servidor MCP `linear` permitido).",
   "sink.linear_issue_body": "{description}\n\n> {quote}\n\nReunión: {title} ({date}) en {ts}",
-  "transcript.title": "Transcripción — {title}"
+  "transcript.title": "Transcripción — {title}",
+  "ui.btn_all_kanban": "Aprobar todas → Kanban",
+  "ui.btn_all_linear": "Aprobar todas → Linear",
+  "ui.btn_dismiss": "Descartar",
+  "ui.btn_kanban": "Kanban",
+  "ui.btn_linear": "Linear",
+  "ui.btn_project": "Proyecto",
+  "ui.bulk_line": "📁 Proyecto: **{project}**"
 }

@@ -71,5 +71,12 @@
   "sink.kanban_task_body": "{description}\n\n> {quote}\n\nMeeting: {title} ({date}) at {ts}\nFolder: {folder}",
   "sink.linear_inactive": "Linear is not connected (no LINEAR_API_KEY and no allowlisted `linear` MCP server).",
   "sink.linear_issue_body": "{description}\n\n> {quote}\n\nMeeting: {title} ({date}) at {ts}",
-  "transcript.title": "Transcript — {title}"
+  "transcript.title": "Transcript — {title}",
+  "ui.btn_all_kanban": "Approve all → Kanban",
+  "ui.btn_all_linear": "Approve all → Linear",
+  "ui.btn_dismiss": "Dismiss",
+  "ui.btn_kanban": "Kanban",
+  "ui.btn_linear": "Linear",
+  "ui.btn_project": "Project",
+  "ui.bulk_line": "📁 Project: **{project}**"
 }
