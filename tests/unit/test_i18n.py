@@ -41,3 +41,8 @@ def test_every_t_call_in_code_uses_an_existing_key():
         used |= set(re.findall(r"\bt\(\s*[\"']([a-z0-9_.]+)[\"']", py.read_text()))
     assert used, "expected t() usages"
     assert used - keys == set()
+
+
+def test_format_args_may_be_named_key_or_lang():
+    # Placeholders like {key} must not collide with t()'s own parameters.
+    assert t("cmd.config_line", "en", key="a.b", value=1) == "`a.b` = 1"

@@ -28,6 +28,6 @@ def normalize_language(lang: str | None) -> str:
     return code if code in LANGUAGES else "en"
 
 
-def t(key: str, lang: str | None = "en", **fmt: Any) -> str:
+def t(key: str, lang: str | None = "en", /, **fmt: Any) -> str:
     template = _catalog(normalize_language(lang)).get(key) or _catalog("en").get(key) or key
     return string.Formatter().vformat(template, (), _Missing(fmt))
