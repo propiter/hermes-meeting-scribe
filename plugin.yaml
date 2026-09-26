@@ -1,0 +1,193 @@
+# config_schema is generated from meeting_scribe/config.py (scripts/gen_manifest.py).
+name: meeting-scribe
+version: 0.1.0
+description: Record Discord voice meetings per speaker, transcribe locally with faster-whisper, and turn
+  them into notes, decisions and tasks (Kanban, Linear, Obsidian).
+author: Pedro Rodriguez (propiter)
+license: MIT
+kind: standalone
+manifest_version: 2
+requires_hermes: '>=0.21'
+homepage: https://github.com/propiter/hermes-meeting-scribe
+platforms:
+- linux
+- macos
+tags:
+- discord
+- voice
+- meetings
+- transcription
+- notes
+python_dependencies:
+- faster-whisper>=1.1,<2
+external_dependencies:
+- ffmpeg with libopus (PATH, ~/.hermes/tools or audio.ffmpeg_path)
+optional_env:
+- name: LINEAR_API_KEY
+  description: Linear personal API key (enables Linear issue creation)
+  url: https://linear.app/settings/account/security
+  secret: true
+provides_tools:
+- meeting_search
+- meeting_get
+provides_hooks: []
+config_schema:
+  commands.aliases:
+    type: list
+    default:
+    - meet
+    - rec
+    description: Extra slash-command names routed to /meeting.
+  autojoin.enabled:
+    type: bool
+    default: true
+    description: Join a voice channel automatically when people gather.
+  autojoin.min_humans:
+    type: int
+    default: 2
+    description: Humans required in a voice channel to auto-join.
+  autojoin.grace_seconds:
+    type: int
+    default: 20
+    description: Seconds the channel must stay populated before joining.
+  autojoin.channels:
+    type: list
+    default: []
+    description: Voice channel ids/names allowed for auto-join (empty = all).
+  autojoin.ignore_channels:
+    type: list
+    default: []
+    description: Voice channel ids/names never auto-joined.
+  autoleave.grace_seconds:
+    type: int
+    default: 60
+    description: Seconds with no humans before the recording stops.
+  limits.max_duration_minutes:
+    type: int
+    default: 240
+    description: Hard cap on a single recording.
+  audio.retention:
+    type: str
+    default: multitrack
+    description: Audio kept after processing.
+    choices:
+    - multitrack
+    - mixed
+    - none
+  audio.bitrate_kbps:
+    type: int
+    default: 48
+    description: Opus bitrate per speaker track.
+  audio.ffmpeg_path:
+    type: str
+    default: ''
+    description: Explicit ffmpeg binary (empty = auto-detect).
+  transcribe.model:
+    type: str
+    default: medium
+    description: faster-whisper model (tiny/base/small/medium/large-v3...).
+  transcribe.device:
+    type: str
+    default: auto
+    description: Inference device.
+    choices:
+    - auto
+    - cpu
+    - cuda
+  transcribe.compute_type:
+    type: str
+    default: auto
+    description: CTranslate2 compute type.
+    choices:
+    - auto
+    - int8
+    - int8_float16
+    - float16
+    - float32
+  transcribe.cpu_threads:
+    type: int
+    default: 0
+    description: CPU threads for whisper (0 = cores minus 2).
+  transcribe.language:
+    type: str
+    default: auto
+    description: Spoken language code (auto = detect; pin it if you can).
+  transcribe.beam_size:
+    type: int
+    default: 5
+    description: Beam size for decoding.
+  analysis.language:
+    type: str
+    default: auto
+    description: Notes language (auto = transcript language).
+  analysis.chunk_chars:
+    type: int
+    default: 12000
+    description: Transcript chunk size for map-reduce analysis.
+  projects.min_confidence:
+    type: float
+    default: 0.6
+    description: Minimum confidence to auto-assign a project.
+  delivery.discord.enabled:
+    type: bool
+    default: true
+    description: Post notes to Discord.
+  delivery.discord.channel:
+    type: str
+    default: ''
+    description: Notes channel id (empty = voice text chat, then home).
+  delivery.discord.thread:
+    type: bool
+    default: true
+    description: Post notes in a thread when possible.
+  owners:
+    type: list
+    default: []
+    description: Discord user ids whose tasks may go to Kanban (empty = first allowed user).
+  kanban.mode:
+    type: str
+    default: approve
+    description: Kanban delivery of owner tasks.
+    choices:
+    - approve
+    - auto
+    - 'off'
+  kanban.board:
+    type: str
+    default: ''
+    description: Kanban board slug (empty = default board).
+  linear.mode:
+    type: str
+    default: approve
+    description: Linear issue creation.
+    choices:
+    - approve
+    - auto
+    - 'off'
+  linear.default_team:
+    type: str
+    default: ''
+    description: Linear team key/id used when no project resolves.
+  obsidian.vault_path:
+    type: str
+    default: ''
+    description: Obsidian vault path (empty = disabled).
+  obsidian.folder:
+    type: str
+    default: Meetings
+    description: Folder inside the vault for notes.
+  ui.language:
+    type: str
+    default: en
+    description: Language of bot messages.
+    choices:
+    - en
+    - es
+  consent.announce:
+    type: bool
+    default: true
+    description: Announce recording in the channel chat.
+  consent.nickname_prefix:
+    type: str
+    default: '[REC] '
+    description: Nickname prefix while recording (empty = off).
