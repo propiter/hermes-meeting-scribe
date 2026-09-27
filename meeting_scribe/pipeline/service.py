@@ -111,10 +111,10 @@ class MeetingService:
         meeting = replace(meeting, folder=self.layout.relative(folder))
         write_transcript(folder, utterances)
         write_transcript_md(folder, meeting, utterances, meeting.language or self.settings().ui_language)
+        write_meta(folder, meeting)  # before the row: a committed row always has its files
         if not self.repo.create_imported_meeting(meeting, utterances):
             shutil.rmtree(folder, ignore_errors=True)
             return None
-        write_meta(folder, meeting)
         self.runner.enqueue(meeting.id, Stage.ANALYZE)
         return meeting
 
