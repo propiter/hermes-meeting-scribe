@@ -18,6 +18,7 @@ multi-process install exactly one process polls. ``stop()`` wakes and joins it (
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -28,7 +29,7 @@ from typing import Any, Callable, Optional
 from ..domain.ids import short_id
 from ..domain.models import SOURCE_GOOGLE_MEET, Meeting, MeetingState
 from . import convert
-from .meet_api import MeetApiError, MeetClient, MeetForbidden, MeetRetryLater
+from .meet_api import MeetApiError, MeetAuthError, MeetClient, MeetForbidden, MeetRetryLater
 from .oauth import GoogleAuthError, GoogleDisconnected
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,11 @@ LEASE = "google-meet-poll"
 KV = "google."
 READY_STATES = frozenset({"FILE_GENERATED"})
 RETENTION_DAYS = 30  # Meet deletes conference records and transcript entries 30 days after the end
+RECORD_KV = "gmeet.record."  # per-record memory: failures / settled without transcript
+MAX_RECORD_FAILURES = 5  # permanent errors (403/404/malformed) on one record before it is given up
+# A record still without any transcript this long after it ended never gets one (transcription was
+# off: Meet creates the transcript resource while the meeting runs). It is settled and not re-read.
+NO_TRANSCRIPT_SETTLE_SECONDS = 3600
 
 
 @dataclass
@@ -45,6 +51,8 @@ class SyncReport:
     already: int = 0
     pending: list[str] = field(default_factory=list)        # records whose transcript is not ready
     no_transcript: int = 0
+    skipped: int = 0                                        # settled earlier (no transcript): not re-read
+    given_up: list[str] = field(default_factory=list)       # failed MAX_RECORD_FAILURES times: not retried
     empty: int = 0
     errors: list[str] = field(default_factory=list)
     would_import: list[str] = field(default_factory=list)   # dry-run
@@ -52,8 +60,25 @@ class SyncReport:
 
     def as_dict(self) -> dict[str, Any]:
         return {"listed": self.listed, "imported": self.imported, "already_imported": self.already,
-                "pending": self.pending, "no_transcript": self.no_transcript, "empty": self.empty,
-                "errors": self.errors, "would_import": self.would_import, "dry_run": self.dry_run}
+                "pending": self.pending, "no_transcript": self.no_transcript, "skipped": self.skipped,
+                "given_up": self.given_up, "empty": self.empty, "errors": self.errors,
+                "would_import": self.would_import, "dry_run": self.dry_run}
+
+
+class _AbortPass(Exception):
+    """Internal: stop the whole pass (auth/quota/network), not just the current record."""
+
+
+def _aborts_pass(exc: BaseException) -> bool:
+    """Errors that make every other record fail too: stop the pass instead of hammering the API."""
+    if isinstance(exc, (GoogleAuthError, MeetAuthError)):
+        return True
+    return isinstance(exc, MeetRetryLater) and (exc.status == 429 or exc.status == 0)
+
+
+def _transient(exc: BaseException) -> bool:
+    """A record error that does not count towards giving up on it (5xx: Google's side)."""
+    return isinstance(exc, MeetRetryLater)
 
 
 class MeetImporter:
@@ -73,6 +98,37 @@ class MeetImporter:
         start = len(KV)
         return {k[start:]: v for k, v in self._service().repo.kv_prefix(KV).items()}
 
+    def now(self) -> datetime:
+        return self._clock()
+
+    def backoff_until(self) -> Optional[datetime]:
+        """End of a ``Retry-After`` pause requested by Google (429), if one is pending."""
+        raw = self._service().repo.kv_get(KV + "retry_after_until")
+        return convert.parse_time(raw) if raw else None
+
+    # -- per-record memory (kv, outside the status prefix) ------------------------------------------
+    def _record_state(self, repo: Any) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for key, raw in repo.kv_prefix(RECORD_KV).items():
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(data, dict):
+                out[key[len(RECORD_KV):]] = data
+        return out
+
+    def _remember(self, repo: Any, name: str, data: Optional[dict[str, Any]]) -> None:
+        repo.kv_set(RECORD_KV + name, None if data is None else json.dumps(data, ensure_ascii=False))
+
+    def _prune(self, repo: Any, memory: dict[str, dict[str, Any]]) -> None:
+        """Forget records Meet itself has deleted (30 days after they ended)."""
+        horizon = self._clock() - timedelta(days=RETENTION_DAYS + 1)
+        for name, data in memory.items():
+            end = convert.parse_time(data.get("end"))
+            if end is not None and end < horizon:
+                self._remember(repo, name, None)
+
     # -- sync -------------------------------------------------------------------------------------
     def window_start(self, *, since: Optional[datetime] = None, days: Optional[int] = None,
                      connected_at: Optional[float] = None) -> datetime:
@@ -88,37 +144,116 @@ class MeetImporter:
             start = now  # never connected: nothing is "new" yet
         return max(start, oldest)
 
-    def sync(self, *, ended_after: datetime, dry_run: bool = False, record_status: bool = True) -> SyncReport:
+    def sync(self, *, ended_after: datetime, dry_run: bool = False, record_status: bool = True,
+             should_stop: Callable[[], bool] = lambda: False) -> SyncReport:
+        """One pass. Never raises: every failure ends up in ``report.errors`` (and the status)."""
         report = SyncReport(dry_run=dry_run)
-        svc = self._service()
         try:
-            client = self._client()
-            records = client.conference_records(ended_after=convert.rfc3339(ended_after))
-            report.listed = len(records)
-            known = svc.repo.known_external_ids(SOURCE_GOOGLE_MEET)
-            for rec in sorted(records, key=lambda r: str(r.get("endTime") or "")):
-                name = str(rec.get("name") or "")
-                if not name:
-                    continue
-                if name in known:
-                    report.already += 1
-                    continue
-                self._one(client, rec, report, dry_run)
+            self._sync(report, ended_after, dry_run, should_stop)
+        except _AbortPass:
+            pass
         except (GoogleDisconnected, GoogleAuthError, MeetApiError) as exc:
             report.errors.append(_describe(exc))
-        if record_status and not dry_run:
-            now = self._clock().isoformat()
+        except Exception as exc:  # storage locked, a bug in conversion...: reported, never raised
+            log.exception("meeting-scribe: Google Meet sync failed")
+            report.errors.append(f"{type(exc).__name__}: {exc}")
+        finally:
+            if record_status and not dry_run:
+                self._write_status(report)
+        return report
+
+    def _write_status(self, report: SyncReport) -> None:
+        now = self._clock().isoformat()
+        try:
             self.set_status(last_poll_at=now, last_poll_ok="0" if report.errors else "1",
-                      last_error=report.errors[0] if report.errors else None)
+                            last_error=report.errors[0] if report.errors else None,
+                            records_given_up=len(report.given_up) or None,
+                            records_given_up_last=", ".join(report.given_up[-3:]) or None)
             if report.imported:
                 self.set_status(last_import_at=now, last_import_meeting=report.imported[-1])
-        return report
+        except Exception:  # the DB itself is the problem: the log is all we have
+            log.exception("meeting-scribe: could not record the Google Meet poll status")
+
+    def _sync(self, report: SyncReport, ended_after: datetime, dry_run: bool,
+              should_stop: Callable[[], bool]) -> None:
+        svc = self._service()
+        repo = svc.repo
+        client = self._client()
+        if hasattr(client, "should_stop"):
+            client.should_stop = should_stop
+        try:
+            records = client.conference_records(ended_after=convert.rfc3339(ended_after))
+        except MeetRetryLater as exc:
+            self._pause(repo, exc, dry_run)
+            raise
+        report.listed = len(records)
+        known = repo.known_external_ids(SOURCE_GOOGLE_MEET)
+        memory = self._record_state(repo)
+        if not dry_run:
+            self._prune(repo, memory)
+            repo.kv_set(KV + "retry_after_until", None)
+        for rec in sorted(records, key=lambda r: str(r.get("endTime") or "")):
+            if should_stop():
+                return
+            name = str(rec.get("name") or "")
+            if not name:
+                continue
+            if name in known:
+                report.already += 1
+                continue
+            seen = memory.get(name) or {}
+            if seen.get("no_transcript"):
+                report.skipped += 1
+                continue
+            if int(seen.get("failures") or 0) >= MAX_RECORD_FAILURES:
+                report.given_up.append(name)
+                continue
+            try:
+                self._one(client, rec, report, dry_run)
+            except (GoogleAuthError, MeetApiError) as exc:
+                if _aborts_pass(exc):
+                    report.errors.append(_describe(exc))
+                    if isinstance(exc, MeetRetryLater):
+                        self._pause(repo, exc, dry_run)
+                    raise _AbortPass() from None
+                self._failed(repo, name, rec, seen, exc, report, dry_run)
+            except (ValueError, KeyError, TypeError) as exc:  # malformed record: skip it, keep going
+                self._failed(repo, name, rec, seen, exc, report, dry_run)
+            else:
+                if not dry_run and seen.get("failures"):
+                    self._remember(repo, name, None)
+
+    def _pause(self, repo: Any, exc: MeetRetryLater, dry_run: bool) -> None:
+        """Honour ``Retry-After`` (capped at 6 h): the poller skips its passes until then."""
+        if exc.retry_after and not dry_run:
+            until = self._clock() + timedelta(seconds=min(max(float(exc.retry_after), 0.0), 6 * 3600.0))
+            repo.kv_set(KV + "retry_after_until", convert.rfc3339(until))
+
+    def _failed(self, repo: Any, name: str, rec: dict, seen: dict, exc: BaseException, report: SyncReport,
+                dry_run: bool) -> None:
+        report.errors.append(f"{name}: {_describe(exc)}")
+        log.info("meeting-scribe: Google Meet record %s failed: %s", name, _describe(exc))
+        if dry_run or _transient(exc):
+            return
+        failures = int(seen.get("failures") or 0) + 1
+        self._remember(repo, name, {"failures": failures, "end": rec.get("endTime"),
+                                    "error": _describe(exc)[:300]})
+        if failures >= MAX_RECORD_FAILURES:
+            log.warning("meeting-scribe: giving up on Google Meet record %s after %d failures", name, failures)
+
+    def _settle_without_transcript(self, rec: dict, dry_run: bool) -> None:
+        """No transcript long after the end: transcription was off. Never ask about it again."""
+        end = convert.parse_time(rec.get("endTime"))
+        if dry_run or end is None or self._clock() - end < timedelta(seconds=NO_TRANSCRIPT_SETTLE_SECONDS):
+            return
+        self._remember(self._service().repo, str(rec["name"]), {"no_transcript": True, "end": rec.get("endTime")})
 
     def _one(self, client: MeetClient, rec: dict, report: SyncReport, dry_run: bool) -> None:
         name = str(rec["name"])
         transcripts = client.transcripts(name)
         if not transcripts:
             report.no_transcript += 1
+            self._settle_without_transcript(rec, dry_run)
             return
         ready = [t for t in transcripts if t.get("state") in READY_STATES]
         if len(ready) < len(transcripts):
@@ -225,6 +360,10 @@ class MeetPoller:
             return None
         importer = self._importer()
         if importer is None:
+            return None
+        pause = importer.backoff_until()
+        if pause is not None and pause > importer.now():
+            log.info("meeting-scribe: Google asked to retry after %s; skipping this poll", pause.isoformat())
             return None
         start = importer.window_start(connected_at=self._connected_at())
         return importer.sync(ended_after=start)

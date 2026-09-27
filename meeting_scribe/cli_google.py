@@ -116,7 +116,7 @@ def _status(args: argparse.Namespace, rt: Any) -> int:
     else:
         _print(t("google.not_connected", lang))
     for key in ("enabled", "connected_at", "last_poll_at", "last_poll_ok", "last_error", "last_import_at",
-                "last_import_meeting"):
+                "last_import_meeting", "records_given_up", "records_given_up_last", "retry_after_until"):
         if key in st:
             _print(t("google.status_line", lang, key=key, value=st[key]))
     return 0
@@ -129,15 +129,19 @@ def _sync(args: argparse.Namespace, rt: Any) -> int:
     if not rt.google_credentials().connected():
         _print(t("google.not_connected", lang))
         return 1
-    importer = rt.meet_importer()
     since = None
     if args.since:
         since = parse_time(args.since)
         if since is None:
             _print(t("google.error", lang, error=f"invalid --since {args.since!r} (RFC 3339)"))
             return 2
-    start = importer.window_start(since=since, days=args.days, connected_at=rt.google_connected_at())
-    report = importer.sync(ended_after=start, dry_run=args.dry_run)
+    try:
+        importer = rt.meet_importer()
+        start = importer.window_start(since=since, days=args.days, connected_at=rt.google_connected_at())
+        report = importer.sync(ended_after=start, dry_run=args.dry_run)
+    except Exception as exc:  # storage unavailable etc.: one line, never a traceback
+        _print(t("google.error", lang, error=f"{type(exc).__name__}: {exc}"))
+        return 1
     if args.json:
         _print(json.dumps({"since": start.isoformat(), **report.as_dict()}, ensure_ascii=False))
     else:

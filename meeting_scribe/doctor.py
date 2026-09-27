@@ -215,6 +215,9 @@ def check_google_meet(env: Any) -> Check:
         parts.append(f"last poll {st['last_poll_at']} ({'ok' if st.get('last_poll_ok') == '1' else 'error'})")
     if st.get("last_poll_ok") == "0":
         return Check.warn("; ".join(parts + [f"error: {st.get('last_error', '?')}"]))
+    if st.get("records_given_up"):
+        return Check.warn("; ".join(parts + [f"{st['records_given_up']} conference(s) skipped after repeated errors "
+                                             f"({st.get('records_given_up_last', '')})"]))
     return Check.ok("; ".join(parts))
 
 

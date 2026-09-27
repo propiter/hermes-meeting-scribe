@@ -147,3 +147,28 @@ def test_doctor_check(grt, client_file, capsys, monkeypatch):
     assert res.status == "ok" and "token OK" in res.detail and "none: Discord delivery skipped" in res.detail
     grt.cfg["google_meet_discord_channel"] = "4242"
     assert "4242" in check_google_meet(grt).detail
+
+
+def test_sync_never_prints_a_traceback(grt, client_file, capsys, monkeypatch):
+    connect(grt, client_file, capsys, monkeypatch)
+    monkeypatch.setattr(cli_google, "_print", lambda text: print(text))
+
+    def broken():
+        raise OSError("disk full")
+    monkeypatch.setattr(grt, "meet_importer", broken)
+    code, out = run(grt, ["google", "sync"], capsys)
+    assert code == 1 and "OSError: disk full" in out and "Traceback" not in out
+
+
+def test_doctor_reports_given_up_records(grt, client_file, capsys, monkeypatch):
+    from meeting_scribe.google.importer import MAX_RECORD_FAILURES
+    grt.cfg["google_meet_enabled"] = True
+    grt.cfg["google_meet_discord_channel"] = "4242"
+    connect(grt, client_file, capsys, monkeypatch)
+    grt.meet.add("old")
+    grt.meet.status["conferenceRecords/old/transcripts"] = 404
+    imp = grt.meet_importer()
+    for _ in range(MAX_RECORD_FAILURES + 1):
+        imp.sync(ended_after=imp.window_start(days=3))
+    res = check_google_meet(grt)
+    assert res.status == "warn" and "skipped after repeated errors" in res.detail

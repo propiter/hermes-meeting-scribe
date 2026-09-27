@@ -191,12 +191,22 @@ def _post_form(transport: Transport, url: str, form: Mapping[str, str]) -> Respo
                              body=urllib.parse.urlencode(dict(form)).encode("ascii"), timeout=30.0)
 
 
+def _post_token(transport: Transport, url: str, form: Mapping[str, str]) -> Response:
+    """POST to the token endpoint; a network failure is a (retryable) :class:`GoogleAuthError`."""
+    try:
+        return _post_form(transport, url, form)
+    except TransportError as exc:
+        raise GoogleAuthError(f"Google token endpoint unreachable ({exc}); will retry") from None
+
+
 def _token_error(resp: Response) -> str:
     data = resp.json()
     return str(data.get("error") or f"HTTP {resp.status}") if isinstance(data, dict) else f"HTTP {resp.status}"
 
 
 def _token_from(data: Mapping[str, Any], now: float, previous: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    if not isinstance(data, Mapping) or not data.get("access_token"):
+        raise GoogleAuthError("token endpoint returned no access token")
     token = dict(previous or {})
     token.update({"access_token": data["access_token"], "token_type": data.get("token_type", "Bearer"),
                   "expires_at": now + float(data.get("expires_in") or 3600), "scope": data.get("scope", SCOPE)})
@@ -207,7 +217,7 @@ def _token_from(data: Mapping[str, Any], now: float, previous: Optional[Mapping[
 
 def exchange_code(transport: Transport, client: ClientConfig, *, code: str, verifier: str, redirect_uri: str,
                   now: Optional[float] = None) -> dict[str, Any]:
-    resp = _post_form(transport, client.token_uri, {
+    resp = _post_token(transport, client.token_uri, {
         "code": code, "client_id": client.client_id, "client_secret": client.client_secret,
         "redirect_uri": redirect_uri, "grant_type": "authorization_code", "code_verifier": verifier})
     if not resp.ok:
@@ -223,7 +233,7 @@ def refresh_token(transport: Transport, client: ClientConfig, token: Mapping[str
                   now: Optional[float] = None) -> dict[str, Any]:
     if not token.get("refresh_token"):
         raise GoogleDisconnected("no refresh token; run `hermes meeting-scribe google connect`")
-    resp = _post_form(transport, client.token_uri, {
+    resp = _post_token(transport, client.token_uri, {
         "client_id": client.client_id, "client_secret": client.client_secret,
         "refresh_token": str(token["refresh_token"]), "grant_type": "refresh_token"})
     if not resp.ok:

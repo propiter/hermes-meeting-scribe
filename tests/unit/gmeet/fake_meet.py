@@ -40,6 +40,7 @@ class FakeMeet:
         self.status: dict[str, int] = {}  # path prefix -> forced HTTP status
         self.requests: list[str] = []
         self.page_size = 2
+        self.retry_after: Any = None  # Retry-After header sent with forced 429/503 answers
 
     def add(self, rid: str, *, state: str = "FILE_GENERATED", entries: Any = None, **kw: Any) -> None:
         self.records.append(record(rid, **kw))
@@ -64,7 +65,8 @@ class FakeMeet:
         self.requests.append(path)
         for prefix, status in self.status.items():
             if path.startswith(prefix):
-                return jresp(status, {"error": {"code": status, "status": "FORCED", "message": "forced"}})
+                headers = {"Retry-After": str(self.retry_after)} if self.retry_after is not None else {}
+                return jresp(status, {"error": {"code": status, "status": "FORCED", "message": "forced"}}, headers)
         segs = path.split("/")
         if path == "conferenceRecords":
             flt = query.get("filter", "")
