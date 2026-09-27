@@ -1,10 +1,11 @@
+from datetime import timedelta
 import argparse
 import json
 
 import pytest
 
 from meeting_scribe import cli
-from meeting_scribe.domain.models import MeetingState
+from meeting_scribe.domain.models import MeetingState, Stage
 
 from .test_commands import make, processed
 
@@ -135,3 +136,103 @@ def test_doctor_exit_code(rt, capsys, monkeypatch):
 def test_no_subcommand_prints_help(rt, capsys):
     code, out = run(rt, [], capsys)
     assert code == 0 and "setup" in out
+
+
+# -- config list / schema / llm (DESIGN §18) ---------------------------------------------------------
+class MemAux:
+    def __init__(self):
+        self.task = {}
+
+    def user_task_config(self):
+        return self.task
+
+    def main_model(self):
+        from meeting_scribe.llm_config import Link
+        return Link("mainprov", "main-model")
+
+    def write(self, values):
+        self.task.update(values)
+
+    def probe(self, link, timeout):
+        return (link.provider != "broken", "answered" if link.provider != "broken" else "402 no credit")
+
+
+@pytest.fixture
+def lrt(rt):
+    rt.aux = MemAux()
+    rt.llm_store = lambda: rt.aux
+    return rt
+
+
+def test_config_list_shows_origin_and_groups(rt, capsys):
+    rt.cfg["kanban_mode"] = "off"
+    code, out = run(rt, ["config", "list", "--json"], capsys)
+    rows = {r["key"]: r for r in json.loads(out)["settings"]}
+    assert code == 0 and rows["kanban_mode"]["origin"] == "configured" and rows["linear_mode"]["origin"] == "default"
+    assert rows["kanban_mode"]["group"] == "integrations"
+    code, out = run(rt, ["config", "list"], capsys)
+    assert "[Integrations]" in out and "kanban_mode = off  (configured)" in out
+
+
+def test_config_list_shows_the_channel_a_name_resolved_to(rt, capsys):
+    from meeting_scribe.discord_ui.destination import REPORT_KV
+
+    rt.cfg["google_meet_discord_channel"] = "meet-notes"
+    rt.service().repo.kv_set(f"{REPORT_KV}.google_meet", json.dumps({
+        "guild": {"id": "100", "name": "Example Team", "source": "only"},
+        "steps": [{"key": "google_meet_discord_channel", "value": "meet-notes", "status": "ok",
+                   "channel_id": "610", "channel_name": "meet-notes"}], "targets": ["610"]}))
+    code, out = run(rt, ["config", "list"], capsys)
+    assert "google_meet_discord_channel = meet-notes  (configured)  → #meet-notes (610)" in out
+    assert "Example Team (100, only)" in out
+
+
+def test_config_schema_json(rt, capsys):
+    code, out = run(rt, ["config", "schema", "--json", "--lang", "es"], capsys)
+    doc = json.loads(out)
+    assert code == 0 and doc["version"] == 1 and doc["language"] == "es"
+    assert any(f["key"] == "llm_fallback_chain" for f in doc["fields"])
+
+
+def test_config_set_channel_name_retries_waiting_deliveries(rt, capsys):
+    from meeting_scribe.pipeline.runner import WAITING_KV
+
+    svc = rt.service()
+    svc.repo.kv_set(WAITING_KV + rt.mid, "waiting for a Discord channel")
+    svc.repo.enqueue_job(rt.mid, Stage.DELIVER, now=svc.clock.now() + timedelta(hours=1))
+    code, out = run(rt, ["config", "set", "delivery_discord_channel", "#meeting-notes"], capsys)
+    assert code == 0 and rt.cfg["delivery_discord_channel"] == "meeting-notes"
+    assert "1 delivery" in out and svc.repo.next_job(now=svc.clock.now()) is not None
+
+
+def test_status_lists_meetings_waiting_for_a_channel(rt, capsys):
+    from meeting_scribe.pipeline.runner import WAITING_KV
+
+    rt.service().repo.kv_set(WAITING_KV + rt.mid, "waiting for a Discord channel: set one with `config set`")
+    code, out = run(rt, ["status"], capsys)
+    assert "waiting for a Discord channel" in out and f"! {rt.mid}:" in out
+
+
+def test_llm_show_set_fallback_and_test(lrt, capsys):
+    code, out = run(lrt, ["llm", "show"], capsys)
+    assert code == 0 and "auto → mainprov/main-model" in out and "no fallback chain" in out
+    code, out = run(lrt, ["llm", "set", "--provider", "prov-a", "--model", "vendor/model-a"], capsys)
+    assert code == 0 and lrt.aux.task == {"provider": "prov-a", "model": "vendor/model-a"}
+    run(lrt, ["llm", "fallback", "add", "broken:m1"], capsys)
+    run(lrt, ["llm", "fallback", "add", "prov-c:m2"], capsys)
+    code, out = run(lrt, ["llm", "show", "--json"], capsys)
+    data = json.loads(out)
+    assert [f["provider"] for f in data["fallback_chain"]] == ["broken", "prov-c"]
+    code, out = run(lrt, ["llm", "test"], capsys)
+    assert code == 0 and "[  OK] primary: prov-a/vendor/model-a" in out and "[FAIL] fallback 1" in out
+    code, out = run(lrt, ["llm", "fallback", "remove", "1"], capsys)
+    assert code == 0 and lrt.aux.task["fallback_chain"] == [{"provider": "prov-c", "model": "m2"}]
+    code, out = run(lrt, ["llm", "fallback", "add", "bad provider"], capsys)
+    assert code == 2
+    code, _ = run(lrt, ["llm", "fallback", "clear"], capsys)
+    assert code == 0 and lrt.aux.task["fallback_chain"] == []
+
+
+def test_llm_without_hermes_config_says_so(rt, capsys):
+    code, out = run(rt, ["llm", "show"], capsys)
+    assert code == 1 and "not available" in out

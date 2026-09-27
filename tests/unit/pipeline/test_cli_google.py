@@ -191,7 +191,8 @@ def test_reconnect_says_the_window_is_kept(grt, client_file, capsys, monkeypatch
 def test_setup_enabling_google_without_channel_warns(grt, capsys):
     code, out = run(grt, ["setup", "--non-interactive", "--google-meet"], capsys)
     assert code == 0 and grt.cfg["google_meet_enabled"] is True
-    assert "google_meet_discord_channel" in out and "home" in out
+    assert "google_meet_discord_channel" in out and "system channel" in out
+    assert "home channel" not in out  # DESIGN §19: never the (possibly DM) home channel
 
 
 def test_setup_interactive_asks_for_the_meet_channel_again_when_left_empty(grt, capsys, monkeypatch):

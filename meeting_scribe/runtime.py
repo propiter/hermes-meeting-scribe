@@ -59,6 +59,7 @@ class Host:
     project_sources: Callable[[], list[CallableCatalog]]
     llm_ready: Callable[[], tuple[bool, str]]
     is_gateway: Callable[[], bool] = lambda: True
+    llm_store: Callable[[], Any] = lambda: None  # ``llm_config.AuxStore`` over Hermes' config (None in tests)
 
 
 class Runtime:
@@ -167,7 +168,8 @@ class Runtime:
                                 analyzer=LlmAnalyzer(HermesStructuredLLM(self.host.llm), self.settings),
                                 catalogs=self.catalogs, sinks=self.sinks,
                                 archiver=make_archiver(self.settings, self.ffmpeg))
-                runner = PipelineRunner(repo, stages, clock=self.clock, spawner=self.host.spawner)
+                runner = PipelineRunner(repo, stages, clock=self.clock, spawner=self.host.spawner,
+                                        max_attempts=lambda: self.settings().pipeline_max_attempts)
                 self._services[path] = MeetingService(repo, self.layout(), runner, self.settings, clock=self.clock,
                                                       item_sinks=self.item_sinks, catalogs=self.catalogs)
             return self._services[path]
@@ -240,6 +242,19 @@ class Runtime:
 
     def set_config(self, key: str, value: Any) -> None:
         self.host.set_config(key, value)
+
+    def config_origin(self, key: str) -> str:
+        """``configured`` when the user set ``key`` (flat or legacy spelling), else ``default``."""
+        from .config import LEGACY_KEYS
+
+        missing = object()
+        for name in (key, LEGACY_KEYS.get(key)):
+            if name and self.host.get_config(name, missing) not in (missing, None):
+                return "configured"
+        return "default"
+
+    def llm_store(self) -> Any:
+        return self.host.llm_store()
 
     def doctor_env(self) -> "Runtime":
         return self

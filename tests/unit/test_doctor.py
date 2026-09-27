@@ -113,3 +113,53 @@ def test_kanban(tmp_path):
 def test_capture_reports_phase_b(tmp_path):
     res = check_capture(env(tmp_path))
     assert res.status == "warn" and "Phase B" in res.detail
+
+
+# -- llm chain and delivery destination (DESIGN §18, §19) -----------------------------------------
+class _Aux:
+    def __init__(self, task):
+        self.task = task
+
+    def user_task_config(self):
+        return self.task
+
+    def main_model(self):
+        from meeting_scribe.llm_config import Link
+        return Link("mainprov", "main-model")
+
+
+def test_llm_check_shows_the_chain_and_warns_without_fallback(tmp_path):
+    from meeting_scribe.doctor import check_llm
+
+    e = env(tmp_path)
+    e.llm_store = lambda: _Aux({})
+    res = check_llm(e)
+    assert res.status == "warn" and "mainprov/main-model" in res.detail and "llm fallback add" in res.detail
+    e.llm_store = lambda: _Aux({"fallback_chain": [{"provider": "prov-b", "model": "m"}]})
+    res = check_llm(e)
+    assert res.status == "ok" and "mainprov/main-model → prov-b/m" in res.detail
+
+
+def test_delivery_check_reports_waiting_meetings_and_bad_names(tmp_path):
+    import json
+
+    from meeting_scribe.discord_ui.destination import REPORT_KV
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.pipeline.runner import WAITING_KV
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {
+        k[len(WAITING_KV):]: v for k, v in repo.kv_prefix(WAITING_KV).items()})
+    e = env(tmp_path)
+    e.service = lambda: svc
+    assert check_delivery(e).status == "ok"
+    repo.kv_set(f"{REPORT_KV}.google_meet", json.dumps({
+        "guild": {"id": "100", "name": "Example Team", "source": "only"}, "targets": [],
+        "steps": [{"key": "google_meet_discord_channel", "status": "ambiguous", "detail": "2 text channels"}]}))
+    res = check_delivery(e)
+    assert res.status == "warn" and "Example Team" in res.detail and "2 text channels" in res.detail
+    repo.kv_set(WAITING_KV + "m1", "waiting for a Discord channel: set one with `config set`")
+    res = check_delivery(e)
+    assert res.status == "warn" and "1 meeting(s) waiting" in res.detail and "config set" in res.detail
+    repo.close()

@@ -148,8 +148,63 @@ def check_disk(env: DoctorEnv) -> Check:
 
 
 def check_llm(env: DoctorEnv) -> Check:
+    """Reachability of the analysis model plus the configured chain; no fallback is a warning."""
     ok, detail = env.llm_status()
-    return Check.ok(detail) if ok else Check.warn(detail)
+    getter = getattr(env, "llm_store", None)
+    store = getter() if callable(getter) else None
+    if store is None:
+        return Check.ok(detail) if ok else Check.warn(detail)
+    from . import llm_config
+
+    try:
+        v = llm_config.view(store)
+    except Exception as exc:  # unreadable Hermes config
+        return Check.warn(f"{detail}; cannot read {llm_config.CONFIG_PATH}: {type(exc).__name__}: {exc}")
+    chain = " → ".join([v.effective_primary.label(), *(lk.label() for lk in v.fallback_chain)])
+    parts = [detail, f"chain: {chain}", f"timeout {v.timeout or '-'}s", *v.problems]
+    if not ok:
+        return Check.warn("; ".join(parts))
+    if not v.fallback_chain:
+        return Check.warn("; ".join(parts + [t("doctor.llm_no_fallback", env.settings().ui_language)]))
+    return Check.ok("; ".join(parts))
+
+
+def check_delivery(env: Any) -> Check:
+    """Where notes go (DESIGN §19): last resolution seen by the gateway and meetings waiting for a channel."""
+    import json
+
+    s = env.settings()
+    if not s.delivery_discord_enabled:
+        return Check.ok("disabled (delivery_discord_enabled=false)")
+    service = getattr(env, "service", None)
+    if not callable(service):
+        return Check.ok("no runtime")
+    from .discord_ui.destination import REPORT_KV
+
+    svc = service()
+    waiting = svc.waiting_destination()
+    parts: list[str] = []
+    problems: list[str] = []
+    for key, raw in sorted(svc.repo.kv_prefix(REPORT_KV).items()):
+        try:
+            rep = json.loads(raw)
+        except ValueError:
+            continue
+        source = key[len(REPORT_KV) + 1:] or "?"
+        g = rep.get("guild") or {}
+        where = f"{g.get('name') or g.get('id') or 'no server'}"
+        target = (rep.get("targets") or ["—"])[0]
+        parts.append(f"{source}: server {where} ({g.get('source') or '-'}), notes channel {target}")
+        problems += [st["detail"] for st in rep.get("steps") or () if st.get("detail")
+                     and st.get("status") not in ("ok", "unset", "none")]
+    if not parts:
+        parts.append("nothing delivered yet (channels are resolved on the first delivery)")
+    if waiting:
+        first = next(iter(waiting.values()))
+        return Check.warn("; ".join(parts + [f"{len(waiting)} meeting(s) waiting for a channel: {first}"]))
+    if problems:
+        return Check.warn("; ".join(parts + problems))
+    return Check.ok("; ".join(parts))
 
 
 def check_kanban(env: DoctorEnv) -> Check:
@@ -206,10 +261,10 @@ def check_google_meet(env: Any) -> Check:
     except (GoogleAuthError, OSError) as exc:
         return Check.warn(f"token refresh failed: {exc}")
     channel = s.google_meet_discord_channel or s.delivery_discord_channel
-    parts = ["token OK", f"notes channel: {channel or 'home channel (if configured) / none: Discord delivery skipped'}"]
+    parts = ["token OK", f"notes channel: {channel or 'automatic (server system channel / #' + ', #'.join(s.delivery_auto_channel_names) + ')'}"]
     no_channel = None if channel else (
-        "no notes channel set: Meet notes and full transcripts go to the Discord home channel; set "
-        "`google_meet_discord_channel` (or `delivery_discord_channel`)")
+        "no notes channel set: Meet notes go to the server's automatic channel, or wait if there is none; "
+        "choose one with `hermes meeting-scribe config set google_meet_discord_channel \"#channel-name\"`")
     try:
         st = env.meet_importer().status()
     except Exception:  # storage issues are reported by the storage check
@@ -230,7 +285,7 @@ registry = CheckRegistry()
 for _name, _fn in (("settings", check_settings), ("ffmpeg", check_ffmpeg), ("faster_whisper", check_faster_whisper),
                    ("storage", check_storage), ("disk", check_disk), ("llm", check_llm), ("kanban", check_kanban),
                    ("linear", check_linear), ("obsidian", check_obsidian), ("capture", check_capture),
-                   ("google_meet", check_google_meet)):
+                   ("google_meet", check_google_meet), ("delivery", check_delivery)):
     registry.register_check(_name, _fn)
 
 

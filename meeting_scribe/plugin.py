@@ -66,7 +66,13 @@ def build_host(ctx: Any) -> Host:
     return Host(get_config=ctx.get_config, set_config=ctx.set_config, data_dir=o["data_dir"], llm=lambda: ctx.llm,
                 secret=o["secret"], spawner=hermes_adapters.context_spawner, call_mcp=call_mcp,
                 kanban=HermesKanban(), project_sources=project_sources, llm_ready=_llm_ready(ctx),
-                is_gateway=hermes_adapters.is_gateway_process)
+                is_gateway=hermes_adapters.is_gateway_process, llm_store=_llm_store)
+
+
+def _llm_store() -> Any:
+    from .llm_config import HermesAuxStore
+
+    return HermesAuxStore()
 
 
 def _install_phase_b(ctx: Any, runtime: Runtime) -> None:
