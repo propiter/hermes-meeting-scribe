@@ -102,7 +102,7 @@ SPEC: dict[str, Opt] = {
     "delivery_transcript_max_mb": Opt("int", 8, "delivery", minimum=1, maximum=500),
     # projects
     "projects_min_confidence": Opt("float", 0.6, "projects", minimum=0.0, maximum=1.0),
-    "project_channels": Opt("list", (), "projects"),
+    "project_channels": Opt("list", (), "projects", format="project_channel"),
     "project_match_min_score": Opt("float", 0.8, "projects", minimum=0.0, maximum=1.0),
     "channel_name_ignore_prefixes": Opt("list", (), "projects"),
     # google meet
@@ -407,6 +407,20 @@ def validate_value(key: str, raw: Any) -> Any:
     opt = SPEC[canonical_key(key)]
     try:
         value = _coerce(opt, raw)
+        if opt.format == "project_channel":  # strict on write only: loading stays lenient (bad rows ignored)
+            value = tuple(_project_channel(entry) for entry in value)
     except (ValueError, TypeError) as exc:
         raise ValueError(f"{key}: {exc}") from exc
     return list(value) if isinstance(value, tuple) else value
+
+
+def _project_channel(entry: str) -> str:
+    """``Project = 123`` / ``Project=<#123>`` → ``Project=123`` (one project per Discord channel id)."""
+    name, sep, channel = entry.rpartition("=")
+    name = name.strip()
+    if not sep or not name:
+        raise ValueError(f"expected 'Project = channel id', got {entry!r}")
+    channel = _channel_value(channel)
+    if not is_ascii_digits(channel):
+        raise ValueError(f"{name}: expected a Discord channel id (or <#id>)")
+    return f"{_name_or_id(name, 'a project name (max 100 characters, one line)')}={channel}"

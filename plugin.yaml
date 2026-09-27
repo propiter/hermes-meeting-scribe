@@ -260,6 +260,7 @@ config_schema:
     label: Project → channel map
     description: Explicit entries like 'Project name=channel id'.
     group: projects
+    format: project_channel
   project_match_min_score:
     type: float
     default: 0.8

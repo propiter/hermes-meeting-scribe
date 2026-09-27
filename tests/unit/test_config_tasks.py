@@ -21,3 +21,18 @@ def test_project_channels_parses_name_to_channel_pairs():
 def test_min_score_is_bounded():
     s = settings_from_mapping({"project_match_min_score": 3})
     assert s.project_match_min_score == 0.8 and s.warnings
+
+
+def test_project_channels_are_validated_on_write_and_normalized():
+    import pytest
+    from meeting_scribe.config import validate_value
+
+    assert validate_value("project_channels", ["Proyecto Alfa = 111", "Beta=<#222>"]) == ["Proyecto Alfa=111",
+                                                                                         "Beta=222"]
+    assert validate_value("project_channels", []) == []
+    for bad in (["no separator"], ["=111"], ["Alfa=general"], ["Alfa=<@123>"], ["x" * 101 + "=1"]):
+        with pytest.raises(ValueError):
+            validate_value("project_channels", bad)
+    # Loading an old config stays lenient: a malformed row is ignored, not the whole list.
+    s = settings_from_mapping({"project_channels": ["Alfa=111", "broken"]})
+    assert s.project_channel_map() == {"alfa": "111"} and not s.warnings
