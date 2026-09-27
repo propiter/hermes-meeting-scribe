@@ -122,6 +122,13 @@ def test_audio_prefers_the_listening_copy_over_the_multitrack_archive(env):
     assert got.status_code == 200 and got.content == b"OggS-listening-copy"
 
 
+def test_detail_says_which_task_destinations_are_on(env):
+    d = env["client"].get(f"{PREFIX}/v1/meetings/{env['meeting'].id}").json()
+    assert d["destinations"]["discord"] is True
+    assert d["destinations"]["kanban"] in ("approve", "auto", "off") and d["destinations"]["linear"] in (
+        "approve", "auto", "off")
+
+
 def test_channel_and_project_filters_reach_the_library(env):
     c = env["client"]
     page = c.get(f"{PREFIX}/v1/meetings", params={"channel": "nope", "project": "Proyecto Alfa"}).json()

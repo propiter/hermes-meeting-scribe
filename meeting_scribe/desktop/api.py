@@ -141,6 +141,11 @@ def list_meetings(request: Request, q: str = Query("", max_length=200), source: 
 def get_meeting(request: Request, meeting_id: str) -> dict[str, Any]:
     with _ctx(request) as c:
         detail = _library(c).detail(_mid(meeting_id))
+        settings = SEAMS["settings_store"]().settings()
+        # Which task destinations are on: "enviada a Kanban" and "enviada a Linear" are separate facts,
+        # and a destination that is off must not read as "pending" forever.
+        detail["destinations"] = {"discord": True, "kanban": settings.kanban_mode, "linear": settings.linear_mode,
+                                  "kanban_board": settings.kanban_board}
         audio = detail["audio"]
         if audio.get("available"):
             # The absolute path lets Desktop's own media player stream it (hermes-media:// locally,
