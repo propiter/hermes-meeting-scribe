@@ -94,12 +94,12 @@ def test_register_degrades_without_discord(ctx, monkeypatch):
 
 
 def test_aliases_from_config(tmp_path, monkeypatch):
-    c = FakeCtx(tmp_path, {"commands_aliases": ["nova-rec", "Meeting", "bad name!"]})
+    c = FakeCtx(tmp_path, {"commands_aliases": ["notes-rec", "Meeting", "bad name!"]})
     monkeypatch.setattr(plugin, "_host_overrides", lambda: {"data_dir": lambda: tmp_path / "d",
                                                            "secret": lambda name: None,
                                                            "mcp_allowed": lambda: False})
     plugin.register(c, ROOT)
-    assert set(c.commands) == {"meeting", "nova-rec"}
+    assert set(c.commands) == {"meeting", "notes-rec"}
     plugin.RUNTIMES.pop(id(c)).close()
 
 

@@ -28,11 +28,11 @@ def test_defaults_match_design():
 
 def test_coercion_of_string_values():
     s = Settings.load(_getter({"autojoin_enabled": "false", "autojoin_min_humans": "3",
-                               "projects_min_confidence": "0.75", "commands_aliases": "meet, nova-rec",
+                               "projects_min_confidence": "0.75", "commands_aliases": "meet, notes-rec",
                                "owners": 123}))
     assert s.autojoin_enabled is False and s.autojoin_min_humans == 3
     assert s.projects_min_confidence == 0.75
-    assert s.commands_aliases == ("meet", "nova-rec")
+    assert s.commands_aliases == ("meet", "notes-rec")
     assert s.owners == ("123",)
 
 

@@ -75,7 +75,7 @@ skills/meeting-scribe/SKILL.md
 Slash commands registered with `ctx.register_command` (names colliding with
 Hermes built-ins are rejected by Hermes — `/start` and `/stop` ARE built-ins,
 so they cannot be used). Primary: **`/meeting`**. Aliases configurable
-(`commands_aliases`, default `["meet", "rec"]`; e.g. a user can add `nova-rec`).
+(`commands_aliases`, default `["meet", "rec"]`; e.g. a user can add `notes-rec`).
 Every alias routes to the same router with a subcommand argument:
 
 | Subcommand | Effect |
