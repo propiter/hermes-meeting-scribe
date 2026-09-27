@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import logging
 import re
 import urllib.error
 import urllib.request
@@ -27,6 +28,7 @@ from ..i18n import t
 from ..storage.artifacts import fmt_ts
 from .base import DeliveryStore, ItemSink, ProjectFor
 
+log = logging.getLogger(__name__)
 API_URL = "https://api.linear.app/graphql"
 FUZZY = 0.85
 Transport = Callable[[str, Mapping[str, str], bytes], Mapping[str, Any]]
@@ -76,17 +78,31 @@ class LinearGraphQL:
     def viewer(self) -> dict[str, Any]:
         return dict(self._q("query { viewer { id name email } }")["viewer"])
 
+    def _all(self, field: str, selection: str, *, page_size: int = 250, max_pages: int = 40) -> list[dict[str, Any]]:
+        """Every node of a connection, following ``pageInfo`` (review finding 11: >250 users/projects)."""
+        q = (f"query($first: Int!, $after: String) {{ {field}(first: $first, after: $after) "
+             f"{{ nodes {{ {selection} }} pageInfo {{ hasNextPage endCursor }} }} }}")
+        out: list[dict[str, Any]] = []
+        after: Optional[str] = None
+        for _ in range(max_pages):
+            conn = self._q(q, {"first": page_size, "after": after})[field]
+            out.extend(dict(n) for n in conn.get("nodes") or ())
+            info = conn.get("pageInfo") or {}
+            if not info.get("hasNextPage") or not info.get("endCursor"):
+                return out
+            after = str(info["endCursor"])
+        log.warning("meeting-scribe: Linear %s truncated after %d pages", field, max_pages)
+        return out
+
     def teams(self) -> list[dict[str, Any]]:
-        return list(self._q("query { teams(first: 250) { nodes { id key name } } }")["teams"]["nodes"])
+        return self._all("teams", "id key name")
 
     def users(self) -> list[dict[str, Any]]:
-        q = "query { users(first: 250) { nodes { id name displayName email active } } }"
-        return list(self._q(q)["users"]["nodes"])
+        return self._all("users", "id name displayName email active")
 
     def projects(self) -> list[dict[str, Any]]:
-        q = "query { projects(first: 250) { nodes { id name teams { nodes { id } } } } }"
         return [{"id": p["id"], "name": p["name"], "team_ids": [x["id"] for x in p["teams"]["nodes"]]}
-                for p in self._q(q)["projects"]["nodes"]]
+                for p in self._all("projects", "id name teams { nodes { id } }")]
 
     def create_issue(self, issue: Mapping[str, Any]) -> dict[str, Any]:
         q = ("mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success "

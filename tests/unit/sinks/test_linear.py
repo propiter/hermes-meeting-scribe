@@ -153,3 +153,39 @@ def test_learned_link_wins(tmp_path, repo, meeting, notes, settings_of):
         meeting, notes, notes.action_items[0], tmp_path)
     create = [r[2]["variables"]["input"] for r in t.requests if "issueCreate" in r[2]["query"]][0]
     assert create["assigneeId"] == "u_ana"
+
+
+class PagedTransport:
+    """Linear connections are paginated (``pageInfo``); 600 users arrive in three pages."""
+
+    def __init__(self, total: int = 600, page: int = 250):
+        self.total, self.page, self.calls = total, page, []
+
+    def __call__(self, url, headers, body):
+        req = json.loads(body)
+        self.calls.append(req)
+        field = next(f for f in ("users", "projects", "teams") if f + "(" in req["query"])
+        after = int(req["variables"].get("after") or 0)
+        first = int(req["variables"]["first"])
+        ids = range(after, min(after + first, self.total))
+        node = {"users": lambda i: {"id": f"u{i}", "name": f"User {i}", "displayName": f"u{i}", "email": "",
+                                    "active": True},
+                "projects": lambda i: {"id": f"p{i}", "name": f"P{i}", "teams": {"nodes": [{"id": "t"}]}},
+                "teams": lambda i: {"id": f"t{i}", "key": f"K{i}", "name": f"T{i}"}}[field]
+        end = after + len(ids)
+        return {"data": {field: {"nodes": [node(i) for i in ids],
+                                 "pageInfo": {"hasNextPage": end < self.total, "endCursor": str(end)}}}}
+
+
+@pytest.mark.parametrize("method", ["users", "projects", "teams"])
+def test_graphql_lists_follow_pagination(method):
+    """Review finding 11: workspaces with more than 250 users/projects lost matches silently."""
+    t = PagedTransport()
+    rows = getattr(LinearGraphQL(lambda: "k", transport=t), method)()
+    assert len(rows) == 600 and len(t.calls) == 3
+    assert t.calls[1]["variables"]["after"] == "250"
+
+
+def test_user_on_page_three_is_matched():
+    users = LinearGraphQL(lambda: "k", transport=PagedTransport()).users()
+    assert match_linear_user(Speaker("1", "User 599"), users, None)["id"] == "u599"
