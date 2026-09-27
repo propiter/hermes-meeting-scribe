@@ -562,8 +562,15 @@ releases the lease. The poller never runs on the Discord asyncio loop.
 `delivery_discord_transcript` (default true): after the summary, in the meeting chat (not the
 thread: it is part of the notes, and voice-chat channels often cannot host threads). One file
 `transcript-<YYYY-MM-DD>-<slug>.md`, rendered from `transcript.jsonl` with the current title.
-Pointer `transcript` in `deliveries` stores sha256 + message ids: same hash → nothing is posted;
-different hash (reprocess) → old messages deleted and the new file posted. Above 8 MB (conservative
+Only `DiscordNotesSink.publish` (the DELIVER stage) attaches; `refresh`/`refresh_item`/moves (button
+clicks) re-render with `attach_transcript=False`. The `notes` pointer records `attach` when the
+summary is first posted with the setting on; a summary without it (pre-attachment version, or the
+setting was off) is marked `skipped=legacy` and never gets the file later (privacy: no surprise
+publication of old transcripts). Pointer `transcript` in `deliveries` stores sha256 of the
+transcript LINES (not the title heading) + message ids: same hash → nothing is posted; different
+hash (reprocess) → old messages deleted and the new file posted. Before each upload the pointer
+records `sending=<file name>`; a retry after a lost pointer write first searches the channel's last
+50 messages for one of ours with that attachment and adopts it (no duplicate). Above 8 MB (conservative
 Discord limit) the text is split at line ends into `…-partNofM.md` (UTF-8 safe); more than 20 parts
 → a notice pointing to `export`. Missing Attach Files (403/50013/50001) → one notice, remembered.
 Transient failures keep already-posted parts and retry on the next publish. None of this can fail

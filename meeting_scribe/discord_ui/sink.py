@@ -109,7 +109,8 @@ class DiscordNotesSink:
 
     async def publish(self, meeting: Meeting, notes: Notes) -> str:
         async with self._lock(meeting.id):
-            return await self._publisher(meeting).publish(meeting, notes, send_dms=True)
+            # the only path that attaches the transcript: the pipeline's DELIVER stage
+            return await self._publisher(meeting).publish(meeting, notes, send_dms=True, attach_transcript=True)
 
     async def _load(self, meeting_id: str) -> Optional[tuple[Meeting, Notes]]:
         svc = self._service()

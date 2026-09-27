@@ -394,9 +394,11 @@ adjunto de transcripción abajo).
 
 Con `delivery_discord_transcript` (**activado** por defecto) cada reunión — de Discord o de Google
 Meet — recibe su transcripción completa adjunta como `transcript-<fecha>-<slug>.md`
-(`[mm:ss] Nombre: texto`) justo después del resumen en el chat de la reunión. Se adjunta una vez:
-reintentos, refrescos y botones nunca la vuelven a adjuntar; un reprocesado que cambia la
-transcripción la reemplaza. Los archivos de más de 8 MB se dividen en partes numeradas. Sin el
+(`[mm:ss] Nombre: texto`) justo después del resumen en el chat de la reunión. Solo la etapa de
+entrega la adjunta, una vez: los reintentos no la repiten y los botones nunca adjuntan nada; un
+reprocesado que cambia las líneas de la transcripción la reemplaza (un título nuevo, no). Las
+reuniones cuyo resumen se publicó sin el adjunto (entregadas por una versión anterior o con el ajuste
+desactivado) no lo reciben después. Los archivos de más de 8 MB se dividen en partes numeradas. Sin el
 permiso **Adjuntar archivos** se publica un aviso de una línea y la entrega continúa. Desactívalo con
 `hermes meeting-scribe config set delivery_discord_transcript false`.
 

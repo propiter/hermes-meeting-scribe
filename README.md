@@ -380,8 +380,10 @@ below).
 
 With `delivery_discord_transcript` (default **on**) every meeting — Discord or Google Meet — gets
 its full transcript attached as `transcript-<date>-<slug>.md` (`[mm:ss] Name: text`) right after
-the summary in the meeting chat. It is attached once: retries, refreshes and button clicks never
-re-attach; a reprocess that changes the transcript replaces it. Files over 8 MB are split into
+the summary in the meeting chat. Only the delivery step attaches it, once: retries never re-attach
+and button clicks never attach anything; a reprocess that changes the transcript lines replaces it
+(a new title alone does not). Meetings whose summary was posted without the attachment (delivered by
+an older version, or with the setting off) never get it later. Files over 8 MB are split into
 numbered parts. Without the **Attach Files** permission a one-line notice is posted instead and the
 delivery continues. Turn it off with `hermes meeting-scribe config set delivery_discord_transcript false`.
 

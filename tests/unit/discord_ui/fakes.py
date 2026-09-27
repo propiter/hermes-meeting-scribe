@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 _ids = itertools.count(10_000)
+BOT_USER_ID = 1
 
 
 class FakeMessage:
@@ -17,6 +18,14 @@ class FakeMessage:
         self.deleted = False
         self.jump_url = f"https://discord.com/channels/1/{channel.id}/{self.id}"
         self.edits = 0
+        self.author = SimpleNamespace(id=BOT_USER_ID)  # everything in these fakes is posted by the bot
+        self.file: Any = None
+
+    @property
+    def attachments(self) -> list:
+        f = self.file
+        name = f.get("name") if isinstance(f, dict) else getattr(f, "filename", None)
+        return [SimpleNamespace(filename=name)] if name else []
 
     async def edit(self, *, content: Optional[str] = None, view: Any = None, **kw: Any) -> "FakeMessage":
         if self.deleted:
@@ -47,7 +56,7 @@ class FakeChannel:
         self.bot = bot or (parent.bot if parent else None)
         self.threads_ok = threads_ok
         self.messages: dict[int, FakeMessage] = {}
-        self.guild = SimpleNamespace(id=1)
+        self.guild = SimpleNamespace(id=1, me=SimpleNamespace(id=BOT_USER_ID))
         self.type = kind
         self.category_id = category_id
         self.position = position
@@ -71,6 +80,10 @@ class FakeChannel:
         msg.file = kw.get("file")  # attachments (transcript, DESIGN §17.3)
         self.messages[msg.id] = msg
         return msg
+
+    async def history(self, *, limit: int = 100, **kw: Any):
+        for msg in sorted(self.messages.values(), key=lambda m: m.id, reverse=True)[:limit]:
+            yield msg
 
     def get_partial_message(self, mid: int) -> FakeMessage:
         return self.messages.get(int(mid)) or _Gone(self)

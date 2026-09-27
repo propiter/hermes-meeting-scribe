@@ -29,7 +29,7 @@ from .guild import guild_of, snapshot_channels
 from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
-from .transcript_file import publish_transcript
+from .transcript_file import SUFFIX as TRANSCRIPT_SUFFIX, mark_legacy, publish_transcript
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +79,9 @@ class TaskPublisher:
         if channel is None or ptr is None:
             channel = await self._chat_channel(meeting)
             first = await self.msgs.send(channel, spec=specs[0])
-            ptr = {"v": 2, "channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url}
+            ptr = {"v": 2, "channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url,
+                   # the transcript may be attached to THIS summary (set once, when it is first posted)
+                   "attach": bool(self.settings.delivery_discord_transcript)}
             await ptrs.save("notes", ptr, first.jump_url)
         if ptr.get("v") != 2:
             ptr = await self._migrate_legacy(channel, ptr, ptrs)
@@ -241,16 +243,26 @@ class TaskPublisher:
                 await ptrs.drop(f"task:{item_id}")
 
     # -- whole meeting --------------------------------------------------------------------------
-    async def publish(self, meeting: Meeting, notes: Notes, *, send_dms: bool) -> str:
+    async def _transcript(self, meeting: Meeting, chat: Any, notes_ptr: dict, ptrs: Pointers) -> None:
+        """DELIVER only (never a button refresh). A summary posted without the attachment intent —
+        before the upgrade, or with the setting off — never gets the full transcript afterwards."""
+        if not self.settings.delivery_discord_transcript or self._transcript_text is None:
+            return
+        if not notes_ptr.get("attach") and await ptrs.load(TRANSCRIPT_SUFFIX) is None:
+            await mark_legacy(ptrs)
+            return
+        try:  # never fails the delivery (DESIGN §17.3)
+            await publish_transcript(self.msgs, ptrs, chat, meeting, self._transcript_text,
+                                     getattr(self.views, "file", None), self.o.lang)
+        except Exception as exc:
+            if not is_missing(exc):
+                log.info("meeting-scribe: transcript attachment skipped: %s", exc)
+
+    async def publish(self, meeting: Meeting, notes: Notes, *, send_dms: bool, attach_transcript: bool = False) -> str:
         ptrs = Pointers(self.repo, meeting.id)
         chat, notes_ptr = await self.header(meeting, notes, ptrs)
-        if self.settings.delivery_discord_transcript and self._transcript_text is not None:
-            try:  # never fails the delivery (DESIGN §17.3)
-                await publish_transcript(self.msgs, ptrs, chat, meeting, self._transcript_text,
-                                         getattr(self.views, "file", None), self.o.lang)
-            except Exception as exc:
-                if not is_missing(exc):
-                    log.info("meeting-scribe: transcript attachment skipped: %s", exc)
+        if attach_transcript:
+            await self._transcript(meeting, chat, notes_ptr, ptrs)
         board = await self.board(meeting, notes)
         groups: dict[Optional[str], list[TaskView]] = {}
         for view in board.views:
