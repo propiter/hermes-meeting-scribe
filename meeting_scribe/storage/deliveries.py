@@ -61,9 +61,18 @@ class DeliveriesMixin:
                 " VALUES (?,?,?,?,?,?, 'done') ON CONFLICT(sink, key) DO UPDATE SET external_id=excluded.external_id,"
                 " url=excluded.url, state='done', claim=NULL", (meeting_id, sink, key, external_id, url, time.time()))
 
-    def list_deliveries(self, meeting_id: str) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._x("SELECT * FROM deliveries WHERE meeting_id=? AND state='done' ORDER BY id",
-                                         (meeting_id,)).fetchall()]
+    def list_deliveries(self, meeting_id: str, *, sink: Optional[str] = None,
+                        prefix: Optional[str] = None) -> list[dict[str, Any]]:
+        sql, params = "SELECT * FROM deliveries WHERE meeting_id=? AND state='done'", [meeting_id]
+        if sink is not None:
+            sql, params = sql + " AND sink=?", params + [sink]
+        if prefix is not None:
+            sql, params = sql + " AND substr(key, 1, ?)=?", params + [len(prefix), prefix]
+        return [dict(r) for r in self._x(sql + " ORDER BY id", params).fetchall()]
+
+    def delete_delivery(self, sink: str, key: str) -> None:
+        """Drop a mutable pointer (a Discord message that no longer exists)."""
+        self._x("DELETE FROM deliveries WHERE sink=? AND key=?", (sink, key))
 
     # -- claims ---------------------------------------------------------------------------------
     def claim_delivery(self, meeting_id: str, sink: str, key: str, *,

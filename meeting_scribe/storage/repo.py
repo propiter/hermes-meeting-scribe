@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
+from ..domain.text import fold
 from ..domain.models import ActionItem, ActionStatus, Meeting, MeetingState, Speaker, Utterance
 from .deliveries import Claim, DeliveriesMixin
 from .jobs import Job, JobsMixin
@@ -66,7 +67,12 @@ INSERT OR IGNORE INTO item_sinks (meeting_id, item_id, sink, status, updated_at)
   SELECT meeting_id, substr(key, length('mtg:' || meeting_id || ':') + 1), sink, 'delivered', created_at
   FROM deliveries WHERE key LIKE 'mtg:%' AND sink IN ('kanban', 'linear');
 """
-_MIGRATIONS: tuple[str, ...] = (_V1, _V2)
+# v3 (DESIGN §16): project name -> Discord channel learned from 📁 corrections.
+_V3 = """
+CREATE TABLE project_channels (
+  project TEXT PRIMARY KEY, channel_id TEXT NOT NULL, updated_at REAL NOT NULL);
+"""
+_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3)
 SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -253,6 +259,16 @@ class Repository(JobsMixin, DeliveriesMixin):
         row = self._x("SELECT project_key, project_name FROM channel_projects WHERE channel_id=?",
                       (channel_id,)).fetchone()
         return dict(row) if row else None
+
+    def learn_project_channel(self, project: str, channel_id: str) -> None:
+        """Remember where tasks of ``project`` (folded name) belong (a 📁 move)."""
+        self._x("INSERT INTO project_channels (project, channel_id, updated_at) VALUES (?,?,?)"
+                " ON CONFLICT(project) DO UPDATE SET channel_id=excluded.channel_id, updated_at=excluded.updated_at",
+                (fold(project), str(channel_id), time.time()))
+
+    def project_channel(self, project: str) -> Optional[str]:
+        row = self._x("SELECT channel_id FROM project_channels WHERE project=?", (fold(project),)).fetchone()
+        return str(row["channel_id"]) if row else None
 
     def all_channel_projects(self) -> list[dict[str, str]]:
         rows = self._x("SELECT channel_id, project_key, project_name FROM channel_projects ORDER BY channel_id")
