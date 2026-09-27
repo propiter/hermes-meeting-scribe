@@ -22,21 +22,25 @@ import logging
 from typing import Any, Callable, Optional, Sequence
 
 from ..config import Settings
-from ..domain.models import Meeting, Notes
+from ..domain.models import Meeting, Notes, is_discord_user_id
 from ..i18n import t
 from .board import Board, build_board
 from .guild import guild_of, snapshot_channels
 from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
+from .transcript_file import publish_transcript
 
 log = logging.getLogger(__name__)
 
 
 class TaskPublisher:
     def __init__(self, *, adapter: Any, views: ViewFactory, settings: Settings, repo: Any,
-                 options: RenderOptions, targets: Callable[[Meeting], Sequence[str]]) -> None:
+                 options: RenderOptions, targets: Callable[[Meeting], Sequence[str]],
+                 transcript_text: Optional[Callable[[Meeting], Optional[str]]] = None) -> None:
         self.msgs = Messages(adapter, views)
+        self.views = views
+        self._transcript_text = transcript_text
         self.adapter = adapter
         self.settings = settings
         self.repo = repo
@@ -45,7 +49,7 @@ class TaskPublisher:
 
     # -- board ----------------------------------------------------------------------------------
     async def board(self, meeting: Meeting, notes: Notes) -> Board:
-        guild = guild_of(self.adapter, meeting)
+        guild = guild_of(self.adapter, meeting, self._targets(meeting))
         channels = snapshot_channels(guild, need_threads=self.settings.delivery_project_threads) if guild else []
         return await asyncio.to_thread(build_board, self.repo, self.settings, meeting, notes, channels)
 
@@ -240,6 +244,13 @@ class TaskPublisher:
     async def publish(self, meeting: Meeting, notes: Notes, *, send_dms: bool) -> str:
         ptrs = Pointers(self.repo, meeting.id)
         chat, notes_ptr = await self.header(meeting, notes, ptrs)
+        if self.settings.delivery_discord_transcript and self._transcript_text is not None:
+            try:  # never fails the delivery (DESIGN §17.6)
+                await publish_transcript(self.msgs, ptrs, chat, meeting, self._transcript_text,
+                                         getattr(self.views, "file", None), self.o.lang)
+            except Exception as exc:
+                if not is_missing(exc):
+                    log.info("meeting-scribe: transcript attachment skipped: %s", exc)
         board = await self.board(meeting, notes)
         groups: dict[Optional[str], list[TaskView]] = {}
         for view in board.views:
@@ -259,8 +270,9 @@ class TaskPublisher:
                 await self.place_task(meeting, view, target, ptrs)
         await self._drop_stale_tasks(board, ptrs)
         dm_failed: list[str] = []
+        # Only Discord users can be DMed; imported speakers (``gmeet:…``) are skipped (DESIGN §17).
         assignees = [str(u) for u in dict.fromkeys(v.item.owner_speaker_id for v in board.views
-                                                   if v.item.owner_speaker_id)]
+                                                   if is_discord_user_id(v.item.owner_speaker_id))]
         if self.settings.delivery_dm_assignees:
             for uid in assignees:
                 if not await self.dm(board, uid, ptrs, send=send_dms):

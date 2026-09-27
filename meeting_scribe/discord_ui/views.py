@@ -120,6 +120,12 @@ class ViewKit:
     def send_kwargs(self) -> dict[str, Any]:
         return {"allowed_mentions": discord.AllowedMentions(users=True, roles=False, everyone=False)}
 
+    def file(self, name: str, data: bytes) -> discord.File:
+        """An attachment built from memory (the transcript, DESIGN §17.6)."""
+        import io
+
+        return discord.File(io.BytesIO(data), filename=name)
+
     def project_view(self, meeting_id: str, candidates: Sequence[Candidate]) -> discord.ui.View:
         # Select values are capped at 100 chars; real keys ("linear:<uuid>", "hermes:<slug>") fit, and a
         # truncated key could never be resolved again, so oversized ones are left out of the picker.

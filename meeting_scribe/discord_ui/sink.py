@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..config import Settings
-from ..domain.models import Meeting, Notes, SinkResult
+from ..domain.models import SOURCE_GOOGLE_MEET, Meeting, Notes, SinkResult, is_discord_user_id
 from ..domain.names import clean_channel_name
-from ..storage.artifacts import read_notes
+from ..storage.artifacts import read_notes, read_transcript, render_transcript_md
 from .board import Board, move_options
 from .publisher import Pointers, ViewFactory
 from .render import RenderOptions
@@ -56,6 +56,9 @@ class DiscordNotesSink:
         adapter, loop = self._adapter(), self._loop()
         if adapter is None or loop is None or loop.is_closed():
             return SinkResult(SINK, False, errors=("discord not connected yet; will retry",))
+        if not self._targets(meeting):  # e.g. a Meet import with no channel configured: skip, don't loop
+            log.info("meeting-scribe: no Discord channel for meeting %s; Discord delivery skipped", meeting.id)
+            return SinkResult(SINK, True, skipped=("no Discord notes channel configured",))
         fut = asyncio.run_coroutine_threadsafe(self.publish(meeting, notes), loop)
         try:
             url = fut.result(self._timeout)
@@ -70,14 +73,30 @@ class DiscordNotesSink:
         if adapter is None:
             raise ConnectionError("discord not connected")
         return TaskPublisher(adapter=adapter, views=self._views, settings=self._settings(),
-                             repo=self._service().repo, options=self._options(meeting), targets=self._targets)
+                             repo=self._service().repo, options=self._options(meeting), targets=self._targets,
+                             transcript_text=self._transcript_text)
+
+    def _transcript_text(self, meeting: Meeting) -> Optional[str]:
+        """The Markdown transcript (``[mm:ss] Name: text``), rendered with the current title (thread)."""
+        folder = self._service().folder(meeting)
+        utterances = read_transcript(folder)
+        if not utterances:
+            return None
+        return render_transcript_md(meeting, utterances, meeting.language or self._settings().ui_language)
 
     def _targets(self, meeting: Meeting) -> list[str]:
+        """Notes channel candidates, in order. Imported (Google Meet) meetings have no voice chat:
+        ``google_meet_discord_channel`` → ``delivery_discord_channel`` → home (DESIGN §17)."""
         adapter = self._adapter()
         home = getattr(getattr(getattr(adapter, "config", None), "home_channel", None), "chat_id", None)
+        s = self._settings()
+        if meeting.source == SOURCE_GOOGLE_MEET:
+            order = (s.google_meet_discord_channel, s.delivery_discord_channel, meeting.text_channel_id, home)
+        else:
+            order = (s.delivery_discord_channel, meeting.text_channel_id, meeting.channel_id, home)
         out: list[str] = []
-        for cid in (self._settings().delivery_discord_channel, meeting.text_channel_id, meeting.channel_id, home):
-            if cid and str(cid) not in out:
+        for cid in order:
+            if cid and str(cid).isdigit() and str(cid) not in out:
                 out.append(str(cid))
         return out
 
@@ -132,7 +151,7 @@ class DiscordNotesSink:
         if view is None or not await pub.edit_task(board.meeting, view, ptrs):
             await self._refresh(meeting_id)
             return
-        if view.item.owner_speaker_id and pub.settings.delivery_dm_assignees:
+        if is_discord_user_id(view.item.owner_speaker_id) and pub.settings.delivery_dm_assignees:
             await pub.dm(board, view.item.owner_speaker_id, ptrs, send=False)
         await pub.refresh_index(board, ptrs)
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from ..domain.models import ActionItem
+from ..domain.models import ActionItem, is_discord_user_id
 from ..i18n import t
 
 TASK_ACTIONS = frozenset({"ok", "lin", "no", "prj", "tsel"})
@@ -45,5 +45,6 @@ def check_task(action: str, item: Optional[ActionItem], user_id: str, owners: fr
         return Verdict(True)
     if assignee is None:
         return Verdict(False, t("tasks.owners_only_unassigned", lang))
-    return Verdict(False, t("tasks.belongs_to", lang, user=f"<@{assignee}>"))
+    who = f"<@{assignee}>" if is_discord_user_id(assignee) else (item.owner_name or assignee)
+    return Verdict(False, t("tasks.belongs_to", lang, user=who))
 

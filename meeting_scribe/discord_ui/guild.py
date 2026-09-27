@@ -51,13 +51,25 @@ def snapshot_channels(guild: Any, *, need_threads: bool) -> list[ChannelInfo]:
     return out
 
 
-def guild_of(adapter: Any, meeting: Meeting) -> Any:
+def guild_of(adapter: Any, meeting: Meeting, fallback_channels: Sequence[str] = ()) -> Any:
+    """The meeting's guild; imported meetings (Google Meet, no guild) use their notes channel's guild."""
     client = getattr(adapter, "_client", None)
     getter = getattr(client, "get_guild", None)
     try:
-        return getter(int(meeting.guild_id)) if callable(getter) else None
+        if meeting.guild_id and callable(getter):
+            return getter(int(meeting.guild_id))
     except (TypeError, ValueError):
         return None
+    get_channel = getattr(client, "get_channel", None)
+    for cid in fallback_channels:
+        if not str(cid).isdigit() or not callable(get_channel):
+            continue
+        channel = get_channel(int(cid))
+        guild = getattr(channel, "guild", None)
+        gid = getattr(guild, "id", None)
+        if gid is not None and callable(getter):
+            return getter(int(gid)) or guild
+    return None
 
 
 def to_candidates(channels: Sequence[ChannelInfo], ignore_prefixes: Sequence[str]) -> list[Candidate]:
@@ -75,10 +87,12 @@ class DiscordChannelCatalog:
     name = SOURCE
 
     def __init__(self, *, adapter: Callable[[], Any], loop: Callable[[], Optional[asyncio.AbstractEventLoop]],
-                 ignore_prefixes: Callable[[], Sequence[str]]) -> None:
+                 ignore_prefixes: Callable[[], Sequence[str]],
+                 targets: Optional[Callable[[Meeting], Sequence[str]]] = None) -> None:
         self._adapter = adapter
         self._loop = loop
         self._ignore = ignore_prefixes
+        self._targets = targets or (lambda m: ())
 
     def candidates(self, meeting: Meeting) -> list[Candidate]:
         adapter, loop = self._adapter(), self._loop()
@@ -86,7 +100,7 @@ class DiscordChannelCatalog:
             return []
 
         async def snap() -> list[ChannelInfo]:
-            guild = guild_of(adapter, meeting)
+            guild = guild_of(adapter, meeting, self._targets(meeting))
             return snapshot_channels(guild, need_threads=False) if guild is not None else []
         try:
             channels = asyncio.run_coroutine_threadsafe(snap(), loop).result(SNAPSHOT_TIMEOUT)

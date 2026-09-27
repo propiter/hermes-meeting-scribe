@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence
 
-from ..domain.models import ActionItem, ActionStatus, Meeting
+from ..domain.models import ActionItem, ActionStatus, Meeting, is_discord_user_id
 from ..i18n import t
 from ..storage.artifacts import fmt_ts
 from .render import MESSAGE_LIMIT, ButtonSpec, MessageSpec, RenderOptions, custom_id
@@ -60,6 +60,8 @@ def _clip(text: str, limit: int) -> str:
 def _who(item: ActionItem, lang: str) -> str:
     if not item.owner_speaker_id:
         return f"_{t('notes.unassigned', lang)}_"
+    if not is_discord_user_id(item.owner_speaker_id):  # imported speaker (Google Meet): no mention
+        return f"**{item.owner_name or item.owner_speaker_id}**"
     return f"<@{item.owner_speaker_id}>" + (f" ({item.owner_name})" if item.owner_name else "")
 
 
@@ -136,9 +138,13 @@ def _project_lines(views: Sequence[TaskView], threads: Mapping[Optional[str], st
 
 def _person_lines(views: Sequence[TaskView], lang: str) -> list[str]:
     people: dict[Optional[str], int] = {}
+    names: dict[str, str] = {}
     for v in views:
         people[v.item.owner_speaker_id or None] = people.get(v.item.owner_speaker_id or None, 0) + 1
-    lines = [f"- <@{uid}> — {n}" for uid, n in people.items() if uid]
+        if v.item.owner_speaker_id and v.item.owner_name:
+            names.setdefault(v.item.owner_speaker_id, v.item.owner_name)
+    lines = [f"- <@{uid}> — {n}" if is_discord_user_id(uid) else f"- **{names.get(uid, uid)}** — {n}"
+             for uid, n in people.items() if uid]
     if None in people:
         lines.append(f"- {t('notes.unassigned', lang)} — {people[None]}")
     return lines
