@@ -234,6 +234,11 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `delivery_discord_enabled` | bool | `true` | Post notes to Discord. |
 | `delivery_discord_channel` | str | `""` | Notes channel id (empty = voice text chat, then the Hermes home channel). |
 | `delivery_discord_thread` | bool | `true` | Post notes in a thread when possible. |
+| `delivery_project_threads` | bool | `true` | Post each task in a thread of its project's channel. |
+| `delivery_dm_assignees` | bool | `true` | DM each assignee their tasks with buttons after delivery. |
+| `project_channels` | list | `[]` | Explicit project → channel map, entries like `Project name=channel_id`. |
+| `project_match_min_score` | float | `0.8` | Minimum fuzzy score to route a task to a channel by name. |
+| `channel_name_ignore_prefixes` | list | `[]` | Decorative leading words ignored in channel names. |
 | `owners` | list | `[]` | Discord user ids whose tasks may go to Kanban (empty = first `DISCORD_ALLOWED_USERS` entry). |
 | `kanban_mode` | str | `approve` | Kanban delivery of owner tasks: `approve` / `auto` / `off`. |
 | `kanban_board` | str | `""` | Kanban board slug (empty = default board). |

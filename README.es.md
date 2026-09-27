@@ -239,6 +239,11 @@ advertencia.
 | `delivery_discord_enabled` | bool | `true` | Publicar las notas en Discord. |
 | `delivery_discord_channel` | str | `""` | Id del canal de notas (vacío = chat de texto del canal de voz y, si no, el canal home de Hermes). |
 | `delivery_discord_thread` | bool | `true` | Publicar las notas en un hilo cuando sea posible. |
+| `delivery_project_threads` | bool | `true` | Publicar cada tarea en un hilo del canal de su proyecto. |
+| `delivery_dm_assignees` | bool | `true` | Enviar por DM a cada responsable sus tareas con botones. |
+| `project_channels` | list | `[]` | Mapa explícito proyecto → canal, entradas como `Nombre del proyecto=id_canal`. |
+| `project_match_min_score` | float | `0.8` | Puntuación difusa mínima para enviar una tarea a un canal por nombre. |
+| `channel_name_ignore_prefixes` | list | `[]` | Palabras decorativas iniciales que se ignoran en los nombres de canal. |
 | `owners` | list | `[]` | Ids de Discord cuyas tareas pueden ir a Kanban (vacío = primera entrada de `DISCORD_ALLOWED_USERS`). |
 | `kanban_mode` | str | `approve` | Envío a Kanban de las tareas de los owners: `approve` / `auto` / `off`. |
 | `kanban_board` | str | `""` | Slug del tablero Kanban (vacío = tablero por defecto). |

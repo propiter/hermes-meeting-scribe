@@ -140,6 +140,26 @@ config_schema:
     type: bool
     default: true
     description: Post notes in a thread when possible.
+  delivery_project_threads:
+    type: bool
+    default: true
+    description: Post each task in a thread of its project's channel.
+  delivery_dm_assignees:
+    type: bool
+    default: true
+    description: DM each assignee their tasks with buttons after delivery.
+  project_channels:
+    type: list
+    default: []
+    description: Explicit project to channel map, entries like 'Project name=channel_id'.
+  project_match_min_score:
+    type: float
+    default: 0.8
+    description: Minimum fuzzy score to route a task to a channel by name.
+  channel_name_ignore_prefixes:
+    type: list
+    default: []
+    description: Decorative leading words ignored in channel names.
   owners:
     type: list
     default: []
