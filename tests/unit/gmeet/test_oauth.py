@@ -274,3 +274,99 @@ def test_connect_after_explicit_disconnect_starts_fresh(files, client_file):
                              emit=lambda u: state.append(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(u).query))["state"]),
                              read_line=lambda p: f"http://127.0.0.1:1/?state={state[0]}&code=4/good", now=lambda: 999.0)
     assert tok["connected_at"] == 999.0
+
+
+# -- finding 10: refresh is exclusive across processes and never undoes a disconnect/connect ----------
+def _slow_token_server(gate, calls, answer=None):
+    def handler(method, url, headers, body):
+        calls.append(url)
+        gate.wait(5)
+        return answer or jresp(200, {"access_token": f"at-{len(calls)}", "expires_in": 3600})
+    return FakeTransport(handler)
+
+
+def test_disconnect_during_refresh_is_not_undone(files, client_file):
+    import time
+    oauth.import_client_file(files, client_file)
+    files.write_token({"access_token": "a", "refresh_token": "r", "expires_at": 0})
+    gate, calls = threading.Event(), []
+    creds = GoogleCredentials(files, transport=_slow_token_server(gate, calls))
+    errors = []
+
+    def refresh():
+        try:
+            creds.access_token()
+        except GoogleDisconnected as exc:
+            errors.append(exc)
+    th = threading.Thread(target=refresh)
+    th.start()
+    while not calls:
+        time.sleep(0.01)
+    killer = threading.Thread(target=files.delete_token)  # `google disconnect` from another command
+    killer.start()
+    time.sleep(0.2)
+    gate.set()
+    th.join()
+    killer.join()
+    assert files.read_token() is None
+
+
+def test_token_file_vanishing_mid_refresh_is_not_resurrected(files, client_file):
+    oauth.import_client_file(files, client_file)
+    files.write_token({"access_token": "a", "refresh_token": "r", "expires_at": 0})
+
+    def handler(method, url, headers, body):
+        files.token_path.unlink()  # another process without our lock (older version) deleted it
+        return jresp(200, {"access_token": "new", "expires_in": 3600})
+    creds = GoogleCredentials(files, transport=FakeTransport(handler))
+    with pytest.raises(GoogleDisconnected):
+        creds.access_token()
+    assert files.read_token() is None
+
+
+def test_reconnect_mid_refresh_is_not_overwritten_nor_marked_disconnected(files, client_file):
+    oauth.import_client_file(files, client_file)
+    files.write_token({"access_token": "a", "refresh_token": "old", "expires_at": 0})
+
+    def handler(method, url, headers, body):
+        oauth.write_private_json(files.token_path, {"access_token": "fresh", "refresh_token": "brand-new",
+                                                     "expires_at": 10**12})
+        return jresp(400, {"error": "invalid_grant"})  # the OLD grant was revoked by the reconnect
+    creds = GoogleCredentials(files, transport=FakeTransport(handler))
+    assert creds.access_token() == "fresh"
+    tok = files.read_token()
+    assert tok["refresh_token"] == "brand-new" and not tok.get("disconnected")
+
+
+def test_two_processes_refresh_only_once(files, client_file):
+    oauth.import_client_file(files, client_file)
+    files.write_token({"access_token": "a", "refresh_token": "r", "expires_at": 0})
+    gate, calls = threading.Event(), []
+    transport = _slow_token_server(gate, calls)
+    a, b = GoogleCredentials(files, transport=transport), GoogleCredentials(files, transport=transport)
+    out = []
+    ths = [threading.Thread(target=lambda c=c: out.append(c.access_token())) for c in (a, b)]
+    for th in ths:
+        th.start()
+    gate.set()
+    for th in ths:
+        th.join()
+    assert len(calls) == 1 and out == ["at-1", "at-1"]
+
+
+def test_token_lock_is_shared_across_processes(files, client_file):
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    files.write_token({"refresh_token": "r"})
+    code = ("import sys, time; sys.path.insert(0, sys.argv[1]); from pathlib import Path;"
+            "from meeting_scribe.google.oauth import GoogleFiles; f = GoogleFiles(lambda: Path(sys.argv[2]));"
+            "cm = f.token_lock(); cm.__enter__(); print('locked', flush=True); time.sleep(1.0); cm.__exit__(None, None, None)")
+    p = subprocess.Popen([sys.executable, "-c", code, str(root), str(files.dir.parent)], stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline().strip() == "locked"
+    t0 = time.monotonic()
+    files.delete_token()  # waits for the other process
+    assert time.monotonic() - t0 > 0.5
+    p.wait(10)

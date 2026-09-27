@@ -15,6 +15,7 @@ Secrets (client_secret, tokens, codes) are never logged nor put in exception mes
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import http.server
 import json
@@ -26,7 +27,12 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping, Optional
+
+try:  # POSIX: cross-process token lock
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 from .http import Response, Transport, TransportError, UrllibTransport
 
@@ -67,11 +73,55 @@ def write_private_json(path: Path, data: Mapping[str, Any]) -> None:
         raise
 
 
+_HELD = threading.local()  # token lock paths this thread already holds (the lock is re-entrant)
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path) -> Iterator[None]:
+    """Exclusive, re-entrant lock shared by threads AND processes (``fcntl.flock`` on ``path``).
+
+    Where ``fcntl`` is unavailable (Windows) only the in-process lock applies.
+    """
+    key = str(path)
+    held: set[str] = getattr(_HELD, "paths", None) or set()
+    _HELD.paths = held
+    if key in held:
+        yield
+        return
+    with _THREAD_LOCKS_GUARD:
+        tlock = _THREAD_LOCKS.setdefault(key, threading.Lock())
+    with tlock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(key, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            held.add(key)
+            try:
+                yield
+            finally:
+                held.discard(key)
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 class GoogleFiles:
-    """Paths of the per-profile Google credentials; the root is resolved on every call."""
+    """Paths of the per-profile Google credentials; the root is resolved on every call.
+
+    Every token write/delete and the credentials' read-refresh-write cycle run under
+    :meth:`token_lock` (``token.json.lock``), so a refresh in one process can never undo a
+    ``disconnect`` or a new ``connect`` made by another.
+    """
 
     def __init__(self, data_dir: Callable[[], Path]) -> None:
         self._data_dir = data_dir
+
+    def token_lock(self) -> "contextlib.AbstractContextManager[None]":
+        return _file_lock(self.dir / "token.json.lock")
 
     @property
     def dir(self) -> Path:
@@ -93,10 +143,12 @@ class GoogleFiles:
         return data if isinstance(data, dict) else None
 
     def write_token(self, token: Mapping[str, Any]) -> None:
-        write_private_json(self.token_path, token)
+        with self.token_lock():
+            write_private_json(self.token_path, token)
 
     def delete_token(self) -> None:
-        self.token_path.unlink(missing_ok=True)
+        with self.token_lock():
+            self.token_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -350,19 +402,47 @@ class GoogleCredentials:
             raise GoogleDisconnected("Google access was revoked or expired; run `hermes meeting-scribe google connect`")
         return token
 
+    def _fresh(self, token: Mapping[str, Any]) -> bool:
+        return bool(token.get("access_token")) and \
+            float(token.get("expires_at") or 0) - REFRESH_MARGIN > self.clock()
+
     def access_token(self, *, force_refresh: bool = False) -> str:
-        with self._lock:
+        """A valid access token; refreshes under the cross-process token lock.
+
+        The token file is re-read inside the lock (another process may have refreshed it already)
+        and again before writing: if it vanished (``disconnect``) nothing is written back; if its
+        refresh token changed (a new ``connect``) the new grant wins and is neither overwritten nor
+        marked disconnected.
+        """
+        with self._lock, self.files.token_lock():
             token = self.token()
-            fresh = token.get("access_token") and float(token.get("expires_at") or 0) - REFRESH_MARGIN > self.clock()
-            if fresh and not force_refresh:
+            if self._fresh(token) and not force_refresh:
                 return str(token["access_token"])
+            used = token.get("refresh_token")
             try:
                 new = refresh_token(self.transport, load_client(self.files), token, now=self.clock())
             except GoogleDisconnected:
-                self.files.write_token({**token, "access_token": None, "disconnected": True})
+                current = self.files.read_token()
+                if current is None:
+                    raise
+                if current.get("refresh_token") != used:  # re-connected meanwhile: that grant is fine
+                    return self._adopt(current)
+                self.files.write_token({**current, "access_token": None, "disconnected": True})
                 raise
+            current = self.files.read_token()
+            if current is None:
+                raise GoogleDisconnected("Google was disconnected during a token refresh; "
+                                         "run `hermes meeting-scribe google connect`")
+            if current.get("refresh_token") != used:
+                return self._adopt(current)
             self.files.write_token(new)
             return str(new["access_token"])
+
+    def _adopt(self, current: Mapping[str, Any]) -> str:
+        """Use the token another process just stored (never overwrite it)."""
+        if current.get("disconnected") or not current.get("access_token"):
+            raise GoogleAuthError("the Google token changed during a refresh; will retry")
+        return str(current["access_token"])
 
 
 def connect_flow(files: GoogleFiles, client: ClientConfig, *, transport: Transport, no_browser: bool,
