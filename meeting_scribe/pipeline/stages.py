@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -17,6 +18,7 @@ from ..analyze.projects import ProjectResolver, gather_candidates
 from ..analyze.reconcile import reconcile_ids
 from ..audio.archive import build_archive
 from ..audio.ffmpeg import Ffmpeg
+from ..audio.playback import build_playback
 from ..config import Settings
 from ..domain.errors import EmptyRecording
 from ..domain.models import Meeting, MeetingState, SinkResult, Stage
@@ -31,6 +33,7 @@ Archiver = Callable[[Meeting, Path], Optional[Path]]
 ProgressCb = Callable[[str, str, float], None]  # meeting_id, track, fraction
 
 
+log = logging.getLogger(__name__)
 SINKS_DONE_KV = "pipeline.sinks_done."  # meeting id -> {"notes": sha256, "sinks": [...]} (review M4)
 
 
@@ -59,7 +62,13 @@ def make_archiver(settings: Callable[[], Settings], ffmpeg: Callable[[], Ffmpeg]
         if not tracks:
             # Already archived (resume) or nothing captured; never fail the meeting for it.
             return existing if existing is not None and existing.exists() else None
-        return build_archive(ffmpeg(), tracks, meeting.speakers, folder, s.audio_retention, s.audio_bitrate_kbps)
+        out = build_archive(ffmpeg(), tracks, meeting.speakers, folder, s.audio_retention, s.audio_bitrate_kbps)
+        if s.audio_retention == "multitrack" and out is not None:
+            try:  # the listening copy for Desktop; never fail a meeting over it (it can be made later)
+                build_playback(ffmpeg(), folder)
+            except Exception:
+                log.warning("meeting-scribe: could not write the listening copy for %s", meeting.id, exc_info=True)
+        return out
 
     return archive
 
