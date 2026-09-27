@@ -138,7 +138,7 @@ def register(ctx: Any, plugin_root: Path) -> Runtime:
     commands = MeetingCommands(runtime.service, runtime.settings, capture=lambda: runtime.capture)
     for name in (PRIMARY_COMMAND, *runtime.settings().commands_aliases):
         ctx.register_command(name, _command_handler(commands, runtime, name),
-                             description="Meeting scribe: record, transcribe and summarise voice meetings",
+                             description="Meeting notes: record a voice call and get its summary and tasks",
                              args_hint="[start|stop|status|list|show|search|reprocess|link|project|config|help]")
 
     ctx.register_cli_command(name=PLUGIN_ID, help="Meeting scribe: setup, doctor, meetings",

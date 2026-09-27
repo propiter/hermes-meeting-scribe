@@ -45,4 +45,4 @@ def test_every_t_call_in_code_uses_an_existing_key():
 
 def test_format_args_may_be_named_key_or_lang():
     # Placeholders like {key} must not collide with t()'s own parameters.
-    assert t("cmd.config_line", "en", key="a.b", value=1) == "`a.b` = 1"
+    assert t("cmd.config_line", "en", key="ignored", lang="ignored", label="a.b", value=1) == "**a.b**: 1"

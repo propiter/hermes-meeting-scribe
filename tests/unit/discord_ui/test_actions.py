@@ -139,7 +139,7 @@ async def test_unassigned_tasks_are_owners_only(env):
 async def test_unknown_task_is_a_friendly_error(env):
     i = FakeInteraction(OWNER)
     await env.acts.handle(i, "no", "k3v7q2ab", "zz")
-    assert env.svc.calls == [] and "zz" in i.replies()
+    assert env.svc.calls == [] and "not found" in i.replies()
 
 
 async def test_my_tasks_opens_an_ephemeral_panel_for_anyone(env):
@@ -202,7 +202,52 @@ async def test_legacy_meeting_buttons_keep_working_for_owners(env):
 
 
 async def test_service_errors_become_ephemeral_replies(env):
-    env.svc.fail = ValueError("action item a1 was dismissed")
+    from meeting_scribe.domain.errors import ItemDismissed
+    env.svc.fail = ItemDismissed("action item a1 was dismissed")
     i = FakeInteraction(OWNER)
     await env.acts.handle(i, "ok", "k3v7q2ab", "a1")
-    assert "dismissed" in i.replies() and env.sink.calls == []
+    assert "dismissed" in i.replies() and "a1" not in i.replies() and env.sink.calls == []
+
+
+@pytest.mark.parametrize("exc, expected", [
+    (RuntimeError("HTTP 502 Bad Gateway from kanban.internal"), "could not be completed"),
+    (KeyError("k3v7q2ab"), "couldn't find"),
+    (LookupError("Unknown Channel 502"), "couldn't find"),
+    (ValueError("invalid literal for int()"), "could not be completed"),
+])
+async def test_unexpected_errors_are_logged_not_shown(env, caplog, exc, expected):
+    env.svc.fail = exc
+    i = FakeInteraction(OWNER)
+    await env.acts.handle(i, "ok", "k3v7q2ab", "a1")
+    reply = i.replies()
+    assert expected in reply and str(exc).strip("'") not in reply and type(exc).__name__ not in reply
+    assert str(exc).strip("'") in caplog.text
+
+
+async def test_known_errors_get_their_own_plain_sentence(env):
+    from meeting_scribe.domain.errors import NotesNotReady, SinkUnavailable
+    for exc, expected in ((SinkUnavailable("linear"), "Linear isn't connected"),
+                          (NotesNotReady("meeting has no notes yet"), "aren't ready yet")):
+        env.svc.fail = exc
+        i = FakeInteraction(OWNER)
+        await env.acts.handle(i, "ok", "k3v7q2ab", "a1")
+        assert expected in i.replies() and "sink" not in i.replies()
+
+
+async def test_panel_failure_hides_the_exception(env, caplog):
+    async def broken(*a, **k):
+        raise RuntimeError("sqlite3.OperationalError: database is locked")
+    env.sink.task_panel = broken
+    i = FakeInteraction(OWNER)
+    await env.acts.handle(i, "mine", "k3v7q2ab", "all")
+    assert "sqlite" not in i.replies() and "could not be completed" in i.replies()
+    assert "database is locked" in caplog.text
+
+
+async def test_approve_all_partial_failures_are_counted_not_listed(env, caplog):
+    env.svc.approve_all = lambda mid, sink: SinkResult(sink, False, ("t_1",),
+                                                       errors=("a2: RuntimeError: HTTP 500",))
+    i = FakeInteraction(OWNER)
+    await env.acts.handle(i, "allk", "k3v7q2ab", "all")
+    assert "1 task(s) could not be sent" in i.replies() and "HTTP 500" not in i.replies()
+    assert "HTTP 500" in caplog.text

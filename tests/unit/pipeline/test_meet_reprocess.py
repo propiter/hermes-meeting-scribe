@@ -57,7 +57,7 @@ def test_command_and_cli_explain_the_mapping(world):
     mid = _imported(world)
     cmds = MeetingCommands(lambda: service, lambda: settings_from_mapping({}), capture=lambda: None)
     out = cmds.handle(f"reprocess {mid}", Caller("discord", "1", "1"), "meeting")
-    assert "analyze" in out and "without audio" in out.lower()
+    assert "regenerating the notes" in out and "without audio" in out.lower()
 
 
 def test_cli_reprocess_explains_the_mapping(world, capsys):

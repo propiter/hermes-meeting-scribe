@@ -127,13 +127,30 @@ async def test_busy_guild_is_refused_with_message(world):
     assert "/voice leave" in await in_thread(mgr.start, caller(), None)
 
 
-async def test_incompatible_adapter_disables_capture(world):
+async def test_incompatible_adapter_disables_capture(world, caplog):
     mgr = world["mgr"]
     mgr._compat = lambda adapter: CompatResult(False, ("VoiceReceiver._on_packet changed",), ())
     mgr.attach(world["adapter"]._client, world["adapter"])
     reply = await in_thread(mgr.start, caller(), None)
-    assert "_on_packet" in reply and world["daily"].connects == 0
-    assert mgr.status()[0] is False
+    # the chat user gets a plain sentence; the internals go to the log and to doctor/status
+    assert "_on_packet" not in reply and "doctor" in reply and world["daily"].connects == 0
+    assert "_on_packet" in caplog.text
+    ok, detail = mgr.status()
+    assert ok is False and "_on_packet" in detail
+
+
+async def test_missing_ffmpeg_reply_hides_the_exception(world, caplog):
+    from meeting_scribe.audio.ffmpeg import FfmpegNotFound
+
+    mgr = world["mgr"]
+    mgr.attach(world["adapter"]._client, world["adapter"])
+
+    async def no_ffmpeg(*a, **k):
+        raise FfmpegNotFound("ffmpeg binary not found on PATH")
+    mgr.start_in = no_ffmpeg
+    reply = await in_thread(mgr.start, caller(), None)
+    assert "PATH" not in reply and "ffmpeg" not in reply and "doctor" in reply
+    assert "ffmpeg binary not found" in caplog.text
 
 
 async def test_called_on_the_loop_thread_schedules_and_returns(world):

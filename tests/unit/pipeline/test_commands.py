@@ -73,12 +73,12 @@ def test_list_show_search_status(prepo, layout, settings, clock, meeting):
 def test_reprocess_and_project_and_link(prepo, layout, settings, clock, meeting):
     cmds, service, runner = make(prepo, layout, settings, clock)
     mid = processed(service, runner, meeting)
-    assert "analyze" in cmds.handle(f"reprocess {mid} from=analyze", CALLER, "meeting")
+    assert "regenerating the notes" in cmds.handle(f"reprocess {mid} from=analyze", CALLER, "meeting")
     assert prepo.get_job(mid).stage is Stage.ANALYZE
     drain(runner)
-    assert "Unknown stage" in cmds.handle(f"reprocess {mid} from=bogus", CALLER, "meeting")
+    assert "from=deliver" in cmds.handle(f"reprocess {mid} from=bogus", CALLER, "meeting")
     assert "Website" in cmds.handle(f"project {mid} Website", CALLER, "meeting")
-    assert "Candidates" in cmds.handle(f"project {mid} Nope", CALLER, "meeting")
+    assert "Available" in cmds.handle(f"project {mid} Nope", CALLER, "meeting")
     assert "Linked" in cmds.handle("link <@11> luis@x.io", CALLER, "meeting")
     assert prepo.get_link("11")["email"] == "luis@x.io"
     assert "Usage" in cmds.handle("link", CALLER, "meeting")
@@ -88,15 +88,18 @@ def test_config_and_spanish(prepo, layout, settings, clock):
     from meeting_scribe.config import settings_from_mapping
     s = settings_from_mapping({"ui_language": "es"})
     cmds, *_ = make(prepo, layout, lambda: s, clock)
-    assert "`kanban_mode` = approve" in cmds.handle("config", CALLER, "meeting")
+    out = cmds.handle("config", CALLER, "meeting")
+    assert "**Kanban**: approve" in out and "kanban_mode" not in out
     assert "Ninguna reunión" in cmds.handle("list", CALLER, "meeting") or "Aún no" in cmds.handle(
         "list", CALLER, "meeting")
 
 
-def test_handler_never_raises(prepo, layout, settings, clock):
+def test_handler_never_raises_nor_shows_the_exception(prepo, layout, settings, clock, caplog):
     cmds, service, _ = make(prepo, layout, settings, clock)
     service.search = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db gone"))
-    assert "db gone" in cmds.handle("search x", CALLER, "meeting")
+    out = cmds.handle("search x", CALLER, "meeting")
+    assert "db gone" not in out and "RuntimeError" not in out and "administrator" in out
+    assert "db gone" in caplog.text  # the details stay in the log for the administrator
 
 
 def test_only_a_reprocess_from_deliver_asks_to_move_notes_out_of_a_dm(prepo, layout, settings, clock, meeting):
@@ -132,4 +135,43 @@ def test_reprocess_reply_repeats_how_to_move_notes_left_in_a_dm(prepo, layout, s
     mid = processed(service, runner, meeting)
     prepo.kv_set(KV_DM_NOTES + mid, "no notes channel is configured. Run `hermes meeting-scribe config set x`")
     out = cmds.handle(f"reprocess {mid} from=deliver", CALLER, "meeting")
-    assert "config set" in out and "deliver" in out
+    assert "direct message" in out and "config set" not in out  # admin commands stay in the CLI/doctor
+    drain(runner)
+    out = cmds.handle(f"reprocess {mid} from=analyze", CALLER, "meeting")
+    assert "`from=deliver`" in out and "config set" not in out
+
+
+def test_states_and_stages_are_shown_in_plain_words(prepo, layout, settings, clock, meeting):
+    cmds, service, runner = make(prepo, layout, settings, clock)
+    mid = processed(service, runner, meeting)
+    listed = cmds.handle("list", CALLER, "meeting")
+    assert "Ready" in listed and " done" not in listed
+    runner.max_attempts = 1
+    service.reprocess(mid, Stage.DELIVER)
+    runner.stages.deliver = lambda m: (_ for _ in ()).throw(RuntimeError("HTTP 403 Missing Access"))
+    drain(runner)
+    status = cmds.handle("status", CALLER, "meeting")
+    assert "Couldn't finish" in status and "posting the notes" in status
+    assert "403" not in status and "RuntimeError" not in status and "failed" not in status
+    reply = cmds.handle(f"reprocess {mid} from=transcribe", CALLER, "meeting")
+    assert "starting again from the audio" in reply and "from transcribe" not in reply
+
+
+def test_states_and_stages_in_spanish(prepo, layout, clock, meeting):
+    from meeting_scribe.config import settings_from_mapping
+    s = settings_from_mapping({"ui_language": "es"})
+    cmds, service, runner = make(prepo, layout, lambda: s, clock)
+    mid = processed(service, runner, meeting)
+    assert "Lista" in cmds.handle("list", CALLER, "meeting")
+    assert "volviendo a publicar las notas" in cmds.handle(f"reprocess {mid} from=deliver", CALLER, "meeting")
+
+
+def test_every_state_and_stage_has_a_label():
+    from meeting_scribe.commands import stage_label, state_label
+    for lang in ("en", "es"):
+        for st in MeetingState:
+            assert state_label(st, lang) != st.value
+        for sg in Stage:
+            assert stage_label(sg, lang) != sg.value
+        for sg in (Stage.TRANSCRIBE, Stage.ANALYZE, Stage.DELIVER):
+            assert stage_label(sg, lang, redo=True) != sg.value

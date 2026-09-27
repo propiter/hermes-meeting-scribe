@@ -57,6 +57,16 @@ All notable changes to this project are documented here. The format follows
   connects or a `/meeting` command runs.
 - Re-running `google connect` keeps the original connection time, so meetings that ended while
   access was broken are still imported (within Meet's 30 days).
+- **Discord messages speak the user's language, not the plugin's**: errors from `/meeting`, buttons
+  and `/meeting start` no longer quote the exception (it is logged, and `doctor`/`status` show the
+  technical detail); expected problems get their own sentence (task dismissed, notes not ready,
+  Kanban/Linear not connected, channel unavailable, not found). Meeting states and stages are
+  labelled in plain words in `list`, `status`, `show` and `reprocess` ("✅ Ready", "⏳ Preparing
+  notes…", "posting the notes again"); a failed meeting says which step could not finish instead of
+  the raw error. `/meeting config` shows setting names instead of keys, `approve all` counts failed
+  tasks instead of listing errors, the project picker describes each source ("Kanban board"), the
+  DM-notes hint in `reprocess` no longer contains admin commands, and the slash command description
+  is plainer.
 
 ### Fixed
 

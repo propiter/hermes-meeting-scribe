@@ -68,6 +68,7 @@ async def test_project_select_uses_candidates_and_routes_values():
     assert sel.custom_id == "mscribe:psel:k3v7q2ab:all"
     opts = sel.item.options
     assert opts[0].value == "hermes:p1" and opts[0].label == "Website"
+    assert opts[0].description == "Hermes project"  # never the internal source key
     assert all(len(o.label) <= 100 and len(o.value) <= 100 for o in opts)
     base = discord.ui.Select(custom_id=sel.custom_id, options=[discord.SelectOption(label="x")])
     item = await kit.select_cls.from_custom_id(FakeInteraction(1), base, re.match(TEMPLATE, sel.custom_id))

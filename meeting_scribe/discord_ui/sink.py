@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..config import Settings
+from ..domain.errors import ChannelUnavailable
 from ..domain.models import KV_MOVE_FROM_DM, Meeting, Notes, SinkResult, is_discord_user_id
 from ..domain.names import clean_channel_name
 from ..storage.artifacts import read_notes, read_transcript, render_transcript_md
@@ -201,7 +202,7 @@ class DiscordNotesSink:
         _pub, board = got
         chan = next((c for c in board.channels if c.id == str(channel_id) and c.kind != "category"), None)
         if chan is None or not chan.can_post:
-            raise LookupError(f"channel {channel_id} is not available")
+            raise ChannelUnavailable(f"channel {channel_id} is not available")
         name = clean_channel_name(chan.name, self._settings().channel_name_ignore_prefixes) or chan.name
         await asyncio.to_thread(lambda: self._service().move_item(meeting_id, item_id, chan.id, name, learn=learn))
         await self._refresh(meeting_id)

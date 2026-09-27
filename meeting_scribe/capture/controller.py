@@ -123,7 +123,8 @@ class CaptureManager:
             return True, "capture installed; waiting for the Discord adapter to connect"
         res = self._compat_result
         if res is None or not res.ok:
-            return False, t("capture.incompatible", self.lang, detail=res.summary() if res else "not probed")
+            # Admin-facing (doctor / status CLI): the technical detail belongs here, not in the chat.
+            return False, f"live capture disabled: {res.summary() if res else 'adapter not probed yet'}"
         return True, f"capture ready ({res.summary()}); {len(self.live_meeting_ids())} live recording(s)"
 
     # -- public controller API (sync) -----------------------------------------------------------
@@ -204,7 +205,9 @@ class CaptureManager:
     async def _start(self, caller: Caller, target: Optional[str]) -> str:
         res = self._compat_result
         if res is None or not res.ok or self._receiver_cls is None:
-            return t("capture.incompatible", self.lang, detail=res.summary() if res else "not probed")
+            log.warning("meeting-scribe: /meeting start refused, live capture disabled: %s",
+                        res.summary() if res else "adapter not probed yet")
+            return t("capture.incompatible", self.lang)
         guild, err = await self._caller_guild(caller)
         if err:
             return err
@@ -219,7 +222,8 @@ class CaptureManager:
         except Busy as exc:
             return str(exc)
         except FfmpegNotFound as exc:
-            return t("capture.ffmpeg_missing", self.lang, error=str(exc))
+            log.warning("meeting-scribe: /meeting start refused: %s", exc)
+            return t("capture.ffmpeg_missing", self.lang)
         return t("capture.started", self.lang, channel=channel.name, id=session.meeting.id if session.meeting else "-")
 
     async def start_in(self, channel: Any, *, started_by: Optional[str] = None) -> RecordingSession:

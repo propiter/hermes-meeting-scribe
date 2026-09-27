@@ -14,6 +14,7 @@ from typing import Any, Optional, Protocol, Sequence
 import discord
 
 from ..domain.models import Candidate
+from ..i18n import t
 from .render import ButtonSpec
 from .render_tasks import TaskPanel
 
@@ -27,6 +28,13 @@ _STYLES = {"success": discord.ButtonStyle.success, "primary": discord.ButtonStyl
 class Handler(Protocol):
     async def handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
                      values: Optional[Sequence[str]] = None) -> None: ...
+
+
+def source_label(source: str, lang: str) -> str:
+    """Where a project candidate comes from, in plain words (``kanban`` → "Kanban board")."""
+    key = f"ui.source.{source}"
+    label = t(key, lang)
+    return "" if label == key else label
 
 
 def _clip(text: str, limit: int = 100) -> str:
@@ -129,7 +137,9 @@ class ViewKit:
     def project_view(self, meeting_id: str, candidates: Sequence[Candidate]) -> discord.ui.View:
         # Select values are capped at 100 chars; real keys ("linear:<uuid>", "hermes:<slug>") fit, and a
         # truncated key could never be resolved again, so oversized ones are left out of the picker.
-        options = [discord.SelectOption(label=_clip(c.name or c.key), value=c.key, description=_clip(c.source))
+        lang = getattr(self.handler, "lang", "en")
+        options = [discord.SelectOption(label=_clip(c.name or c.key), value=c.key,
+                                        description=_clip(source_label(c.source, lang)) or None)
                    for c in candidates if len(c.key) <= 100][:25]
         select = discord.ui.Select(custom_id=f"mscribe:psel:{meeting_id}:all", options=options, min_values=1,
                                    max_values=1)

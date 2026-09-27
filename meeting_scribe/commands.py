@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Protocol, Union
 
 from .config import PRIMARY_COMMAND, Settings
-from .domain.models import Stage
+from .domain.models import MeetingState, Stage
 from .domain.text import is_ascii_digits
 from .i18n import t
 from .pipeline.service import MeetingService
@@ -22,6 +22,21 @@ from .storage.artifacts import fmt_ts, read_notes, render_notes_md
 
 log = logging.getLogger(__name__)
 _MENTION_RE = re.compile(r"^<@!?([0-9]+)>$")
+
+
+def state_label(state: Union[MeetingState, str, None], lang: str) -> str:
+    """A meeting state as chat users read it (``done`` → "✅ Ready"); unknown values pass through."""
+    value = getattr(state, "value", state) or ""
+    label = t(f"state.{value}", lang)
+    return value if label == f"state.{value}" else label
+
+
+def stage_label(stage: Union[Stage, str, None], lang: str, *, redo: bool = False) -> str:
+    """A pipeline stage in plain words: what failed (``label``) or what a reprocess will do (``redo``)."""
+    value = getattr(stage, "value", stage) or ""
+    key = f"stage.{value}.{'redo' if redo else 'label'}"
+    label = t(key, lang)
+    return value if label == key else label
 
 
 @dataclass(frozen=True)
@@ -74,9 +89,10 @@ class MeetingCommands:
             return t("cmd.unknown", lang, sub=sub)
         try:
             return handler(args, caller, lang, invoked_as)
-        except Exception as exc:  # a slash command must always answer
+        except Exception:  # a slash command must always answer
+            # The details are for the administrator (log / ``hermes meeting-scribe status``), not the chat.
             log.exception("meeting-scribe /%s %s failed", invoked_as, sub)
-            return t("cmd.error", lang, error=f"{type(exc).__name__}: {exc}")
+            return t("cmd.error", lang)
 
     # -- capture ------------------------------------------------------------------------------
     def _cmd_start(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
@@ -96,9 +112,14 @@ class MeetingCommands:
         lines = [t("cmd.status_idle", lang, queued=st["queued"])]
         for row in st["recent"]:
             job = row["job"] or {}
-            extra = t("cmd.status_failed_extra", lang, stage=job.get("failed_stage"), attempts=job.get("attempts"),
-                      error=(job.get("error") or "")[:160]) if job.get("error") else ""
-            lines.append(t("cmd.status_line", lang, id=row["id"], title=row["title"], state=row["state"], extra=extra))
+            extra = ""
+            if row["state"] == MeetingState.FAILED.value:
+                extra = t("cmd.status_failed_extra", lang,
+                          stage=stage_label(job.get("failed_stage") or job.get("stage"), lang))
+            elif (row.get("delivery") or {}).get("state") == "waiting_destination":
+                extra = t("cmd.status_waiting_channel", lang)
+            lines.append(t("cmd.status_line", lang, id=row["id"], title=row["title"],
+                           state=state_label(row["state"], lang), extra=extra))
         return "\n".join(lines)
 
     def _cmd_list(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
@@ -107,7 +128,7 @@ class MeetingCommands:
         if not meetings:
             return t("cmd.list_empty", lang)
         return "\n".join(t("cmd.list_line", lang, id=m.id, date=f"{m.started_at:%Y-%m-%d %H:%M}",
-                            title=m.title or m.channel_name, state=m.state.value) for m in meetings)
+                            title=m.title or m.channel_name, state=state_label(m.state, lang)) for m in meetings)
 
     def _cmd_show(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         if not args:
@@ -117,7 +138,8 @@ class MeetingCommands:
             return t("cmd.not_found", lang, id=args[0])
         notes = read_notes(self.service.folder(meeting))
         if notes is None:
-            return t("cmd.status_line", lang, id=meeting.id, title=meeting.title, state=meeting.state.value, extra="")
+            return t("cmd.status_line", lang, id=meeting.id, title=meeting.title,
+                     state=state_label(meeting.state, lang), extra="")
         body = render_notes_md(meeting, notes, notes.language or lang)
         return body.split("---\n", 2)[-1].strip()[:1900]
 
@@ -132,7 +154,15 @@ class MeetingCommands:
                             text=h["text"][:200]) for h in hits)
 
     def _cmd_config(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
-        return "\n".join(t("cmd.config_line", lang, key=k, value=", ".join(v) if isinstance(v, tuple) else v)
+        from .config import SPEC
+
+        def shown(v: object) -> str:
+            if isinstance(v, bool):
+                return t("cmd.config_yes" if v else "cmd.config_no", lang)
+            if isinstance(v, tuple):
+                return ", ".join(map(str, v)) or "-"
+            return str(v) if v not in (None, "") else "-"
+        return "\n".join(t("cmd.config_line", lang, label=SPEC[k].label(k, lang) if k in SPEC else k, value=shown(v))
                          for k, v in self.settings().as_dict().items())
 
     # -- write --------------------------------------------------------------------------------
@@ -151,10 +181,13 @@ class MeetingCommands:
             return t("cmd.not_found", lang, id=args[0])
         used = self.service.effective_stage(meeting, stage)
         self.service.reprocess(meeting.id, stage)
-        reply = t("cmd.reprocess_queued", lang, id=meeting.id, stage=used.value)
+        reply = t("cmd.reprocess_queued", lang, id=meeting.id, stage=stage_label(used, lang, redo=True))
         reply += "\n" + t("cmd.reprocess_no_audio", lang) if used is not stage else ""
-        hint = self.service.dm_notes().get(meeting.id) if hasattr(self.service, "dm_notes") else None
-        return reply + (f"\n⚠️ {hint}" if hint else "")
+        # The stored hint holds admin commands (shown by the CLI/doctor); the chat gets plain words.
+        in_dm = bool(self.service.dm_notes().get(meeting.id)) if hasattr(self.service, "dm_notes") else False
+        if in_dm:
+            reply += "\n⚠️ " + t("cmd.reprocess_dm_moving" if used is Stage.DELIVER else "cmd.reprocess_dm_how", lang)
+        return reply
 
     def _cmd_project(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         if len(args) < 2:

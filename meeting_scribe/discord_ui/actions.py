@@ -13,6 +13,7 @@ import re
 from typing import Any, Callable, Optional, Sequence
 
 from ..config import Settings
+from ..domain.errors import ChannelUnavailable, ItemDismissed, NotesNotReady, SinkUnavailable
 from ..domain.models import Candidate
 from ..i18n import t
 from .auth import MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, TASK_ACTIONS, check_task
@@ -25,6 +26,31 @@ _PAGE_RE = re.compile(r"^(?P<scope>[am])(?P<page>\d{1,3})$")
 
 def clip_reply(text: str, limit: int = REPLY_LIMIT) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+_SINK_NAMES = {"kanban": "Kanban", "linear": "Linear"}
+
+
+class UserMessage(ValueError):
+    """A reply already written for the user (e.g. "no project was selected")."""
+
+
+def friendly_error(exc: BaseException, lang: str) -> str:
+    """What the clicker reads when an action fails: plain words, never the exception text (that goes
+    to the log, where the administrator finds it)."""
+    if isinstance(exc, SinkUnavailable):
+        return t("ui.error_sink_unavailable", lang, sink=_SINK_NAMES.get(exc.sink, exc.sink.title()))
+    if isinstance(exc, ItemDismissed):
+        return t("ui.error_dismissed", lang)
+    if isinstance(exc, NotesNotReady):
+        return t("ui.error_notes_not_ready", lang)
+    if isinstance(exc, ChannelUnavailable):
+        return t("ui.error_channel_unavailable", lang)
+    if isinstance(exc, UserMessage):
+        return str(exc)
+    if isinstance(exc, (KeyError, LookupError)):
+        return t("ui.error_not_found", lang)
+    return t("ui.action_failed", lang)
 
 
 def _from_panel(interaction: Any) -> bool:
@@ -113,11 +139,13 @@ class ButtonActions:
                 reply = await self._move(meeting_id, item_id, list(values or ()), learn=self.is_owner(interaction))
             else:
                 reply = await asyncio.to_thread(self._run, action, meeting_id, item_id, list(values or ()))
-        except (KeyError, LookupError, ValueError) as exc:
-            reply = t("ui.action_failed", self.lang, error=str(exc).strip("'\""))
+        except (KeyError, LookupError, ValueError) as exc:  # expected: the clicker can do something about it
+            log.warning("meeting-scribe button %s on %s/%s refused: %s: %s", action, meeting_id, item_id,
+                        type(exc).__name__, exc)
+            reply = friendly_error(exc, self.lang)
         except Exception as exc:  # Kanban/Linear outages: tell the clicker, keep the gateway healthy
-            log.exception("meeting-scribe button %s failed", action)
-            reply = t("ui.action_failed", self.lang, error=f"{type(exc).__name__}: {exc}")
+            log.exception("meeting-scribe button %s on %s/%s failed", action, meeting_id, item_id)
+            reply = friendly_error(exc, self.lang)
         else:
             await self._after(interaction, action, meeting_id, item_id, from_panel)
         await interaction.followup.send(clip_reply(reply), ephemeral=True)
@@ -142,25 +170,28 @@ class ButtonActions:
         if action in ("ok", "lin"):
             sink = "kanban" if action == "ok" else "linear"
             ref = svc.approve_item(meeting_id, item_id, sink)
-            return t("ui.approved", lang, sink=sink, ref=ref)
+            return t("ui.approved", lang, sink=_SINK_NAMES[sink], ref=ref)
         if action in ("allk", "alll"):
             sink = "kanban" if action == "allk" else "linear"
             res = svc.approve_all(meeting_id, sink)
-            text = t("ui.approved_all", lang, sink=sink, count=len(res.delivered))
-            return text + ("\n" + "\n".join(res.errors) if res.errors else "")
+            text = t("ui.approved_all", lang, sink=_SINK_NAMES[sink], count=len(res.delivered))
+            if res.errors:
+                log.warning("meeting-scribe: approving all of %s to %s: %s", meeting_id, sink, "; ".join(res.errors))
+                text += "\n" + t("ui.approved_partial", lang, failed=len(res.errors))
+            return text
         if action == "no":
             svc.dismiss_item(meeting_id, item_id)
             return t("ui.dismissed", lang)
         if action == "psel":
             if not values:
-                raise ValueError(t("ui.no_selection", lang))
+                raise UserMessage(t("ui.no_selection", lang))
             chosen = svc.set_project(meeting_id, values[0])
             return t("ui.project_saved", lang, project=chosen.name)
         raise ValueError(f"unknown action {action}")
 
     async def _move(self, meeting_id: str, item_id: str, values: list[str], *, learn: bool) -> str:
         if not values:
-            raise ValueError(t("ui.no_selection", self.lang))
+            raise UserMessage(t("ui.no_selection", self.lang))
         mention = await self._sink().move_item(meeting_id, item_id, values[0], learn=learn)
         item = await asyncio.to_thread(self._service().repo.get_action_item, meeting_id, item_id)
         if not learn:
@@ -183,8 +214,7 @@ class ButtonActions:
                                                  is_owner=self.is_owner(interaction))
         except Exception as exc:
             log.exception("meeting-scribe: task panel of %s failed", meeting_id)
-            await interaction.followup.send(clip_reply(t("ui.action_failed", self.lang, error=str(exc))),
-                                            ephemeral=True)
+            await interaction.followup.send(clip_reply(friendly_error(exc, self.lang)), ephemeral=True)
             return
         if in_place:
             await interaction.edit_original_response(view=view)
@@ -196,8 +226,8 @@ class ButtonActions:
         try:
             options = list(await self._sink().move_options(meeting_id, item_id))[:SELECT_LIMIT]
         except Exception as exc:
-            await interaction.followup.send(clip_reply(t("ui.action_failed", self.lang, error=str(exc))),
-                                            ephemeral=True)
+            log.exception("meeting-scribe: move options of %s/%s failed", meeting_id, item_id)
+            await interaction.followup.send(clip_reply(friendly_error(exc, self.lang)), ephemeral=True)
             return
         if not options:
             await interaction.followup.send(t("ui.no_projects", self.lang), ephemeral=True)
@@ -213,8 +243,8 @@ class ButtonActions:
             meeting = await asyncio.to_thread(svc.require, meeting_id)
             cands = (await asyncio.to_thread(svc.candidates, meeting))[:SELECT_LIMIT]
         except Exception as exc:  # unknown meeting / catalog outage
-            await interaction.followup.send(clip_reply(t("ui.action_failed", self.lang, error=str(exc))),
-                                            ephemeral=True)
+            log.exception("meeting-scribe: project candidates of %s failed", meeting_id)
+            await interaction.followup.send(clip_reply(friendly_error(exc, self.lang)), ephemeral=True)
             return
         if not cands:
             await interaction.followup.send(t("ui.no_projects", self.lang), ephemeral=True)

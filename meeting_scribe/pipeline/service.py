@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from ..analyze.projects import find_candidate, gather_candidates
 from ..config import Settings
+from ..domain.errors import ItemDismissed, NotesNotReady, SinkUnavailable
 from ..domain.models import (
     SOURCE_DISCORD, ActionItem, ActionStatus, Candidate, Meeting, MeetingState, SinkResult, Speaker, Stage, Utterance,
 )
@@ -193,7 +194,7 @@ class MeetingService:
     def _sink(self, name: str) -> Any:
         sink = self._item_sinks().get(name)
         if sink is None or not sink.enabled():
-            raise KeyError(f"sink {name!r} is not available")
+            raise SinkUnavailable(name)
         return sink
 
     def approve_item(self, meeting_id: str, item_id: str, sink_name: str) -> str:
@@ -202,11 +203,11 @@ class MeetingService:
         if item is None:
             raise KeyError(item_id)
         if item.status is ActionStatus.DISMISSED:
-            raise ValueError(f"action item {item_id} was dismissed")
+            raise ItemDismissed(f"action item {item_id} was dismissed")
         sink = self._sink(sink_name)
         notes = read_notes(self.folder(meeting))
         if notes is None:
-            raise ValueError("meeting has no notes yet")
+            raise NotesNotReady("meeting has no notes yet")
         # Per-sink decision (review finding 1): approving for Kanban does not approve for Linear.
         self.repo.set_item_sink_status(meeting.id, item_id, sink_name, "approved")
         if item.status is ActionStatus.PENDING:
