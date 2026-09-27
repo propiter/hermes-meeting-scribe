@@ -17,7 +17,7 @@ from meeting_scribe.config import schema_for_manifest  # noqa: E402
 
 HEADER = {
     "name": "meeting-scribe",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": (
         "Record Discord voice meetings per speaker, transcribe locally with faster-whisper, "
         "and turn them into notes, decisions and tasks (Kanban, Linear, Obsidian)."

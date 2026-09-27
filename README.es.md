@@ -25,10 +25,15 @@ proveedor de LLM.
   - decisiones y preguntas abiertas
   - tareas con responsable, cita textual y marca de tiempo
   - fecha límite, pero solo cuando alguien la dijo en voz alta
-- **Detección automática del proyecto.** El LLM elige entre tus proyectos de Hermes, tableros Kanban
-  y proyectos de Linear, y recuerda qué canal corresponde a qué proyecto.
-- **Destinos de entrega.** La carpeta de la reunión (siempre), un hilo de Discord con botones de
-  aprobación, Kanban de Hermes, Linear y Obsidian.
+- **Un proyecto por tarea.** Cada tarea tiene su propio proyecto. El LLM elige entre tus proyectos de
+  Hermes, tableros Kanban, proyectos de Linear y los propios canales y categorías del servidor de
+  Discord, y la coincidencia aproximada absorbe los errores de transcripción. Una corrección con 📁
+  se recuerda.
+- **Las tareas donde vive el trabajo.** Cada tarea se publica en un hilo del canal de su proyecto,
+  con sus botones justo debajo. El chat de la reunión recibe el resumen y un índice compacto de
+  tareas. Cada responsable recibe un DM con sus tareas, y **📋 Mis tareas** abre un panel privado.
+- **Destinos de entrega.** La carpeta de la reunión (siempre), Discord, Kanban de Hermes, Linear y
+  Obsidian.
 - **Duradero e idempotente.** Cada reunión es una máquina de estados reanudable, guardada en SQLite:
   - al reiniciar, retoma el trabajo pendiente
   - reprocesar nunca duplica una tarea, un issue ni un mensaje
@@ -260,6 +265,59 @@ Hermes `meeting_scribe`. Para enviarlo a un modelo distinto del que usas en el c
 `auxiliary.meeting_scribe.*` en `config.yaml`, o elige un modelo para "Meeting Scribe" en los ajustes
 de modelos auxiliares de Desktop.
 
+## Tareas en Discord
+
+Cuando termina de procesarse una reunión, el plugin publica:
+
+- **En el chat de la reunión:** el resumen (TL;DR, decisiones, preguntas abiertas) y después un
+  **índice de tareas**: cuántas hay por proyecto, con un enlace al hilo que las contiene, cuántas
+  por persona, y un único botón **📋 Mis tareas**.
+- **En el canal de cada proyecto:** un hilo de la reunión con **un mensaje por tarea** y los botones
+  de esa tarea justo debajo: ✅ Kanban · 🟣 Linear · ❌ Descartar · 📁 Mover. Cuando se resuelve una
+  tarea, su mensaje muestra el resultado (``✅ Kanban `t_42` ``, `🟣 Linear ENG-7`, `❌ Descartada`) y
+  pierde sus botones. Las demás tareas no cambian.
+- **A cada responsable:** un DM con sus tareas y los mismos botones (`delivery_dm_assignees`, activo
+  por defecto). Si alguien tiene los DMs cerrados, queda anotado en el índice y nada más falla.
+
+**📋 Mis tareas** abre un panel *efímero* que solo ve quien hizo clic. Muestra sus tareas, cada una
+con sus botones, 4 por página. Los owners tienen además un botón 👥 para ver todas las tareas.
+
+**Quién puede pulsar qué.** Los botones de un mensaje público los ve todo el mundo, así que cada clic
+se comprueba contra la tarea:
+
+- El **responsable** de la tarea y los **owners** pueden actuar sobre ella. Cualquier otra persona
+  recibe en privado "Esta tarea pertenece a @X" y no pasa nada.
+- Una tarea **sin responsable** solo la pueden gestionar los owners.
+- **✅ Kanban** es el tablero personal de los owners, así que solo aparece en tareas asignadas a un
+  owner. Las tareas de otras personas van a Linear.
+
+**Cómo encuentra una tarea su canal.** Gana la primera regla que coincida:
+
+1. Una entrada explícita de `project_channels`, por ejemplo `["Website=123456789012345678"]`.
+2. Un mapeo aprendido de una corrección con 📁.
+3. La mejor coincidencia aproximada entre los canales de texto y las categorías del servidor. Una
+   categoría se resuelve a su primer canal donde el bot puede publicar.
+4. Si no, el chat de la reunión.
+
+Los nombres de canal se comparan después de quitar la decoración: emojis, símbolos, separadores de
+dibujo como `┃` o `・` y corchetes como `『』` o `【】`. Así, `『🚀』website`, `🟢┃website` y `【Website】`
+se leen como `website`. La comparación tolera errores de transcripción: *Nebulla* encuentra
+`#nebula`. Las palabras cortas o comunes nunca coinciden por sí solas; una coincidencia de una sola
+palabra necesita al menos 4 letras.
+
+Si tu servidor antepone *palabras* decorativas a los nombres de canal, ponlas en
+`channel_name_ignore_prefixes`. Por ejemplo, `["team", "proj"]` hace que `team-website` y
+`proj-website` se lean como `website`.
+
+Cuando la coincidencia es débil, o dos canales puntúan casi igual, la tarea se publica igualmente en
+el canal más probable, marcada con **⚠️ proyecto no seguro — confirma con 📁**. Pulsar 📁 mueve la
+tarea: se vuelve a publicar en el hilo del canal correcto, se borra el mensaje anterior y la
+corrección se recuerda para la próxima vez. Si el bot no tiene Ver canal, Enviar mensajes o Crear
+hilos públicos en el canal elegido, la tarea se queda en el chat de la reunión y el índice explica
+por qué.
+
+Reprocesar una reunión edita estos mensajes en su sitio en vez de publicar mensajes nuevos.
+
 ## Integraciones
 
 ### Kanban de Hermes
@@ -271,13 +329,12 @@ marca de tiempo.
 
 **Modos:**
 
-- `kanban_mode: approve` (por defecto): apruebas las tareas con ✅ o con *Aprobar todas → Kanban*
-  debajo de las notas en Discord.
+- `kanban_mode: approve` (por defecto): apruebas cada tarea con su botón ✅ en Discord.
 - `kanban_mode: auto`: las tareas se crean en cuanto termina de procesarse la reunión.
 
 **A dónde va cada tarea:**
 
-- Si la reunión se resuelve a un **proyecto de Hermes**, la tarea va al tablero de ese proyecto y
+- Si la tarea (o, si no, la reunión) se resuelve a un **proyecto de Hermes**, la tarea va al tablero de ese proyecto y
   lleva su `project_id`.
 - Si se resuelve a un **tablero Kanban**, se usa ese tablero directamente.
 - Si no, va a `kanban_board`, o al tablero por defecto si está vacío.

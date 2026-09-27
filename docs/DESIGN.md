@@ -185,14 +185,15 @@ All sinks implement `Sink.deliver(ctx, meeting, notes) -> SinkResult` and are
 idempotent (keys: `mtg:<meeting_id>:<item_id>`).
 - **files** (always): meeting folder artifacts + `notes.md` with YAML
   frontmatter (Obsidian-compatible).
-- **discord** (`delivery_discord_enabled`, default true): thread (or message if
-  threads unavailable) in `delivery_discord_channel` (default: the voice
-  channel's text chat → Hermes home channel fallback) with TL;DR, decisions,
-  open questions, action items **grouped by person with mentions**, and
-  per-task buttons.
+- **discord** (`delivery_discord_enabled`, default true): summary + task index
+  in `delivery_discord_channel` (default: the voice channel's text chat →
+  Hermes home channel fallback); each task as its own message, with its own
+  buttons, in a thread of its project's channel; assignee DMs. See §16 (the
+  0.1 "all tasks, then all button rows" layout is gone).
 - **Buttons** (persistent `discord.ui.DynamicItem`, survive restarts):
-  ✅ Kanban (owners only, for owner tasks) · 🟣 Linear (when Linear active) ·
-  ❌ Dismiss · 📁 Project (select menu of candidates) · bulk "Approve all".
+  ✅ Kanban (owners' own tasks) · 🟣 Linear (when Linear active) ·
+  ❌ Dismiss · 📁 Move (select of channels) · 📋 My tasks (ephemeral panel).
+  Authorization is per task (§16).
 - **kanban** (`kanban_mode`: `approve` default | `auto` | `off`): creates
   tasks for OWNER items via `hermes_cli.kanban_db.create_task(triage=True,
   idempotency_key=..., project_id=resolved)`; body links meeting folder +
@@ -389,3 +390,83 @@ Design changes that came out of the reviews. Each has a regression test named in
   `scripts/gen_manifest.py`.
 - **Pagination (11).** Linear users, projects and teams follow `pageInfo`, capped at 40 pages of 250.
 
+
+## 16. Task delivery redesign (0.2.0)
+
+Live feedback from the first real Discord test on the author's server (capture, transcription and the
+summary worked) found three problems with the 0.1 notes message: the buttons were not under their
+task (all tasks, then all button rows, and the rows shifted as soon as one task was handled); the
+project was per MEETING although one meeting covered several; and anyone Hermes authorized could
+press Linear/Dismiss/Project on anybody's task. The plugin is public and runs on arbitrary servers,
+so nothing below depends on any server's channel names.
+
+### Layout
+- **Meeting chat** (`delivery_discord_channel` → voice text chat → home): the summary parts
+  (`notes` pointer) and, last, the **task index** (`index` pointer): counts per project with a link to
+  the thread holding them (⚠️ when a group has uncertain tasks, ⛔ when a channel lacked permissions),
+  counts per person, closed DMs, and ONE `📋 My tasks` button (`mscribe:mine:<meeting>:all`).
+- **Project channel**: one anchor message + a thread per meeting (`thread:<channel>` pointer;
+  in the channel itself when `delivery_project_threads` is off or the thread cannot be created), then
+  ONE message per task (`task:<item>` pointer with the routed `target`) with that task's buttons
+  directly under it. A handled task shows ✅ Kanban `t_x` / 🟣 Linear ENG-1 / ❌ Dismissed and has no
+  buttons, so it can never shift another task's buttons. Tasks without a channel go to a thread under
+  the summary (or the meeting chat itself).
+- **Ephemeral panel** (`mine`, `pg:<scope><page>`): components v2 `LayoutView`: header, then per task a
+  `TextDisplay` followed by ITS `ActionRow`. 4 tasks + 1 nav row per page (Discord: 5 rows per classic
+  message, 40 components and 4000 display characters per v2 view). Owners get a 👥 switch to all tasks
+  (scope `a`); non-owners asking for `a` get their own tasks.
+- **DMs** (`delivery_dm_assignees`, default true): the same panel for each assignee (`dm:<user>`
+  pointer), refreshed in place after actions. A closed DM (50007) or unknown user is logged, listed in
+  the index, and never fails the delivery.
+
+### Per-task projects
+- The extraction schema has `project`, `project_key`, `project_confidence` per action item (lenient:
+  missing or unknown values are fine). A name that is not a candidate survives as `project_hint`
+  (the raw spoken name) so channel routing can still fuzzy-match it.
+- Candidates gain a `discord` source: the meeting guild's text channels and categories
+  (`DiscordChannelCatalog`, snapshotted on the gateway loop).
+- **Name cleanup is generic** (`domain/names.clean_channel_name`): strip by Unicode category only
+  (So/Sk/Cs, variation selectors, ZWJ, keycaps; box drawing and separators such as `┃ │ ・ | •`;
+  Ps/Pe/Pi/Pf brackets such as `『』【】「」[]()`), trim leftover separators, keep the letters and case.
+  Decorative leading WORDS are server-specific and therefore config: `channel_name_ignore_prefixes`
+  (default empty). No prefix is hard-coded.
+- **Matching** (`similarity`, `match_name`): both sides NFKC + casefold + accents stripped for
+  comparison only, split on `-_`, spaces and punctuation. Score = max(full-string ratio, best token
+  ratio, containment when the spoken term equals a whole channel token or token sequence). A
+  single-token hit needs a token of ≥ 4 characters (short/common words like `app` never match alone);
+  exact multi-token sequences always count. `project_match_min_score` (0.8) is the threshold; a
+  runner-up within a small margin makes the match **uncertain**. difflib only, no new dependency.
+- **Channel precedence** (`discord_ui/routing.route_item`): LLM picked a `discord:<id>` candidate →
+  `project_channels` config (`Name=channel_id`) → learned map (`project_channels` table, schema v3) →
+  best fuzzy channel/category (a category resolves to its first postable text channel) → the meeting's
+  project, flagged → meeting chat. Weak (≥ min − 0.2) or ambiguous matches are still posted in the
+  most probable channel and flagged "⚠️ project not certain — confirm with 📁".
+- **Permissions**: posting needs View Channel + Send Messages (+ Create Public Threads when threads are
+  on). A matched channel without them routes to the meeting chat and the index names it.
+- **📁 Move** (`prj:<item>` → select `tsel:<item>` of postable channels, most likely first): the item
+  gets `project_key=discord:<id>` (confidence 1.0), notes.json is rewritten, the old name, the hint and
+  the channel name are learned, and the task is re-posted in the new channel's thread while the old
+  message is deleted (pointer updated).
+
+### Authorization (per task, `discord_ui/auth.py`)
+- The task's **assignee** and the **owners** may act on it; anyone else gets an ephemeral "This task
+  belongs to @X" and nothing happens, even users Hermes authorizes.
+- Unassigned tasks: owners only. Unknown/stale item ids: fail closed.
+- ✅ Kanban: owners only, and only on tasks assigned to an owner (the owner's personal board);
+  everyone else uses Linear, assigned to them.
+- `mine`/`pg` are open: the panel only ever contains the clicker's tasks (or all, for owners).
+- 0.1 meeting-wide buttons still work on old messages with their 0.1 rule (`allk` owners;
+  `alll`/`psel`/`prj:all` owners or Hermes-authorized users).
+
+### Idempotency and refresh
+- Every posted message has a `deliveries` pointer (upsert) saved right after it exists; reprocess edits
+  in place, re-posts only what was deleted or moved, and deletes messages of tasks that disappeared.
+- After a button action only that task's message, its assignee's DM panel and the index counts are
+  edited; a click from an ephemeral panel re-renders the panel too. The per-(item, sink) status, claims
+  and leases of §15 are unchanged.
+- custom_ids stay `mscribe:<action>:<meeting>:<item>` (< 100 chars) and are routed by DynamicItem
+  templates, so every button keeps working across restarts.
+
+### Needs a live check
+Components v2 in ephemeral follow-ups and DMs, thread creation from an anchor message in channels with
+slow mode or restricted thread permissions, and DM delivery rate on large meetings.

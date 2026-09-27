@@ -77,7 +77,7 @@
   "tasks.dismissed": "Descartada",
   "tasks.dm_failed": "No pude enviar DM a {users} (DMs cerrados); usa 📋 Mis tareas.",
   "tasks.dm_intro": "📋 Tus tareas de la reunión “{title}”:",
-  "tasks.done_count": "{count} hechas",
+  "tasks.done_count": "hechas: {count}",
   "tasks.index_title": "Tareas",
   "tasks.kanban_owner_tasks": "El Kanban es el tablero personal de los dueños: solo se ofrece en sus propias tareas.",
   "tasks.moved": "Movida a {channel}; las tareas llamadas “{project}” irán allí a partir de ahora.",

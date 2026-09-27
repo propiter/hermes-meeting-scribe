@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-09-27
+
+### Changed
+
+- **Tasks are posted where the work lives.** Each action item is its own message, with its own
+  buttons directly under it, in a thread of its project's Discord channel. The meeting chat keeps the
+  summary plus a compact task index (per project with thread links, per person) and one
+  **📋 My tasks** button. Handling a task edits only that task's message and the index counts.
+- **A project per task** instead of per meeting. The guild's text channels and categories are project
+  candidates. Channel names are cleaned generically (emoji, symbols, separators and decorative
+  brackets are removed by Unicode category), and matching is token-aware and tolerant of
+  transcription errors.
+- **Per-task authorization.** Only a task's assignee and the owners may act on it; anyone else is told
+  whose task it is. Kanban appears only on the owners' own tasks. Unassigned tasks are owners-only.
+
+### Added
+
+- **📋 My tasks:** an ephemeral, paginated panel with the clicker's tasks and their buttons. Owners
+  can switch to all tasks.
+- **Assignee DMs** (`delivery_dm_assignees`, default on). Closed DMs are noted in the index and never
+  fail the delivery.
+- **📁 Move** re-posts a task in another channel's thread, deletes the old message and learns the
+  mapping. Uncertain matches are posted in the most probable channel with a ⚠️ warning.
+- New settings: `delivery_project_threads`, `delivery_dm_assignees`, `project_channels`,
+  `project_match_min_score`, `channel_name_ignore_prefixes`.
+- Schema v3: learned project → channel map.
+
+### Fixed
+
+- Buttons were listed after all tasks and lost their alignment as soon as one task was handled.
+- Reprocessing a meeting whose analysis dropped a task left the old task message behind.
+
 ## [0.1.0] - 2026-09-27
 
 First public release.
@@ -46,4 +78,5 @@ First public release.
   real speech, faster-whisper, the Hermes LLM and Kanban.
 - The first ~100 ms of a new speaker can be dropped (Discord/DAVE stream mapping).
 
+[0.2.0]: https://github.com/propiter/hermes-meeting-scribe/releases/tag/v0.2.0
 [0.1.0]: https://github.com/propiter/hermes-meeting-scribe/releases/tag/v0.1.0

@@ -24,10 +24,13 @@ Audio never leaves your machine. Only transcript text is sent, and only to your 
   - decisions and open questions
   - action items with owner, verbatim quote and timestamp
   - a due date, but only when one was said out loud
-- **Automatic project detection.** The LLM picks from your Hermes projects, Kanban boards and Linear
-  projects, and remembers which channel belongs to which project.
-- **Delivery targets.** The meeting folder (always), a Discord thread with approval buttons, Hermes
-  Kanban, Linear and Obsidian.
+- **A project per task.** Each action item gets its own project. The LLM picks from your Hermes
+  projects, Kanban boards, Linear projects and the Discord server's own channels and categories, and
+  fuzzy matching absorbs transcription errors. A 📁 correction is remembered.
+- **Tasks where the work lives.** Each task is posted in a thread of its project's channel, with its
+  own buttons directly under it. The meeting chat gets the summary and a compact task index. Each
+  assignee gets a DM with their tasks, and **📋 My tasks** opens a private panel.
+- **Delivery targets.** The meeting folder (always), Discord, Hermes Kanban, Linear and Obsidian.
 - **Durable and idempotent.** Every meeting is a resumable state machine stored in SQLite:
   - a restart resumes unfinished work
   - reprocessing never duplicates a task, an issue or a message
@@ -255,6 +258,57 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 `auxiliary.meeting_scribe.*` in `config.yaml`, or pick a model for "Meeting Scribe" in Desktop's
 auxiliary-model settings.
 
+## Tasks in Discord
+
+After a meeting is processed, the plugin posts:
+
+- **In the meeting chat:** the summary (TL;DR, decisions, open questions), then a **task index**:
+  counts per project with a link to the thread that holds them, counts per person, and one
+  **📋 My tasks** button.
+- **In each project's channel:** a thread for the meeting, with **one message per task** and that
+  task's buttons directly under it: ✅ Kanban · 🟣 Linear · ❌ Dismiss · 📁 Move. Once a task is
+  handled, its message shows the result (``✅ Kanban `t_42` ``, `🟣 Linear ENG-7`, `❌ Dismissed`) and
+  loses its buttons. The other tasks are not affected.
+- **To each assignee:** a DM with their tasks and the same buttons (`delivery_dm_assignees`, on by
+  default). If someone has DMs closed, that is noted in the index and nothing else fails.
+
+**📋 My tasks** opens an *ephemeral* panel that only the person who clicked can see. It lists their
+tasks, each with its own buttons, 4 per page. Owners also get a 👥 switch to see every task.
+
+**Who can press what.** Buttons on a public message are visible to everyone, so every click is
+checked against the task:
+
+- The task's **assignee** and the **owners** may act on it. Anyone else gets a private "This task
+  belongs to @X" and nothing happens.
+- An **unassigned** task can only be handled by the owners.
+- **✅ Kanban** is the owners' personal board, so it only appears on tasks assigned to an owner. Other
+  people's tasks go to Linear.
+
+**How a task finds its channel.** The first rule that matches wins:
+
+1. An explicit `project_channels` entry, e.g. `["Website=123456789012345678"]`.
+2. A mapping learned from a 📁 correction.
+3. The best fuzzy match among the server's text channels and categories. A category resolves to its
+   first channel the bot can post in.
+4. Otherwise the meeting chat.
+
+Channel names are compared after removing decoration: emoji, symbols, box-drawing separators such as
+`┃` or `・`, and brackets such as `『』` or `【】`. So `『🚀』website`, `🟢┃website` and `【Website】` all
+read as `website`. The matcher tolerates transcription errors: *Nebulla* finds `#nebula`. Short or
+common words never match on their own; a single-word match needs at least 4 letters.
+
+If your server puts decorative *words* in front of channel names, list them in
+`channel_name_ignore_prefixes`. For example, `["team", "proj"]` makes `team-website` and
+`proj-website` read as `website`.
+
+When the match is weak, or two channels score about the same, the task is still posted in the most
+likely channel, marked **⚠️ project not certain — confirm with 📁**. Pressing 📁 moves the task: it is
+re-posted in the right channel's thread, the old message is deleted, and the correction is
+remembered for next time. If the bot lacks View Channel, Send Messages or Create Public Threads in
+the matched channel, the task stays in the meeting chat and the index says why.
+
+Reprocessing a meeting edits these messages in place instead of posting new ones.
+
 ## Integrations
 
 ### Hermes Kanban
@@ -265,13 +319,12 @@ in **triage**, and its body includes the meeting folder, the quote and the times
 
 **Modes:**
 
-- `kanban_mode: approve` (the default): approve tasks with ✅ or *Approve all → Kanban* under the
-  notes in Discord.
+- `kanban_mode: approve` (the default): approve each task with its ✅ button in Discord.
 - `kanban_mode: auto`: tasks are created as soon as the meeting is processed.
 
 **Where each task goes:**
 
-- If the meeting resolves to a **Hermes project**, the task goes to that project's board and gets
+- If the task (or else the meeting) resolves to a **Hermes project**, the task goes to that project's board and gets
   its `project_id`.
 - If it resolves to a **Kanban board**, that board is used directly.
 - Otherwise, the task goes to `kanban_board`, or to the default board if that is empty.

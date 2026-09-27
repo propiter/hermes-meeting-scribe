@@ -1,6 +1,6 @@
 # config_schema is generated from meeting_scribe/config.py (scripts/gen_manifest.py).
 name: meeting-scribe
-version: 0.1.0
+version: 0.2.0
 description: Record Discord voice meetings per speaker, transcribe locally with faster-whisper, and turn
   them into notes, decisions and tasks (Kanban, Linear, Obsidian).
 author: Pedro Rodriguez (propiter)

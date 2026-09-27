@@ -68,6 +68,9 @@ Call the tools directly; they return JSON.
 - A meeting marked `partial` was interrupted; say so when answering from it.
 - Search needs every word to match; retry with fewer words before concluding nothing was said.
 - Meetings still `recording`/`transcribing` have no notes; report the state instead.
+- Each action item has its OWN `project` (a meeting can cover several); do not report the meeting's
+  project for every task. In Discord, tasks live in their project channel's thread, and a user sees
+  their own with 📋 My tasks.
 
 ## Verification
 
