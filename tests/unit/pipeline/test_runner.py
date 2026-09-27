@@ -37,6 +37,46 @@ def drain(runner, limit=20):
     return n
 
 
+def test_desktop_hook_failures_do_not_starve_jobs_or_lease(prepo, layout, settings, clock, meeting, caplog):
+    import threading
+    runner, *_ = build(prepo, layout, settings, clock)
+    m, _ = captured(prepo, layout, meeting)
+    runner.enqueue(m.id)
+    def broken():
+        raise RuntimeError("desktop hook failed")
+    runner.control = broken
+    assert runner.run_once() is True
+    assert prepo.get_job(m.id).state == "done"
+    runner.enqueue(m.id, Stage.ARCHIVE)
+    job = prepo.get_job(m.id)
+    prepo.claim_job(job.id, now=clock.now(), owner=runner.owner)
+    clock.advance(10)
+    runner.pulse = broken
+    class OneBeat:
+        calls = 0
+        def wait(self, seconds):
+            self.calls += 1
+            return self.calls > 1
+    runner._heartbeat(job.id, OneBeat())
+    assert prepo.get_job(m.id).heartbeat == clock.now().timestamp()
+    assert "desktop" in caplog.text
+    # Real worker loop also reaches run_once when its pulse fails.
+    runner._stop.clear()
+    reached = []
+    def once():
+        reached.append(True)
+        runner._stop.set()
+        return True
+    runner.run_once = once
+    thread = threading.Thread(target=runner._loop, daemon=True)
+    thread.start()
+    thread.join(0.5)
+    runner._stop.set()
+    runner._wake.set()
+    thread.join(1)
+    assert reached == [True]
+
+
 def test_full_pipeline_to_done(prepo, layout, settings, clock, meeting):
     runner, tr, an, sinks = build(prepo, layout, settings, clock)
     m, folder = captured(prepo, layout, meeting)

@@ -83,11 +83,95 @@ def test_failures_are_redacted_and_do_not_raise(repo, meeting):
     assert "boom" in got["error"] and "sk-secret123456" not in got["error"]
 
 
-def test_stale_running_reads_as_unknown_and_is_never_retried(repo, meeting):
+def test_stale_running_without_death_proof_stays_blocked(repo, meeting):
     Commands(repo).submit("r", meeting.id, {"action": "reprocess", "stage": "deliver"})
     repo._x("UPDATE desktop_commands SET state='running', updated_at=?", (time.time() - 3600,))
-    assert Commands(repo).get("r")["state"] == "unknown"
+    assert Commands(repo).get("r")["state"] == "running"
+    assert Commands(repo).get("r")["stalled"] is True
+    with pytest.raises(ValueError):
+        Commands(repo).submit("another", meeting.id, {"action": "reprocess", "stage": "deliver"})
     assert execute_one(fake_service(repo, [])) is False
+
+
+def test_two_connections_cannot_submit_distinct_requests_for_one_meeting(repo, tmp_path, meeting):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    other = Repository(tmp_path / "index.sqlite")
+    start = threading.Barrier(2)
+    # Stretch the original check/insert race without relying on a lock-aware barrier.
+    for r in (repo, other):
+        original = r._x
+        def delayed(sql, params=(), original=original):
+            result = original(sql, params)
+            if sql.startswith("SELECT id FROM desktop_commands"):
+                time.sleep(0.1)
+            return result
+        r._x = delayed
+    def submit(r, rid):
+        start.wait()
+        try:
+            return Commands(r).submit(rid, meeting.id, {"action": "reprocess", "stage": "deliver"})["state"]
+        except ValueError:
+            return "refused"
+    try:
+        with ThreadPoolExecutor(2) as pool:
+            a = pool.submit(submit, repo, "race-a")
+            b = pool.submit(submit, other, "race-b")
+            assert sorted([a.result(), b.result()]) == ["queued", "refused"]
+    finally:
+        other.close()
+
+
+def test_dead_executor_reconciles_durably_and_requires_explicit_ack(repo, tmp_path, meeting):
+    import subprocess
+    import sys
+    queue = Commands(repo)
+    body = {"action": "reprocess", "stage": "deliver"}
+    queue.submit("orphan", meeting.id, body)
+    code = '''
+import os, sys
+from pathlib import Path
+from types import SimpleNamespace
+from meeting_scribe.storage.repo import Repository
+from meeting_scribe.desktop.control import execute_one
+r = Repository(Path(sys.argv[1]))
+execute_one(SimpleNamespace(repo=r, require=r.get_meeting, reprocess=lambda *a: os._exit(0)))
+'''
+    subprocess.run([sys.executable, "-c", code, str(tmp_path / "index.sqlite")], check=True)
+    assert queue.get("orphan")["state"] == "unknown"
+    assert repo._x("SELECT state FROM desktop_commands WHERE id='orphan'").fetchone()[0] == "unknown"
+    with pytest.raises(ValueError):
+        queue.submit("new", meeting.id, body)
+    with pytest.raises(ValueError):
+        queue.submit("new", meeting.id, body)
+    assert execute_one(fake_service(repo, [])) is False
+    assert queue.acknowledge("orphan")["state"] == "acknowledged"
+    assert queue.acknowledge("orphan")["state"] == "acknowledged"
+    assert queue.submit("orphan", meeting.id, body)["state"] == "acknowledged"
+    assert queue.submit("new", meeting.id, body)["state"] == "queued"
+
+
+def test_submit_reconciles_dead_executor_without_a_poll(repo, tmp_path, meeting):
+    """After a page reload nobody polls the old id: submit itself must surface the orphan as unknown."""
+    import subprocess
+    import sys
+    queue = Commands(repo)
+    body = {"action": "reprocess", "stage": "deliver"}
+    queue.submit("orphan2", meeting.id, body)
+    code = """
+import os, sys
+from pathlib import Path
+from types import SimpleNamespace
+from meeting_scribe.storage.repo import Repository
+from meeting_scribe.desktop.control import execute_one
+r = Repository(Path(sys.argv[1]))
+execute_one(SimpleNamespace(repo=r, require=r.get_meeting, reprocess=lambda *a: os._exit(0)))
+"""
+    subprocess.run([sys.executable, "-c", code, str(tmp_path / "index.sqlite")], check=True)
+    with pytest.raises(ValueError):
+        queue.submit("new2", meeting.id, body)
+    raw = repo._x("SELECT state FROM desktop_commands WHERE id='orphan2'").fetchone()[0]
+    assert raw == "unknown"
 
 
 def test_pulse_is_throttled(repo):

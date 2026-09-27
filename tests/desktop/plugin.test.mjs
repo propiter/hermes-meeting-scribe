@@ -102,11 +102,17 @@ test('validateDraft mirrors schema bounds', () => {
   assert.deepEqual(mod.validateDraft({ type: 'str' }, 'x', t), { value: 'x' })
 })
 
-test('audioSources only for an available mixed file', () => {
+test('audioSources select only the explicitly resolved connection mode', () => {
   assert.deepEqual(mod.audioSources({ available: false, reason: 'imported' }), [])
-  const out = mod.audioSources({ available: true, path: '/data/m 1/recording.ogg' }, 'c1', 'work')
-  assert.equal(out[0], 'hermes-media://stream/%2Fdata%2Fm%201%2Frecording.ogg')
-  assert.equal(out[1], 'hermes-media://remote/%2Fdata%2Fm%201%2Frecording.ogg?connectionId=c1&profile=work')
+  const audio = { available: true, path: '/data/m 1/recording.ogg' }
+  assert.deepEqual(mod.audioSources(audio, 'c1', 'work', 'remote'),
+    ['hermes-media://remote/%2Fdata%2Fm%201%2Frecording.ogg?connectionId=c1&profile=work'])
+  assert.deepEqual(mod.audioSources(audio, 'local', 'work', 'local'),
+    ['hermes-media://stream/%2Fdata%2Fm%201%2Frecording.ogg'])
+  assert.deepEqual(mod.audioSources(audio, 'h1', '', 'ssh'),
+    ['hermes-media://remote/%2Fdata%2Fm%201%2Frecording.ogg?connectionId=h1'])
+  assert.deepEqual(mod.audioSources(audio, 'c1', 'work', undefined), [])
+  assert.deepEqual(mod.audioSources(audio, null, 'work'), [])
 })
 
 // -- render (real React + react-dom/server, fake SDK) -------------------------------------------

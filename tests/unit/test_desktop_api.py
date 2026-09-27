@@ -129,6 +129,18 @@ def test_reprocess_requires_confirmation_and_is_only_queued(env):
                                                                   "request_id": "r2"}).status_code == 404
 
 
+def test_acknowledge_requires_confirmation_and_never_executes(env):
+    c, mid = env["client"], env["meeting"].id
+    c.post(f"{PREFIX}/v1/meetings/{mid}/commands", json={"request_id": "uncertain", "action": "reprocess", "stage": "deliver", "confirm": True})
+    repo = Repository(env["homes"][""] / "index.sqlite")
+    repo._x("UPDATE desktop_commands SET state='unknown' WHERE id='uncertain'")
+    url = f"{PREFIX}/v1/commands/uncertain/acknowledge"
+    assert c.post(url, json={}).status_code == 400
+    assert c.post(url, json={"confirm": True}).json()["state"] == "acknowledged"
+    assert repo.get_job(mid) is None
+    repo.close()
+
+
 def test_status_google_and_doctor_leak_no_secrets(env):
     c = env["client"]
     gdir = env["homes"][""] / "google"

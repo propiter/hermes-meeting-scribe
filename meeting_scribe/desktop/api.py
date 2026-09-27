@@ -196,6 +196,19 @@ def get_command(request: Request, request_id: str) -> dict[str, Any]:
         return Commands(c["repo"]).get(request_id)
 
 
+@router.post("/v1/commands/{request_id}/acknowledge")
+def acknowledge_command(request: Request, request_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Acknowledge an uncertain outcome after inspecting results; does not re-execute it."""
+    if body.get("confirm") is not True:
+        raise HTTPException(400, "confirmation required")
+    if not _REQUEST_ID.fullmatch(request_id):
+        raise HTTPException(404, "not found")
+    from .control import Commands
+
+    with _ctx(request) as c:
+        return Commands(c["repo"]).acknowledge(request_id)
+
+
 # -- status / google / doctor ---------------------------------------------------------------------
 @router.get("/v1/status")
 def get_status(request: Request) -> dict[str, Any]:

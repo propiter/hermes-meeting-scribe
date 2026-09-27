@@ -26,8 +26,8 @@ def _imported(meeting, ext="conferenceRecords/abc-123", mid="m4imp001"):
 UTTS = [Utterance(0.0, 2.0, "gmeet:p1", "Ana", "Hola equipo"), Utterance(2.0, 4.0, "gmeet:p2", "Luis", "Listo")]
 
 
-def test_schema_is_v5():
-    assert SCHEMA_VERSION == 5  # v5: desktop_commands (Desktop operator queue)
+def test_schema_is_v6():
+    assert SCHEMA_VERSION == 6  # v5: desktop_commands; v6: desktop_commands.owner
 
 
 def test_meeting_source_defaults_to_discord_and_round_trips(repo, meeting):

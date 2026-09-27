@@ -7,6 +7,7 @@ writers anyway. Schema changes go through ``_MIGRATIONS`` keyed by ``PRAGMA user
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import re
 import sqlite3
@@ -91,7 +92,10 @@ CREATE TABLE desktop_commands (
   created_at REAL NOT NULL, updated_at REAL NOT NULL);
 CREATE INDEX desktop_commands_state ON desktop_commands(state, created_at);
 """
-_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5)
+_V6 = """
+ALTER TABLE desktop_commands ADD COLUMN owner TEXT;
+"""
+_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6)
 SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -149,6 +153,18 @@ class Repository(JobsMixin, DeliveriesMixin):
     def _x(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Cursor:
         with self._lock:
             return self._conn.execute(sql, params)
+
+    @contextmanager
+    def transaction(self):
+        """Serialize a read/check/write operation across threads and SQLite connections."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def _tx(self, statements: Iterable[tuple[str, Sequence[Any]]]) -> None:
         with self._lock:

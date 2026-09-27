@@ -183,9 +183,18 @@ class PipelineRunner:
             raise KeyError(f"unknown meeting {meeting_id}")
         return meeting
 
+    def _desktop_hook(self, name: str) -> Any:
+        hook = getattr(self, name)
+        if hook is not None:
+            try:
+                return hook()
+            except Exception:
+                log.exception("meeting-scribe desktop %s hook failed", name)
+        return None
+
     def run_once(self) -> bool:
         """Run one ready job to completion or failure; False when nothing is ready."""
-        if self.control is not None and self.control():
+        if self._desktop_hook("control"):
             return True
         self._maybe_reclaim()
         job = self.repo.next_job(now=self.clock.now())
@@ -250,8 +259,7 @@ class PipelineRunner:
         """Keep our lease fresh while a (possibly hours-long) stage runs."""
         while not stop.wait(self.HEARTBEAT_SECONDS):
             try:
-                if self.pulse is not None:
-                    self.pulse()
+                self._desktop_hook("pulse")
                 if not self.repo.heartbeat_job(job_id, self.owner, now=self.clock.now().timestamp()):
                     log.warning("meeting-scribe: lost the lease on job %s", job_id)
                     return
@@ -355,8 +363,7 @@ class PipelineRunner:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                if self.pulse is not None:
-                    self.pulse()
+                self._desktop_hook("pulse")
                 worked = self.run_once()
             except Exception:  # keep the worker alive; the job row keeps the error context
                 log.exception("meeting-scribe pipeline iteration crashed")

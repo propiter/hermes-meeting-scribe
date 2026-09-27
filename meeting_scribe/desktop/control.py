@@ -11,12 +11,15 @@ unknown and reported as such); request ids make an HTTP retry of the same submis
 from __future__ import annotations
 
 import json
+import os
+import socket
 import re
 import time
 from typing import Any, Mapping
 
 from ..domain.models import MeetingState, Stage
 from ..llm_config import redact
+from ..storage.owner import process_owner_id
 
 HEARTBEAT_KV = "desktop.worker_heartbeat"
 HEARTBEAT_EVERY = 20.0  # seconds between liveness writes (the worker ticks every ~5 s when idle)
@@ -44,13 +47,43 @@ def _refuse_busy(repo: Any, meeting: Any) -> None:
         raise ValueError("meeting is being processed right now; try again when the stage finishes")
 
 
+def executor_dead(owner: str | None) -> bool:
+    """Only a missing local PID proves death; age, remote and legacy owners do not."""
+    if not owner:
+        return False
+    parts = owner.split(":")
+    if len(parts) != 3 or parts[0] != socket.gethostname() or not parts[1].isascii() or not parts[1].isdigit():
+        return False
+    pid = int(parts[1])
+    if not 0 < pid < 2**31 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        pass  # denied/unknown is not proof of death
+    return False
+
+
 class Commands:
     """Submit/read side, used by the dashboard process (SQLite only)."""
 
     def __init__(self, repo: Any) -> None:
         self.repo = repo
 
+    def _reconcile(self, where: str, params: tuple) -> None:
+        """Mark ``running`` rows whose executor is provably gone as ``unknown`` (never re-run them)."""
+        for row in self.repo._x(f"SELECT id, owner FROM desktop_commands WHERE state='running' AND {where}",
+                                params).fetchall():
+            if executor_dead(row["owner"]):
+                self.repo._x("UPDATE desktop_commands SET state='unknown',error=?,updated_at=? "
+                             "WHERE id=? AND state='running' AND owner=?",
+                             ("Executor exited; inspect results before acknowledging. Nothing will be retried automatically.",
+                              time.time(), row["id"], row["owner"]))
+
     def get(self, rid: str) -> dict[str, Any]:
+        self._reconcile("id=?", (rid,))
         row = self.repo._x("SELECT id,meeting_id,body,state,error,created_at,updated_at FROM desktop_commands "
                            "WHERE id=?", (rid,)).fetchone()
         if row is None:
@@ -58,11 +91,32 @@ class Commands:
         out = dict(row)
         body = json.loads(out.pop("body"))
         out["action"], out["stage"] = body.get("action"), body.get("stage")
-        if out["state"] == "running" and time.time() - out["updated_at"] > STALE_RUNNING_SECONDS:
-            out["state"] = "unknown"
+        out["stalled"] = out["state"] == "running" and time.time() - out["updated_at"] > STALE_RUNNING_SECONDS
         return out
 
+    def acknowledge(self, rid: str) -> dict[str, Any]:
+        """Release an uncertain result, never execute it. Active work remains protected."""
+        with self.repo.transaction():
+            command = self.get(rid)
+            if command["state"] == "acknowledged":
+                return command
+            if command["state"] != "unknown":
+                raise ValueError("executor death is not proven; cannot acknowledge this command")
+            job = self.repo.get_job(command["meeting_id"])
+            if job is not None and job.state in ("queued", "running"):
+                raise ValueError("processing is still pending; inspect the result after it finishes")
+            self.repo._x("UPDATE desktop_commands SET state='acknowledged',updated_at=? WHERE id=? AND state='unknown'",
+                         (time.time(), rid))
+            return self.get(rid)
+
     def submit(self, rid: str, mid: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        # Outside the transaction: a refusal below rolls back, and the orphan must stay reconciled.
+        if isinstance(mid, str):
+            self._reconcile("meeting_id=?", (mid,))
+        with self.repo.transaction():
+            return self._submit_locked(rid, mid, body)
+
+    def _submit_locked(self, rid: str, mid: str, body: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(rid, str) or not _RID_RE.fullmatch(rid):
             raise ValueError("invalid request id")
         if set(body) != {"action", "stage"} or body.get("action") != "reprocess":
@@ -79,7 +133,7 @@ class Commands:
         if meeting is None:
             raise KeyError(mid)
         _refuse_busy(self.repo, meeting)
-        pending = self.repo._x("SELECT id FROM desktop_commands WHERE meeting_id=? AND state IN ('queued','running')",
+        pending = self.repo._x("SELECT id FROM desktop_commands WHERE meeting_id=? AND state IN ('queued','running','unknown')",
                                (mid,)).fetchone()
         if pending is not None:
             raise ValueError("a command for this meeting is already pending")
@@ -99,8 +153,8 @@ def execute_one(service: Any) -> bool:
     row = repo._x("SELECT * FROM desktop_commands WHERE state='queued' ORDER BY created_at LIMIT 1").fetchone()
     if row is None:
         return False
-    if repo._x("UPDATE desktop_commands SET state='running',updated_at=? WHERE id=? AND state='queued'",
-               (time.time(), row["id"])).rowcount != 1:
+    if repo._x("UPDATE desktop_commands SET state='running',updated_at=?,owner=? WHERE id=? AND state='queued'",
+               (time.time(), process_owner_id(), row["id"])).rowcount != 1:
         return True
     error = ""
     try:

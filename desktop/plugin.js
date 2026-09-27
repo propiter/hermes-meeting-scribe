@@ -154,7 +154,12 @@ export const LOCALES = {
       running: 'Reprocessing…',
       done: 'Reprocessing finished.',
       failed: message => `Reprocessing failed: ${message}`,
-      unknown: 'The bot stopped while reprocessing; the result is unknown. Check the status tab.',
+      unknown: 'The bot stopped while reprocessing; the result is unknown. Check the meeting notes, then mark it as reviewed to reprocess again.',
+      acknowledged: 'Reviewed. You can reprocess this meeting again.',
+      acknowledge: 'Mark as reviewed',
+      stalled: 'Still running, but the bot has not reported progress for a while.',
+      gone: 'This request is no longer available. Refresh the meeting.',
+      lost: message => `Could not check the request: ${message}`,
       recording: 'This meeting is still being recorded.',
       busyNow: 'This meeting is being processed right now.',
       workerStale: 'The bot has not checked in for a while, so the command may wait until it is back online.'
@@ -184,7 +189,7 @@ export const LOCALES = {
       doctorOk: 'Everything looks good.', doctorIssues: n => (n === 1 ? '1 problem found.' : `${n} problems found.`),
       check: { ok: 'OK', warn: 'Check', fail: 'Problem' },
       openMeeting: 'Open meeting',
-      cmd: { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', unknown: 'Unknown' }
+      cmd: { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', unknown: 'Unknown', acknowledged: 'Reviewed' }
     },
     choice: {
       transcribe_device: { auto: 'Automatic', cpu: 'Processor (CPU)', cuda: 'Graphics card (CUDA)' },
@@ -317,7 +322,12 @@ export const LOCALES = {
       running: 'Reprocesando…',
       done: 'Reproceso terminado.',
       failed: message => `El reproceso falló: ${message}`,
-      unknown: 'El bot se detuvo durante el reproceso; no se sabe el resultado. Revisa la pestaña Estado.',
+      unknown: 'El bot se detuvo durante el reproceso; no se sabe el resultado. Revisa las notas de la reunión y márcalo como revisado para volver a reprocesar.',
+      acknowledged: 'Revisado. Ya puedes volver a reprocesar esta reunión.',
+      acknowledge: 'Marcar como revisado',
+      stalled: 'Sigue en curso, pero el bot no informa avances hace un rato.',
+      gone: 'Esta solicitud ya no está disponible. Actualiza la reunión.',
+      lost: message => `No se pudo consultar la solicitud: ${message}`,
       recording: 'Esta reunión todavía se está grabando.',
       busyNow: 'Esta reunión se está procesando en este momento.',
       workerStale: 'El bot no ha dado señales hace un rato; la orden puede esperar hasta que vuelva a estar en línea.'
@@ -347,7 +357,7 @@ export const LOCALES = {
       doctorOk: 'Todo en orden.', doctorIssues: n => (n === 1 ? 'Se encontró 1 problema.' : `Se encontraron ${n} problemas.`),
       check: { ok: 'Bien', warn: 'Revisar', fail: 'Problema' },
       openMeeting: 'Abrir reunión',
-      cmd: { queued: 'En cola', running: 'En curso', done: 'Hecho', failed: 'Falló', unknown: 'Desconocido' }
+      cmd: { queued: 'En cola', running: 'En curso', done: 'Hecho', failed: 'Falló', unknown: 'Desconocido', acknowledged: 'Revisado' }
     },
     choice: {
       transcribe_device: { auto: 'Automático', cpu: 'Procesador (CPU)', cuda: 'Tarjeta gráfica (CUDA)' },
@@ -712,7 +722,7 @@ export function DetailView({ id }) {
     }
   })
   const d = query.data
-  const trackedCommand = commandId || (d?.command && ['queued', 'running'].includes(d.command.state) ? d.command.id : null)
+  const trackedCommand = commandId || (d?.command && ['queued', 'running', 'unknown'].includes(d.command.state) ? d.command.id : null)
 
   const back = h(Button, { type: 'button', variant: 'ghost', onClick: () => $selected.set(null) },
     h(Codicon, { name: 'arrow-left', size: '0.8rem' }), t('common.back'))
@@ -817,26 +827,35 @@ function TasksBlock({ tasks }) {
           h(SinkBadge, { label: t('detail.linear'), status: task.sinks?.linear?.status || 'pending', url: task.sinks?.linear?.url }))))))
 }
 
-/** Candidate `src` values for the mixed recording, best first (see README «Desktop»). */
-export function audioSources(audio, connectionId, profile) {
+/** Resolve one transport only; a remote path must never be opened on this machine. */
+export function audioSources(audio, connectionId, profile, mode) {
   if (!audio || !audio.available || !audio.path) return []
   const file = encodeURIComponent(audio.path)
-  const out = [`hermes-media://stream/${file}`]
+  if (mode === 'local') return [`hermes-media://stream/${file}`]
+  // Registry kinds are local | remote | ssh | cloud: everything but local lives on another machine.
+  if (!mode || !connectionId) return []
   const scope = [connectionId ? `connectionId=${encodeURIComponent(connectionId)}` : '',
     profile ? `profile=${encodeURIComponent(profile)}` : ''].filter(Boolean).join('&')
-  out.push(`hermes-media://remote/${file}${scope ? `?${scope}` : ''}`)
-  return out
+  return [`hermes-media://remote/${file}${scope ? `?${scope}` : ''}`]
 }
 
 function AudioBlock({ audio }) {
   const t = usePluginI18n(ID)
   const connectionId = useValue(host.state.connectionId)
   const profile = useValue(host.state.profile)
-  const sources = useMemo(() => audioSources(audio, connectionId, profile), [audio?.path, connectionId, profile])
+  // Public SDK registry supplies kind: local/remote. Unknown connections fail closed.
+  const connection = useQuery({
+    queryKey: [Q, 'audio-connection', connectionId],
+    queryFn: async () => (await host.connections()).find(c => c.id === connectionId) || null,
+    enabled: Boolean(connectionId) && Boolean(audio.available), retry: false
+  })
+  const sources = useMemo(() => audioSources(audio, connectionId, profile, connection.data?.kind),
+    [audio?.path, audio?.available, connectionId, profile, connection.data?.kind])
   const [attempt, setAttempt] = useState(0)
-  useEffect(() => setAttempt(0), [audio?.path])
+  useEffect(() => setAttempt(0), [audio?.path, connectionId, profile, connection.data?.kind])
   let body
   if (!audio.available) body = h('p', { className: 'ms-muted' }, tOr(t, `audio.${audio.reason}`, t('audio.not_retained')))
+  else if (connection.isLoading) body = h(Loading, null)
   else if (attempt >= sources.length) body = h('p', { className: 'ms-muted' }, t('audio.failed'))
   else {
     body = h(Fragment, null,
@@ -939,11 +958,17 @@ function ReprocessControl({ meeting, job, commandId, onSubmitted, onFinished }) 
   const [stage, setStage] = useState('analyze')
   const command = useRest(commandId ? `/v1/commands/${encodeURIComponent(commandId)}` : '', {
     staleTime: 0,
-    refetchInterval: q => (['queued', 'running'].includes(q?.state?.data?.state) || !q?.state?.data ? POLL_MS : false)
+    // Stop on client errors (401/404: session or command gone); keep polling only while work is pending.
+    refetchInterval: q => {
+      if (q?.state?.error && parseError(q.state.error).status < 500) return false
+      const state = q?.state?.data?.state
+      return !q?.state?.data || ['queued', 'running'].includes(state) ? POLL_MS : false
+    }
   })
   const status = useRest('/v1/status', { staleTime: 15_000 })
   const cmd = command.data
-  const settled = cmd && ['done', 'failed', 'unknown'].includes(cmd.state)
+  const settled = cmd && ['done', 'failed', 'unknown', 'acknowledged'].includes(cmd.state)
+  const commandError = command.error ? parseError(command.error) : null
   const reported = useRef(null)
   useEffect(() => {
     if (settled && reported.current !== cmd.id) {
@@ -955,7 +980,18 @@ function ReprocessControl({ meeting, job, commandId, onSubmitted, onFinished }) 
 
   const recording = meeting.state === 'recording'
   const running = job?.state === 'running'
-  const pending = cmd && ['queued', 'running'].includes(cmd.state)
+  const pending = cmd && ['queued', 'running', 'unknown'].includes(cmd.state)
+  const [ackError, setAckError] = useState('')
+  const acknowledge = async () => {
+    setAckError('')
+    try {
+      await rest(`/v1/commands/${encodeURIComponent(cmd.id)}/acknowledge`, { method: 'POST', body: { confirm: true } })
+      command.refetch?.()
+      invalidate()
+    } catch (error) {
+      setAckError(parseError(error).message)
+    }
+  }
   const disabled = recording || running || pending
   const stages = meeting.source === 'google_meet' ? STAGES.filter(s => s !== 'transcribe') : STAGES
 
@@ -978,6 +1014,10 @@ function ReprocessControl({ meeting, job, commandId, onSubmitted, onFinished }) 
     else if (cmd.state === 'done') line = t('reprocess.done')
     else if (cmd.state === 'failed') line = t('reprocess.failed', cmd.error || '')
     else if (cmd.state === 'unknown') line = t('reprocess.unknown')
+    else if (cmd.state === 'acknowledged') line = t('reprocess.acknowledged')
+    if (cmd.state === 'running' && cmd.stalled) line = t('reprocess.stalled')
+  } else if (commandError) {
+    line = commandError.status === 404 ? t('reprocess.gone') : t('reprocess.lost', commandError.message)
   }
   const hint = recording ? t('reprocess.recording') : running ? t('reprocess.busyNow') : null
   const stale = status.data?.worker?.state && status.data.worker.state !== 'recent'
@@ -988,6 +1028,8 @@ function ReprocessControl({ meeting, job, commandId, onSubmitted, onFinished }) 
     hint ? h('p', { className: 'ms-small ms-muted' }, hint) : null,
     line ? h('p', { className: `ms-small ${cmd.state === 'failed' || cmd.state === 'unknown' ? 'ms-error' : 'ms-muted'}`, role: 'status', 'aria-live': 'polite' }, line) : null,
     pending && stale ? h('p', { className: 'ms-small ms-muted' }, t('reprocess.workerStale')) : null,
+    cmd?.state === 'unknown' ? h(Button, { type: 'button', variant: 'secondary', onClick: acknowledge }, t('reprocess.acknowledge')) : null,
+    ackError ? h('p', { className: 'ms-small ms-error', role: 'alert' }, ackError) : null,
     h(ConfirmDialog, {
       open, onClose: () => setOpen(false), onConfirm: submit, title: t('reprocess.title'),
       description: t('reprocess.description'), confirmLabel: t('reprocess.confirm'), busyLabel: t('reprocess.busy'),
