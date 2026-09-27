@@ -39,7 +39,8 @@ class FakeMessage:
 
 class FakeChannel:
     def __init__(self, cid: int, name: str, *, parent: Optional["FakeChannel"] = None, bot: Any = None,
-                 threads_ok: bool = True) -> None:
+                 threads_ok: bool = True, kind: str = "text", category_id: Optional[int] = None,
+                 position: int = 0, can_post: bool = True) -> None:
         self.id = cid
         self.name = name
         self.parent = parent
@@ -47,8 +48,25 @@ class FakeChannel:
         self.threads_ok = threads_ok
         self.messages: dict[int, FakeMessage] = {}
         self.guild = SimpleNamespace(id=1)
+        self.type = kind
+        self.category_id = category_id
+        self.position = position
+        self.can_post = can_post
+        self.fail_sends = 0
+
+    def permissions_for(self, member: Any) -> SimpleNamespace:
+        ok = self.can_post
+        return SimpleNamespace(view_channel=ok, send_messages=ok, create_public_threads=ok and self.threads_ok,
+                               send_messages_in_threads=ok)
+
+    @property
+    def mention(self) -> str:
+        return f"<#{self.id}>"
 
     async def send(self, content: str = "", *, view: Any = None, **kw: Any) -> FakeMessage:
+        if self.fail_sends:
+            self.fail_sends -= 1
+            raise RuntimeError("503 Service Unavailable")
         msg = FakeMessage(self, content, view)
         self.messages[msg.id] = msg
         return msg
@@ -66,14 +84,64 @@ class _Gone(FakeMessage):
         self.deleted = True
 
 
+class FakeForbidden(Exception):
+    def __init__(self) -> None:
+        super().__init__("403 Forbidden (error code: 50007): Cannot send messages to this user")
+        self.code = 50007
+
+
+class FakeUser:
+    def __init__(self, uid: int, *, dms_open: bool = True) -> None:
+        self.id = uid
+        self.dms_open = dms_open
+        self.dm = FakeChannel(90_000 + uid, f"dm-{uid}")
+
+    async def send(self, content: str = "", *, view: Any = None, **kw: Any) -> FakeMessage:
+        if not self.dms_open:
+            raise FakeForbidden()
+        return await self.dm.send(content, view=view, **kw)
+
+    async def create_dm(self) -> FakeChannel:
+        return self.dm
+
+
+class FakeGuild:
+    def __init__(self, bot: "FakeBot", gid: int = 100) -> None:
+        self.id = gid
+        self.bot = bot
+        self.me = SimpleNamespace(id=1)
+
+    @property
+    def channels(self) -> list[FakeChannel]:
+        return [c for c in self.bot.channels.values() if c.parent is None and not c.name.startswith("dm-")]
+
+
 class FakeBot:
     def __init__(self) -> None:
         self.channels: dict[int, FakeChannel] = {}
+        self.users: dict[int, FakeUser] = {}
+        self.guild = FakeGuild(self)
 
     def add(self, cid: int, name: str, **kw: Any) -> FakeChannel:
         ch = FakeChannel(cid, name, bot=self, **kw)
         self.channels[cid] = ch
         return ch
+
+    def get_guild(self, gid: int) -> Optional[FakeGuild]:
+        return self.guild if int(gid) == self.guild.id else None
+
+    def get_channel(self, cid: int) -> Optional[FakeChannel]:
+        return self.channels.get(int(cid))
+
+    def user(self, uid: int, **kw: Any) -> FakeUser:
+        self.users[uid] = FakeUser(uid, **kw)
+        self.channels[self.users[uid].dm.id] = self.users[uid].dm
+        return self.users[uid]
+
+    async def fetch_user(self, uid: int) -> FakeUser:
+        if int(uid) not in self.users:
+            raise LookupError(f"Unknown User {uid}")
+        return self.users[int(uid)]
 
 
 class FakeAdapter:
@@ -114,11 +182,18 @@ class FakeFollowup:
 
 
 class FakeInteraction:
-    def __init__(self, user_id: int, values: Optional[list[str]] = None) -> None:
+    def __init__(self, user_id: int, values: Optional[list[str]] = None, *, message: Any = None,
+                 ephemeral: bool = False, dm: bool = False) -> None:
         self.user = SimpleNamespace(id=user_id, roles=[])
         self.response = FakeResponse()
         self.followup = FakeFollowup()
         self.data = {"values": values or []}
+        self.message = message or SimpleNamespace(id=1, flags=SimpleNamespace(ephemeral=ephemeral))
+        self.guild = None if dm else SimpleNamespace(id=100)
+        self.original_edits: list[dict] = []
+
+    async def edit_original_response(self, **kw: Any) -> None:
+        self.original_edits.append(kw)
 
     def replies(self) -> str:
         return "\n".join(m["content"] for m in self.response.sent + self.followup.sent)
