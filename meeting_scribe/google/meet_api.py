@@ -2,8 +2,8 @@
 
 Resources used (verified against https://developers.google.com/workspace/meet/api/reference/rest/v2):
 
-* ``GET conferenceRecords`` — ``filter`` on ``start_time``/``end_time`` (EBNF, e.g.
-  ``end_time IS NOT NULL AND end_time>="2026-01-01T00:00:00Z"``), ``pageSize`` ≤ 100, ``pageToken``.
+* ``GET conferenceRecords`` — ``filter`` on ``start_time``/``end_time`` comparisons only (e.g.
+  ``end_time>="2026-01-01T00:00:00Z"``; ``IS NOT NULL`` is rejected live), ``pageSize`` ≤ 100, ``pageToken``.
 * ``GET {conferenceRecords/*}/transcripts`` — ``state`` STARTED | ENDED | FILE_GENERATED.
 * ``GET {conferenceRecords/*/transcripts/*}/entries`` — ``participant``, ``text``, ``languageCode``,
   ``startTime``, ``endTime``; ``pageSize`` ≤ 100.
@@ -110,14 +110,21 @@ class MeetClient:
     # -- resources ------------------------------------------------------------------------------
     def conference_records(self, *, ended_after: Optional[str] = None,
                            started_after: Optional[str] = None) -> list[dict[str, Any]]:
-        """Finished conferences, newest first (API default order)."""
-        parts = ["end_time IS NOT NULL"]
+        """Finished conferences, newest first (API default order).
+
+        The live API rejects ``end_time IS NOT NULL`` (HTTP 400 "Invalid filter was provided"), so only
+        time comparisons go to the server and conferences still in progress (no ``endTime``) are
+        dropped here.
+        """
+        parts = []
         if ended_after:
             parts.append(f'end_time>="{ended_after}"')
         if started_after:
             parts.append(f'start_time>="{started_after}"')
-        return list(self.paged("conferenceRecords", "conferenceRecords",
-                               {"filter": " AND ".join(parts), "pageSize": 100}))
+        params: dict[str, Any] = {"pageSize": 100}
+        if parts:
+            params["filter"] = " AND ".join(parts)
+        return [r for r in self.paged("conferenceRecords", "conferenceRecords", params) if r.get("endTime")]
 
     def transcripts(self, record: str) -> list[dict[str, Any]]:
         return list(self.paged(f"{record}/transcripts", "transcripts", {"pageSize": 100}))

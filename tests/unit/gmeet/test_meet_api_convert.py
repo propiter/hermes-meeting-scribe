@@ -33,15 +33,25 @@ def test_list_conference_records_filters_and_paginates():
         assert url.startswith("https://meet.googleapis.com/v2/conferenceRecords?")
         page = q(url).get("pageToken")
         if page is None:
-            return jresp(200, {"conferenceRecords": [{"name": "conferenceRecords/a"}], "nextPageToken": "p2"})
-        return jresp(200, {"conferenceRecords": [{"name": "conferenceRecords/b"}]})
+            return jresp(200, {"conferenceRecords": [{"name": "conferenceRecords/a", "endTime": "2026-09-02T00:00:00Z"},
+                                                     {"name": "conferenceRecords/live"}],
+                               "nextPageToken": "p2"})
+        return jresp(200, {"conferenceRecords": [{"name": "conferenceRecords/b", "endTime": "2026-09-03T00:00:00Z"}]})
     tr = FakeTransport(handler)
     client = MeetClient(StubCreds(), transport=tr)
     recs = client.conference_records(ended_after="2026-09-01T00:00:00Z")
+    # Conferences still in progress (no endTime) are skipped client-side.
     assert [r["name"] for r in recs] == ["conferenceRecords/a", "conferenceRecords/b"]
-    assert q(tr.calls[0]["url"])["filter"] == 'end_time IS NOT NULL AND end_time>="2026-09-01T00:00:00Z"'
+    # The live API rejects ``end_time IS NOT NULL`` (HTTP 400 "Invalid filter"); only comparisons are sent.
+    assert q(tr.calls[0]["url"])["filter"] == 'end_time>="2026-09-01T00:00:00Z"'
     assert q(tr.calls[1]["url"])["pageToken"] == "p2"
     assert tr.calls[0]["headers"]["Authorization"] == "Bearer tok0"
+
+
+def test_list_conference_records_without_window_sends_no_filter():
+    tr = FakeTransport(lambda m, url, h, b: jresp(200, {"conferenceRecords": [{"name": "conferenceRecords/live"}]}))
+    assert MeetClient(StubCreds(), transport=tr).conference_records() == []
+    assert "filter" not in q(tr.calls[0]["url"])
 
 
 def test_entries_path_and_key():
