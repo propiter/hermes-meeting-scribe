@@ -301,7 +301,7 @@ export const LOCALES = {
       mixed: 'Escucha la reunión completa.',
       multitrack: 'Esta reunión se guardó con una pista por persona, un formato que esta página no puede reproducir. Los archivos siguen en el equipo donde corre Hermes.',
       imported: 'Las reuniones importadas de Google Meet llegan solo con su transcripción, sin audio.',
-      not_retained: 'No se conservó el audio de esta reunión (ver «Audio guardado» en Ajustes → Privacidad).',
+      not_retained: 'No se conservó el audio de esta reunión (ver «Audio conservado» en Ajustes → Privacidad).',
       failed: 'No se pudo reproducir la grabación aquí. El archivo sigue en el equipo donde corre Hermes.'
     },
     reprocess: {
