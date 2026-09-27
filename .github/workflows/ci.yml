@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"  # weekly: catch breaking changes in Hermes main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg (libopus)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          uv venv -p "${{ matrix.python }}" .venv
+          uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Unit tests
+        run: .venv/bin/python -m pytest -q
+
+  hermes:
+    name: integration (Hermes main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HERMES_SRC: ${{ github.workspace }}/hermes-agent
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+      - name: Clone Hermes Agent (main, shallow)
+        run: git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC"
+      - name: Install ffmpeg (libopus)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Hermes (locked, Python 3.14, discord extra)
+        working-directory: hermes-agent
+        run: uv sync --locked --python 3.14 --extra discord
+      - name: Integration tests
+        working-directory: plugin
+        run: scripts/test-integration.sh -q
+      - name: hermes plugins validate (as catalog admission runs it)
+        working-directory: plugin
+        run: |
+          export HERMES_HOME="$RUNNER_TEMP/hermes-home"
+          "$HERMES_SRC/.venv/bin/hermes" plugins validate --install-deps .
+      - name: Catalog entry draft is structurally valid
+        run: |
+          mkdir -p "$RUNNER_TEMP/catalog"
+          # The draft carries a placeholder sha until release; validate the shape with this commit.
+          sed "s/^sha: .*/sha: ${GITHUB_SHA}/" plugin/docs/catalog-entry.yaml > "$RUNNER_TEMP/catalog/meeting-scribe.yaml"
+          uvx --with ruamel.yaml==0.18.17 python "$HERMES_SRC/scripts/validate_plugin_catalog.py" \
+            "$RUNNER_TEMP/catalog/meeting-scribe.yaml"
