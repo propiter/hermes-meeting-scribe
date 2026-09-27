@@ -157,3 +157,31 @@ def test_cli_llm_show_and_config_schema_in_real_hermes(manager, capsys):
     assert cli.dispatch(parser.parse_args(["config", "schema", "--json"]), rt) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["version"] == 1 and {g["key"] for g in doc["groups"]} >= {"delivery", "llm"}
+
+
+def test_llm_chain_edits_keep_hand_written_entry_keys_in_real_hermes(manager, hermes_home):
+    """Review I5/I6: key_env / api_mode of hand-written entries survive add/remove/set; no model-less entry."""
+    from agent.auxiliary_client import _get_auxiliary_task_config
+
+    from meeting_scribe import llm_config as lc
+
+    raw = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    raw["auxiliary"] = {"meeting_scribe": {"provider": "openrouter", "model": "vendor/model-a", "fallback_chain": [
+        {"provider": "anthropic", "model": "model-b", "key_env": "ALT_KEY"},
+        {"provider": "openai-codex", "model": "model-c", "api_mode": "codex_responses"}]}}
+    (hermes_home / "config.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    store = lc.HermesAuxStore()
+
+    def chain():
+        return _get_auxiliary_task_config("meeting_scribe")["fallback_chain"]
+    with pytest.raises(ValueError, match="model"):
+        lc.fallback_add(store, lc.parse_link("openrouter"))
+    lc.fallback_add(store, lc.parse_link("openrouter:model-d"), position=1)
+    assert chain()[1]["key_env"] == "ALT_KEY" and chain()[2]["api_mode"] == "codex_responses"
+    lc.fallback_remove(store, "1")
+    assert chain() == [{"provider": "anthropic", "model": "model-b", "key_env": "ALT_KEY"},
+                       {"provider": "openai-codex", "model": "model-c", "api_mode": "codex_responses"}]
+    lc.fallback_set(store, [lc.parse_link("openai-codex:model-c"), lc.parse_link("anthropic:model-b")])
+    assert chain() == [{"provider": "openai-codex", "model": "model-c", "api_mode": "codex_responses"},
+                       {"provider": "anthropic", "model": "model-b", "key_env": "ALT_KEY"}]
+    assert all(e.get("model") for e in chain())

@@ -466,8 +466,16 @@ def _llm(args: argparse.Namespace, rt: CliRuntime) -> int:
                 _print_llm(v, lang)
             return 0
         if command == "set":
-            v = llm_config.set_primary(store, provider=args.provider, model=args.model, base_url=args.base_url,
-                                       timeout=args.timeout)
+            given = {k: getattr(args, k) for k in ("provider", "model", "base_url", "timeout")
+                     if getattr(args, k) is not None}
+            v = llm_config.set_primary(store, **given)
+            defaults = llm_config.defaults_among(given)
+            if defaults and len(defaults) == len(given):  # Hermes may drop a value equal to the default
+                _print(t("cli.llm_default", lang, keys=", ".join(defaults)))
+                _print_llm(v, lang)
+                return 0
+            if defaults:
+                _print(t("cli.llm_default", lang, keys=", ".join(defaults)))
         elif command == "fallback":
             sub = getattr(args, "fallback_command", None)
             if sub == "add":

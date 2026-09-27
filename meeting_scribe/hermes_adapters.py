@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from .domain.models import Candidate, Meeting
-from .llm_config import AUX_TASK, run_with_deadline
+from .llm_config import AUX_TASK, TooManyHungCalls, run_with_deadline
 
 log = logging.getLogger(__name__)
 _JSON_REMINDER = ("\n\nIMPORTANT: your previous answer was not valid JSON. Reply with ONE complete JSON object "
@@ -58,7 +58,11 @@ class HermesStructuredLLM:
     * A wall-clock deadline (``analysis_timeout_seconds``) of our own: Hermes' ``timeout`` is per
       request and its retries/fallbacks can add up well beyond it (a call was seen hanging ~30 min).
     * A reply that is not JSON (typically truncated) is retried ONCE right away with a stricter
-      instruction before the attempt counts as failed.
+      instruction before the attempt counts as failed. Cost: that chunk is sent (and billed) twice,
+      and the attempt can take up to twice ``analysis_timeout_seconds``.
+    * A call that misses the deadline keeps running in an abandoned thread; with
+      ``llm_config.MAX_ABANDONED`` of them still alive, the next call fails fast
+      (``TooManyHungCalls``, logged) instead of piling up threads and provider connections.
     """
 
     def __init__(self, llm: Callable[[], Any], timeout: "float | Callable[[], float]" = 600.0,
@@ -99,7 +103,7 @@ class HermesStructuredLLM:
             base["max_tokens"] = max_tokens
         try:
             return self._once(base, json_schema, timeout)
-        except LlmTimeout:
+        except (LlmTimeout, TooManyHungCalls):
             raise
         except ValueError as exc:  # not JSON (usually truncated): one immediate, stricter retry
             log.warning("meeting-scribe: %s; retrying once with a stricter instruction", exc)

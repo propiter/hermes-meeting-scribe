@@ -7,7 +7,10 @@ defaults layered under the user's values). The plugin never keeps a copy: ``llm 
 ``merge_existing``, which preserves comments and sibling keys), and ``llm test`` probes each link.
 
 Keys used: ``provider`` (``auto`` = Hermes' main model), ``model``, ``base_url``, ``timeout`` and
-``fallback_chain`` (a list of ``{provider, model?, base_url?}``). Hermes walks the chain on rate
+``fallback_chain`` (a list of ``{provider, model, base_url?}`` — Hermes skips an entry without a
+model). Entries written by hand may carry more keys (``key_env``, ``api_key``, ``api_mode``,
+``transport``…): every chain edit works on the original entries and keeps them untouched.
+Printed URLs never show credentials (userinfo and query string are hidden). Hermes walks the chain on rate
 limits, connection errors and payment errors (402) — NOT when a call hangs; that is what the
 plugin's own ``analysis_timeout_seconds`` wall clock is for.
 
@@ -17,8 +20,10 @@ injected so everything else is tested with a dictionary.
 from __future__ import annotations
 
 import contextvars
+import logging
 import re
 import threading
+from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
@@ -30,7 +35,23 @@ TASK_DEFAULTS: dict[str, Any] = {"provider": "auto", "model": "", "timeout": 600
 PROBE_PROMPT = "Reply with OK."
 PROBE_TIMEOUT = 60.0
 _PROVIDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+log = logging.getLogger(__name__)
+MAX_ABANDONED = 2  # hung calls (per task) left running before new ones are refused (review M5)
+_URL_RE = re.compile(r"https?://[^\s'\"<>]+")
 _SECRET_RE = re.compile(r"(sk-[A-Za-z0-9_-]{6,}|Bearer\s+\S+|api[_-]?key[=:]\s*\S+)", re.IGNORECASE)
+
+
+def safe_url(url: str) -> str:
+    """``url`` without userinfo, query string or fragment (they may carry tokens), for display."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "[url]"
+    if not parts.scheme or not parts.netloc:
+        return url.split("?", 1)[0].split("#", 1)[0]
+    host = parts.netloc.rsplit("@", 1)[-1]
+    shown = urlunsplit((parts.scheme, host, parts.path, "", ""))
+    return shown + ("?…" if parts.query else "")
 
 
 @dataclass(frozen=True)
@@ -41,9 +62,17 @@ class Link:
 
     def label(self) -> str:
         text = f"{self.provider}/{self.model}" if self.model else self.provider
-        return f"{text} @ {self.base_url}" if self.base_url else text
+        return f"{text} @ {safe_url(self.base_url)}" if self.base_url else text
 
     def to_dict(self) -> dict[str, str]:
+        """For display/JSON output (the base_url is shown without credentials)."""
+        out = self.entry()
+        if self.base_url:
+            out["base_url"] = safe_url(self.base_url)
+        return out
+
+    def entry(self) -> dict[str, str]:
+        """What is written to config.yaml for a NEW chain entry."""
         out = {"provider": self.provider}
         if self.model:
             out["model"] = self.model
@@ -69,7 +98,7 @@ class LlmView:
 
     def to_dict(self) -> dict[str, Any]:
         return {"config_path": CONFIG_PATH, "provider": self.primary.provider, "model": self.primary.model,
-                "base_url": self.primary.base_url, "timeout": self.timeout,
+                "base_url": safe_url(self.primary.base_url) if self.primary.base_url else "", "timeout": self.timeout,
                 "effective": self.effective_primary.to_dict(), "main": self.main.to_dict(),
                 "fallback_chain": [lk.to_dict() for lk in self.fallback_chain], "sources": dict(self.sources),
                 "problems": list(self.problems)}
@@ -146,8 +175,11 @@ def view(store: AuxStore) -> LlmView:
         lk = _link(entry)
         if lk is None:
             problems.append(f"{CONFIG_PATH}.fallback_chain[{i}] has no provider; Hermes skips it")
-        else:
-            chain.append(lk)
+            continue
+        chain.append(lk)
+        if not lk.model:
+            problems.append(f"{CONFIG_PATH}.fallback_chain[{i}] ({lk.provider}) has no model; Hermes skips it. "
+                            f"Remove it (`llm fallback remove {len(chain)}`) and add it again as {lk.provider}:MODEL")
     sources["fallback_chain"] = "hermes-config" if chain_raw else "none"
     return LlmView(Link(provider, model, base_url), tuple(chain), timeout, sources, store.main_model(),
                    tuple(problems))
@@ -173,46 +205,90 @@ def set_primary(store: AuxStore, *, provider: Optional[str] = None, model: Optio
     return view(store)
 
 
-def _write_chain(store: AuxStore, chain: Sequence[Link]) -> LlmView:
-    store.write({"fallback_chain": [lk.to_dict() for lk in chain]})
+def defaults_among(values: Mapping[str, Any]) -> list[str]:
+    """Keys whose value equals the plugin default: Hermes may drop them when saving (they are the
+    default anyway), so the CLI says "using the default" instead of promising they were written."""
+    out = []
+    for key, value in values.items():
+        default = TASK_DEFAULTS.get(key, _NO_DEFAULT)
+        if default is _NO_DEFAULT:
+            continue
+        if isinstance(default, (int, float)) and not isinstance(default, bool):
+            same = isinstance(value, (int, float)) and float(value) == float(default)
+        else:
+            same = _clean(value) == _clean(default) or (key == "provider" and _clean(value) in ("", "auto"))
+        if same:
+            out.append(key)
+    return out
+
+
+_NO_DEFAULT = object()
+
+
+def _require_model(link: Link) -> Link:
+    link = validate_link(link)
+    if not link.model:
+        raise ValueError(f"a fallback needs a model: use {link.provider}:MODEL (Hermes skips a fallback without one)")
+    return link
+
+
+def _raw_chain(store: AuxStore) -> list[Any]:
+    """The stored entries as they are (hand-written keys included); a non-list counts as empty."""
+    raw = (store.user_task_config() or {}).get("fallback_chain")
+    return list(raw) if isinstance(raw, list) else []
+
+
+def _listed(raw: Sequence[Any]) -> list[tuple[int, Link]]:
+    """``(index in raw, link)`` of the entries ``view`` lists (those with a provider)."""
+    return [(i, lk) for i, lk in ((i, _link(e)) for i, e in enumerate(raw)) if lk is not None]
+
+
+def _write_raw(store: AuxStore, raw: Sequence[Any]) -> LlmView:
+    store.write({"fallback_chain": [dict(e) if isinstance(e, Mapping) else e for e in raw]})
     return view(store)
 
 
 def fallback_set(store: AuxStore, links: Sequence[Link]) -> LlmView:
-    return _write_chain(store, [validate_link(lk) for lk in links])
+    """Replace the chain; an entry already present (same provider/model/base_url) keeps its extra keys."""
+    links = [_require_model(lk) for lk in links]
+    raw = _raw_chain(store)
+    existing = {lk: dict(raw[i]) for i, lk in reversed(_listed(raw))}  # first occurrence wins
+    return _write_raw(store, [existing.get(lk, lk.entry()) for lk in links])
 
 
 def fallback_add(store: AuxStore, link: Link, position: Optional[int] = None) -> LlmView:
-    chain = list(view(store).fallback_chain)
-    link = validate_link(link)
-    if link in chain:
+    link = _require_model(link)
+    raw = _raw_chain(store)
+    listed = _listed(raw)
+    if any(lk == link for _i, lk in listed):
         raise ValueError(f"{link.label()} is already in the fallback chain")
-    index = len(chain) if position is None else max(0, min(len(chain), position - 1))
-    chain.insert(index, link)
-    return _write_chain(store, chain)
+    if position is None or position - 1 >= len(listed):
+        raw.append(link.entry())
+    else:
+        raw.insert(listed[max(0, position - 1)][0], link.entry())
+    return _write_raw(store, raw)
 
 
 def fallback_remove(store: AuxStore, which: str) -> LlmView:
-    """By 1-based position, ``provider`` (every entry of it) or ``provider:model``."""
-    chain = list(view(store).fallback_chain)
+    """By 1-based position (as listed by ``llm show``), ``provider`` (every entry of it) or ``provider:model``."""
+    raw = _raw_chain(store)
+    listed = _listed(raw)
     which = _clean(which)
     if re.fullmatch(r"[0-9]+", which):
         i = int(which) - 1
-        if not 0 <= i < len(chain):
-            raise ValueError(f"no fallback at position {which} (chain has {len(chain)})")
-        del chain[i]
+        if not 0 <= i < len(listed):
+            raise ValueError(f"no fallback at position {which} (chain has {len(listed)})")
+        drop = {listed[i][0]}
     else:
         target = parse_link(which)
-        kept = [lk for lk in chain if not (lk.provider == target.provider and (not target.model
-                                                                                or lk.model == target.model))]
-        if len(kept) == len(chain):
+        drop = {i for i, lk in listed if lk.provider == target.provider and (not target.model or lk.model == target.model)}
+        if not drop:
             raise ValueError(f"{which} is not in the fallback chain")
-        chain = kept
-    return _write_chain(store, chain)
+    return _write_raw(store, [e for i, e in enumerate(raw) if i not in drop])
 
 
 def fallback_clear(store: AuxStore) -> LlmView:
-    return _write_chain(store, [])
+    return _write_raw(store, [])
 
 
 # -- probing ----------------------------------------------------------------------------------------
@@ -223,6 +299,7 @@ def redact(text: str) -> str:
         text = redact_sensitive_text(text, force=True)
     except Exception:  # outside Hermes (tests): local pass only
         pass
+    text = _URL_RE.sub(lambda m: safe_url(m.group(0)), text)
     return _SECRET_RE.sub("[redacted]", text)[:300]
 
 
@@ -240,11 +317,33 @@ def test_chain(store: AuxStore, timeout: float = PROBE_TIMEOUT) -> list[dict[str
     return rows
 
 
+class TooManyHungCalls(RuntimeError):
+    """``MAX_ABANDONED`` earlier calls of this kind are still hanging: a new one is refused right away."""
+
+
+_ABANDONED: dict[str, list[threading.Thread]] = {}
+_ABANDONED_LOCK = threading.Lock()
+
+
+def abandoned_alive(name: str) -> int:
+    with _ABANDONED_LOCK:
+        alive = [t for t in _ABANDONED.get(name, ()) if t.is_alive()]
+        _ABANDONED[name] = alive
+        return len(alive)
+
+
 def run_with_deadline(fn: Callable[[], Any], seconds: float, *, name: str) -> Any:
     """Run ``fn`` in a daemon thread (profile contextvars carried) and wait at most ``seconds``.
 
     On timeout the thread is ABANDONED: Python cannot kill it; it finishes (or hangs) in the
-    background and its result is discarded. Raises :class:`TimeoutError`."""
+    background and its result is discarded. Raises :class:`TimeoutError`. At most
+    ``MAX_ABANDONED`` abandoned threads per ``name`` may be alive: beyond that the call fails fast
+    with :class:`TooManyHungCalls` instead of piling up threads (and provider connections)."""
+    hung = abandoned_alive(name)
+    if hung >= MAX_ABANDONED:
+        log.warning("meeting-scribe: %d earlier %s call(s) are still hanging; not starting another", hung, name)
+        raise TooManyHungCalls(f"{hung} earlier {name} call(s) are still running after their deadline; "
+                               "not starting another until they end (check the provider, or restart the gateway)")
     ctx = contextvars.copy_context()
     box: dict[str, Any] = {}
 
@@ -257,6 +356,9 @@ def run_with_deadline(fn: Callable[[], Any], seconds: float, *, name: str) -> An
     thread.start()
     thread.join(seconds)
     if thread.is_alive():
+        with _ABANDONED_LOCK:
+            _ABANDONED.setdefault(name, []).append(thread)
+        log.warning("meeting-scribe: %s call abandoned after %.0fs (it keeps running in the background)", name, seconds)
         raise TimeoutError(f"no answer within {seconds:.0f}s")
     if "error" in box:
         raise box["error"]

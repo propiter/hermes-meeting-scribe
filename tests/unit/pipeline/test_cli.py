@@ -218,6 +218,8 @@ def test_llm_show_set_fallback_and_test(lrt, capsys):
     assert code == 0 and "auto → mainprov/main-model" in out and "no fallback chain" in out
     code, out = run(lrt, ["llm", "set", "--provider", "prov-a", "--model", "vendor/model-a"], capsys)
     assert code == 0 and lrt.aux.task == {"provider": "prov-a", "model": "vendor/model-a"}
+    code, out = run(lrt, ["llm", "fallback", "add", "broken"], capsys)
+    assert code == 2 and "model" in out and "fallback_chain" not in lrt.aux.task
     run(lrt, ["llm", "fallback", "add", "broken:m1"], capsys)
     run(lrt, ["llm", "fallback", "add", "prov-c:m2"], capsys)
     code, out = run(lrt, ["llm", "show", "--json"], capsys)
@@ -247,3 +249,10 @@ def test_status_and_doctor_explain_notes_left_in_a_dm(rt, capsys):
     assert f"! {rt.mid}: {hint}" in out
     code, out = run(rt, ["status", "--json"], capsys)
     assert json.loads(out)["dm_notes"] == {rt.mid: hint}
+
+
+def test_llm_set_to_the_default_says_so(lrt, capsys):
+    code, out = run(lrt, ["llm", "set", "--provider", "auto"], capsys)
+    assert code == 0 and "default" in out and "Saved" not in out
+    code, out = run(lrt, ["llm", "set", "--provider", "prov-a"], capsys)
+    assert code == 0 and "Saved" in out

@@ -144,6 +144,7 @@
   "cli.llm_config_path": "stored in Hermes' config.yaml under {path}",
   "cli.llm_main_model": "Hermes' main model",
   "cli.llm_no_fallback": "no fallback chain: if the provider fails (no credit, rate limit), analysis retries later. Add one: hermes meeting-scribe llm fallback add <provider>:<model>",
+  "cli.llm_default": "{keys}: using the default value (Hermes keeps no explicit copy of a default).",
   "cli.llm_saved": "Saved to {path}.",
   "cli.llm_unavailable": "Hermes' configuration is not available in this runtime.",
   "cli.meet_channel_missing": "⚠️ Google Meet import is on but no notes channel is set: notes go to the server's system channel or a channel named like delivery_auto_channel_names (#general, #meetings…); if none exists they wait. Set google_meet_discord_channel (a channel name or id) to choose one.",
