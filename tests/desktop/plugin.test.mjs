@@ -76,11 +76,9 @@ test('parseError reads Desktop transport errors', () => {
   // What Electron actually throws: the IPC wrapper prefixes the backend answer.
   const ipc = new Error(`Error invoking remote method 'hermes:api': Error: 404: {"detail":"Plugin not found"}`)
   assert.deepEqual(mod.parseError(ipc), { status: 404, message: 'Plugin not found' })
-  assert.equal(mod.failureKey(ipc, true), 'error.disabled')
-  assert.equal(mod.failureKey(new Error(`Error invoking remote method 'hermes:api': Error: 404: {"detail":"meeting not found"}`), true), 'error.notFound')
-  assert.equal(mod.failureKey(new Error('404: {"detail":"Not Found"}'), false), 'error.disabled')
-  assert.equal(mod.failureKey(new Error('404: {"detail":"not found"}'), true), 'error.notFound')
-  assert.equal(mod.failureKey(new Error('500: x'), true), 'error.generic')
+  assert.equal(mod.isPluginMissing(ipc), true)
+  assert.equal(mod.isPluginMissing(new Error(`Error invoking remote method 'hermes:api': Error: 404: {"detail":"meeting not found"}`)), false)
+  assert.equal(mod.isPluginMissing(new Error('500: x')), false)
 })
 
 test('qs drops empty values and encodes the rest', () => {
@@ -120,49 +118,97 @@ test('audioSources select only the explicitly resolved connection mode', () => {
   assert.deepEqual(mod.audioSources(audio, null, 'work'), [])
 })
 
+test('pure helpers: state tone, row subtitle, date range, speaker hue, matches, sinks', () => {
+  const t = (k, ...a) => `${k}${a.length ? `:${a.join(',')}` : ''}`
+  assert.equal(mod.stateTone('done'), 'good')
+  assert.equal(mod.stateTone('failed'), 'bad')
+  assert.equal(mod.stateTone('recording'), 'live')
+  assert.equal(mod.stateTone('empty'), 'muted')
+  assert.equal(mod.stateTone('transcribing'), 'busy')
+  assert.equal(mod.rowSubtitle(t, { state: 'done', people: 4, task_count: 6 }), 'library.people:4 · library.tasks:6')
+  assert.equal(mod.rowSubtitle(t, { state: 'done', people: 0, task_count: 0 }), 'library.noTasks')
+  assert.equal(mod.rowSubtitle(t, { state: 'transcribing' }), 'state.transcribing')
+  assert.equal(mod.rowSubtitle(t, { state: 'failed' }), 'state.failed')
+  const now = new Date('2026-09-27T12:00:00Z')
+  assert.deepEqual(mod.dateRange('today', now), { since: '2026-09-27', until: '2026-09-27' })
+  assert.deepEqual(mod.dateRange('week', now), { since: '2026-09-21', until: '2026-09-27' })
+  assert.deepEqual(mod.dateRange('x', now), { since: '', until: '' })
+  assert.equal(mod.speakerHue('ana'), mod.speakerHue('ana'))
+  assert.ok(mod.speakerHue('ana') >= 0 && mod.speakerHue('ana') < 360)
+  assert.deepEqual(mod.splitMatches('Ship it, ship', 'ship').map(p => p.match), [true, false, true])
+  assert.deepEqual(mod.sinkView('delivered', 'auto'), { tone: 'good', key: 'delivered' })
+  assert.deepEqual(mod.sinkView(undefined, 'off'), { tone: 'muted', key: 'off' })
+  assert.deepEqual(mod.sinkView(undefined, 'approve'), { tone: 'warn', key: 'pending' })
+  assert.equal(mod.minutesBetween('2026-09-26T15:04:00Z', '2026-09-26T15:34:00Z'), 30)
+})
+
+test('pollWhile stops on client errors and when nothing is in progress', () => {
+  const poll = mod.pollWhile(d => d.busy, 1000)
+  assert.equal(poll({ state: { data: { busy: true } } }), 1000)
+  assert.equal(poll({ state: { data: { busy: false } } }), false)
+  assert.equal(poll({ state: { data: { busy: true }, error: new Error('404: {"detail":"Plugin not found"}') } }), false)
+  assert.equal(poll({ state: { data: { busy: true }, error: new Error('503: x') } }), 1000)
+})
+
+test('project channel rows round-trip and validate', () => {
+  const t = (k, ...a) => `${k}${a.length ? `:${a.join(',')}` : ''}`
+  const rows = mod.parseProjectChannels(['Proyecto Alfa=111111111111111111', 'broken'])
+  assert.deepEqual(rows, [{ project: 'Proyecto Alfa', channel: '111111111111111111' }, { project: 'broken', channel: '' }])
+  assert.deepEqual(mod.checkProjectChannels([{ project: ' Alfa ', channel: '<#123456789>' }, { project: '', channel: '' }], t), { value: ['Alfa=123456789'] })
+  assert.deepEqual(mod.checkProjectChannels([{ project: 'Alfa', channel: 'general' }], t), { errors: { 0: 'projects.needChannel' } })
+  assert.deepEqual(mod.checkProjectChannels([{ project: '', channel: '123456789' }], t), { errors: { 0: 'projects.needName' } })
+  assert.deepEqual(mod.checkProjectChannels([{ project: 'A', channel: '123456789' }, { project: 'a', channel: '223456789' }], t), { errors: { 1: 'projects.duplicate:a' } })
+})
+
 // -- render (real React + react-dom/server, fake SDK) -------------------------------------------
 const MEETING = {
-  id: 'k3v7q2ab', title: 'Daily Sync', channel_name: 'daily', guild_name: 'Acme', state: 'done', source: 'discord',
-  started_at: '2026-09-26T15:04:00+00:00', ended_at: '2026-09-26T15:34:00+00:00', partial: false, project: 'Alpha',
+  id: 'k3v7q2ab', title: 'Revisión de producto', channel_name: 'producto', guild_name: 'Acme', state: 'done', source: 'discord',
+  started_at: '2026-09-26T15:04:00+00:00', ended_at: '2026-09-26T15:34:00+00:00', partial: false, people: 4, task_count: 6,
   speakers: [{ user_id: '1', name: 'Ana', is_bot: false }, { user_id: '2', name: 'Bot', is_bot: true }]
 }
+const BUSY = { ...MEETING, id: 'b1', title: 'Seguimiento técnico', state: 'transcribing' }
 const LIST = {
-  items: [MEETING], next_cursor: 'abc',
-  facets: { total: 3, states: { recording: 0, processing: 1, done: 2, failed: 0 }, sources: { discord: 3, google_meet: 0 } }
+  items: [MEETING, BUSY], next_cursor: 'abc', total: 3,
+  facets: { total: 3, states: { recording: 0, processing: 1, done: 2, failed: 0 }, sources: { discord: 3, google_meet: 0 },
+    channels: [{ id: '9', name: 'producto' }], projects: [{ name: 'Proyecto Alfa', count: 2 }] }
 }
 const DETAIL = {
-  meeting: MEETING,
+  meeting: MEETING, projects: ['Proyecto Alfa'],
   notes: { tldr: 'Shipped the thing.', summary: 'Long summary', topics: [{ title: 'Launch', points: ['date set'] }],
     decisions: ['Ship on Friday'], open_questions: ['Who writes the post?'], action_items: [] },
-  tasks: [{ id: 't1', title: 'Write the post', description: '', owner_name: 'Ana', project: 'Alpha', status: 'approved', due: null,
-    sinks: { kanban: { status: 'delivered', url: 'https://kanban.example/t1' }, linear: { status: 'pending', url: '' } },
+  tasks: [{ id: 't1', title: 'Write the post', description: '', owner_name: 'Ana', project: 'Proyecto Alfa', status: 'approved', due: '2026-10-01',
+    sinks: { kanban: { status: 'delivered', url: '' }, linear: { status: 'delivered', url: 'https://linear.app/acme/issue/A-1' } },
     discord: { channel_id: '9', url: 'https://discord.com/channels/1/2/3' } }],
-  transcript_total: 2, job: { state: 'done', stage: 'archive', attempts: 0, failed_stage: null, error: '' },
+  destinations: { discord: true, kanban: 'auto', linear: 'approve' },
+  transcript_total: 2, job: { state: 'done', stage: 'archive', attempts: 1, failed_stage: null, error: '' },
+  history: [{ kind: 'started', at: 1790000000 }, { kind: 'processed', at: 1790000900, stage: 'archive' }],
   waiting_destination: 'no channel', dm_notes: null,
-  audio: { available: false, reason: 'multitrack' }, command: null
+  audio: { available: false, reason: 'multitrack', can_prepare: true, original: true }, command: null
 }
 const TRANSCRIPT = { items: [{ id: 1, t0: 1.5, t1: 3, speaker_id: '1', speaker: 'Ana', text: 'Hello team' },
   { id: 2, t0: 65, t1: 70, speaker_id: '1', speaker: 'Ana', text: 'Ship it' }], total: 2, next_cursor: null }
 const STATUS = {
   worker: { state: 'recent', last_seen: 1790000000 }, counts: { running: 1, queued: 0, failed: 1 },
-  jobs: [{ meeting_id: 'k3v7q2ab', title: 'Daily Sync', state: 'failed', stage: 'analyze', error: 'RuntimeError: quota' }],
+  jobs: [{ meeting_id: 'k3v7q2ab', title: 'Daily Sync', state: 'failed', stage: 'analyze', error: 'RuntimeError: quota', problem: 'llm' }],
   waiting_destination: [], dm_notes: [], commands: [], settings_warnings: ['autojoin_min_humans=0: must be >= 1'],
   google: { enabled: false, connected: false, revoked: false, commands: { connect: 'hermes meeting-scribe google connect --client-secret <client.json>', status: 'hermes meeting-scribe google status', enable: 'hermes meeting-scribe config set google_meet_enabled true' } }
 }
 const SETTINGS = {
   schema: {
-    groups: [{ key: 'capture', label: 'Captura' }, { key: 'llm', label: 'Modelos y respaldos' }],
+    groups: [{ key: 'capture', label: 'Captura' }, { key: 'projects', label: 'Proyectos' }, { key: 'llm', label: 'Modelos y respaldos' }],
     fields: [
       { key: 'autojoin_enabled', type: 'bool', group: 'capture', label: 'Unirse automáticamente', help: 'h', default: true, storage: 'plugin' },
       { key: 'autojoin_min_humans', type: 'int', group: 'capture', label: 'Personas para unirse', help: 'h', default: 2, minimum: 1, storage: 'plugin' },
       { key: 'transcribe_device', type: 'str', group: 'capture', label: 'Dispositivo', help: 'h', default: 'auto', choices: ['auto', 'cpu', 'cuda'], storage: 'plugin' },
       { key: 'autojoin_channels', type: 'list', group: 'capture', label: 'Solo estos canales', help: 'h', default: [], storage: 'plugin' },
+      { key: 'project_channels', type: 'list', group: 'projects', label: 'Canales', help: 'h', default: [], storage: 'plugin', format: 'project_channel' },
       { key: 'llm_provider', type: 'str', group: 'llm', label: 'Proveedor', storage: 'hermes' }
     ]
   },
   values: {
     autojoin_enabled: { value: true, origin: 'default' }, autojoin_min_humans: { value: 2, origin: 'invalid' },
-    transcribe_device: { value: 'cpu', origin: 'configured' }, autojoin_channels: { value: ['a', 'b'], origin: 'configured' }
+    transcribe_device: { value: 'cpu', origin: 'configured' }, autojoin_channels: { value: ['a', 'b'], origin: 'configured' },
+    project_channels: { value: ['Proyecto Alfa=111111111111111111'], origin: 'configured' }
   },
   warnings: [],
   llm: { provider: 'openrouter', model: 'm1', base_url: '', timeout: 600, effective: { provider: 'openrouter', model: 'm1' },
@@ -178,94 +224,180 @@ async function render(node, fixtures, locale = 'en') {
 }
 
 const opts = { skip: !HAS_REACT && 'React not available' }
+const LIST_PATH = '/v1/meetings?limit=40'
 
-test('page renders the library with rows, filters and pager', opts, async () => {
+test('page: header views, master list with status rows and the detail next to it', opts, async () => {
   const { createElement } = await import('react')
-  mod.$tab.set('library'); mod.$selected.set(null)
-  const html = await render(createElement(mod.MeetingsPage), { '/v1/meetings?limit=30': LIST })
-  assert.match(html, /data-sdk="segmented"/)
-  assert.match(html, /Daily Sync/)
-  assert.match(html, /Google Meet \(0\)/)
-  assert.match(html, /Older/)
-  assert.match(html, /1 shown · 3 in total/)
-})
-
-test('library empty, loading and error states', opts, async () => {
-  const { createElement } = await import('react')
-  mod.$tab.set('library'); mod.$selected.set(null)
-  let html = await render(createElement(mod.MeetingsPage), { '/v1/meetings?limit=30': { items: [], next_cursor: null, facets: LIST.facets } })
-  assert.match(html, /No meetings yet/)
-  html = await render(createElement(mod.MeetingsPage), {})
-  assert.match(html, /Loading/)
-  html = await render(createElement(mod.MeetingsPage), { '/v1/meetings?limit=30': new Error('404: {"detail":"Not Found"}') })
-  assert.match(html, /not enabled in the profile “default”/)
-})
-
-test('detail renders notes, tasks with destinations, audio reason and transcript', opts, async () => {
-  const { createElement } = await import('react')
-  const html = await render(createElement(mod.DetailView, { id: 'k3v7q2ab' }), {
-    '/v1/meetings/k3v7q2ab': DETAIL, '/v1/meetings/k3v7q2ab/transcript?limit=200': TRANSCRIPT, '/v1/status': STATUS
+  mod.$view.set('library'); mod.$selected.set('k3v7q2ab'); mod.$tab.set('summary')
+  const html = await render(createElement(mod.MeetingsPage), {
+    '/v1/status': STATUS, [LIST_PATH]: LIST, '/v1/meetings/k3v7q2ab': DETAIL
   }, 'es')
+  assert.match(html, /data-sdk="segmented"/)
+  assert.match(html, /Ajustes/)
+  assert.match(html, /class="ms-md has-selection"/)
+  assert.match(html, /aria-selected="true"[^>]*data-meeting="k3v7q2ab"|data-meeting="k3v7q2ab"[^>]*/)
+  assert.match(html, /4 personas · 6 tareas/)
+  assert.match(html, /Transcribiendo/)
+  assert.match(html, /2 de 3 reuniones/)
+  assert.match(html, /Revisión de producto/)
+  assert.match(html, /#producto · 30 min · 4 personas/)
+  assert.match(html, /role="tab"[^>]*>Resumen/)
+  assert.match(html, /Procesamiento/)
+})
+
+test('page: nothing selected shows the pick-a-meeting pane; empty library and errors', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$view.set('library'); mod.$selected.set(null)
+  let html = await render(createElement(mod.MeetingsPage), { '/v1/status': STATUS, [LIST_PATH]: LIST })
+  assert.match(html, /Pick a meeting/)
+  html = await render(createElement(mod.MeetingsPage), { '/v1/status': STATUS, [LIST_PATH]: { items: [], next_cursor: null, total: 0, facets: { total: 0 } } })
+  assert.match(html, /No meetings yet/)
+  html = await render(createElement(mod.MeetingsPage), { '/v1/status': STATUS, [LIST_PATH]: { items: [], next_cursor: null, total: 0, facets: { total: 5 } } })
+  assert.match(html, /Nothing matches/)
+  html = await render(createElement(mod.MeetingsPage), { '/v1/status': STATUS })
+  assert.match(html, /data-sdk="skeleton"/)
+  html = await render(createElement(mod.MeetingsPage), { '/v1/status': STATUS, [LIST_PATH]: new Error('500: {"detail":"boom"}') })
+  assert.match(html, /Could not load this/)
+  assert.match(html, /boom/)
+})
+
+test('a profile without the plugin gets a guided empty state, not an error', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$view.set('library'); mod.$selected.set(null)
+  const missing = new Error(`Error invoking remote method 'hermes:api': Error: 404: {"detail":"Plugin not found"}`)
+  const html = await render(createElement(mod.MeetingsPage), { '/v1/status': missing }, 'es')
+  assert.match(html, /Reuniones no está configurado en este perfil/)
+  assert.match(html, /hermes plugins enable meeting-scribe/)
+  assert.doesNotMatch(html, /data-sdk="segmented"/)
+  assert.doesNotMatch(html, /No se pudo cargar/)
+})
+
+test('summary tab: lead, decisions, questions, pending tasks and prepare-audio', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('summary')
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': DETAIL, '/v1/status': STATUS }, 'es')
   assert.match(html, /Shipped the thing\./)
+  assert.match(html, /Decisiones/)
   assert.match(html, /Ship on Friday/)
   assert.match(html, /Who writes the post\?/)
-  assert.match(html, /Write the post/)
-  assert.match(html, /href="https:\/\/kanban\.example\/t1"/)
-  assert.match(html, /Enviada/)
-  assert.match(html, /una pista por persona/)
-  assert.match(html, /Hello team/)
-  assert.match(html, /01:05/)
+  assert.match(html, /Tareas pendientes/)
+  assert.match(html, /Ana · Proyecto Alfa · 2026-10-01/)
+  assert.match(html, /Preparar audio/)
   assert.match(html, /Esperando un lugar donde publicar/)
-  assert.match(html, /Reprocesar…/)
-  assert.doesNotMatch(html, /Bot<\/dd>/)
+})
+
+test('summary tab plays the listening copy through the media protocol when available', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('summary')
+  const d = { ...DETAIL, audio: { available: true, reason: 'ready', path: '/data/m/playback.ogg', original: true } }
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': d, '/v1/status': STATUS })
+  assert.match(html, /<audio[^>]*src="hermes-media:\/\/stream\/%2Fdata%2Fm%2Fplayback\.ogg"/)
+  assert.match(html, /one track per person, is kept/)
+})
+
+test('transcript tab: speakers, clickable times when there is audio, search highlight', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('transcript')
+  const d = { ...DETAIL, audio: { available: true, path: '/x/playback.ogg' } }
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), {
+    '/v1/meetings/k3v7q2ab': d, '/v1/meetings/k3v7q2ab/transcript?limit=300': TRANSCRIPT
+  })
+  assert.match(html, /class="ms-speaker"[^>]*>Ana/)
+  assert.match(html, />AN?</)
+  assert.match(html, /aria-label="Play from 00:01"/)
+  assert.match(html, /Hello team/)
+  assert.match(html, /2 lines/)
+})
+
+test('tasks tab: owner, project, due and per-destination status with links', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('tasks')
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': DETAIL }, 'es')
+  assert.match(html, /Write the post/)
+  assert.match(html, /Responsable/)
+  assert.match(html, /2026-10-01/)
+  assert.match(html, /href="https:\/\/discord\.com\/channels\/1\/2\/3"/)
+  assert.match(html, /href="https:\/\/linear\.app\/acme\/issue\/A-1"/)
+  assert.match(html, /Abrir el tablero/)
+  assert.match(html, /Publicada/)
+  assert.match(html, /Enviada/)
+})
+
+test('processing tab: plain-language problem, details, history and reprocess', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('processing')
+  const failed = { ...DETAIL, meeting: { ...MEETING, state: 'failed' },
+    job: { state: 'failed', stage: 'analyze', failed_stage: 'analyze', attempts: 3, error: 'RuntimeError: 429 quota', problem: 'llm' },
+    history: [{ kind: 'started', at: 1790000000 }, { kind: 'failed', at: 1790000100, stage: 'analyze', problem: 'llm' },
+      { kind: 'command', at: 1790000200, action: 'reprocess', stage: 'deliver', state: 'unknown' }] }
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': failed, '/v1/status': STATUS })
+  assert.match(html, /did not answer correctly/)
+  assert.match(html, /Technical details/)
+  assert.match(html, /RuntimeError: 429 quota/)
+  assert.match(html, /Recording started/)
+  assert.match(html, /Reprocess from «Publishing»/)
+  assert.match(html, /Reprocess…/)
 })
 
 test('detail of a missing meeting says so', opts, async () => {
   const { createElement } = await import('react')
-  const html = await render(createElement(mod.DetailView, { id: 'gone' }), { '/v1/meetings/gone': new Error('404: {"detail":"not found"}') })
+  const html = await render(createElement(mod.MeetingDetail, { id: 'gone' }), { '/v1/meetings/gone': new Error('404: {"detail":"not found"}') })
   assert.match(html, /no longer exists/)
 })
 
-test('status shows worker, queue, warnings, Google guide and diagnostics button', opts, async () => {
+test('status shows worker, queue problems, warnings, Google guide and diagnostics button', opts, async () => {
   const { createElement } = await import('react')
   const html = await render(createElement(mod.StatusView), { '/v1/status': STATUS })
-  assert.match(html, /online and processing/)
-  assert.match(html, /RuntimeError: quota/)
+  assert.match(html, /Online and processing/)
+  assert.match(html, /did not answer correctly/)
+  assert.doesNotMatch(html, /RuntimeError/)
   assert.match(html, /autojoin_min_humans=0/)
   assert.match(html, /google connect --client-secret &lt;client\.json&gt;/)
   assert.match(html, /Run diagnostics/)
 })
 
-test('settings form is generated from the schema with origins and models', opts, async () => {
+test('settings: section nav, fields from the schema, origins', opts, async () => {
   const { createElement } = await import('react')
   const html = await render(createElement(mod.SettingsView), { '/v1/settings?lang=es': SETTINGS }, 'es')
+  assert.match(html, /aria-current="page"[^>]*>Captura/)
   assert.match(html, /Unirse automáticamente/)
   assert.match(html, /role="switch"/)
   assert.match(html, /type="number"[^>]*min="1"/)
-  assert.match(html, /No válido, se usa el predeterminado/)
+  assert.match(html, /No válido/)
   assert.match(html, /Personalizado/)
   assert.match(html, /Procesador \(CPU\)/)
   assert.match(html, /<textarea[^>]*>a\nb<\/textarea>/)
-  assert.match(html, /Respaldo 1/)
-  assert.match(html, /value="nous"/)
-  assert.doesNotMatch(html, /ms-set-llm_provider/)
   assert.match(html, /for="ms-set-autojoin_min_humans"/)
 })
 
-test('a discarded recording (no audio) is a label and a filter of its own, not a failure', opts, async () => {
+test('project–channel editor renders one validated row per association', opts, async () => {
   const { createElement } = await import('react')
-  mod.$tab.set('library'); mod.$selected.set(null)
-  const empty = { ...MEETING, id: 'e1', title: 'Quiet room', state: 'empty' }
-  const list = { items: [empty], next_cursor: null, facets: { ...LIST.facets, states: { ...LIST.facets.states, empty: 1 } } }
-  let html = await render(createElement(mod.MeetingsPage), { '/v1/meetings?limit=30': list }, 'es')
-  assert.match(html, /Sin audio: descartada/)
-  assert.match(html, /value="empty"/)
-  assert.doesNotMatch(html, /Requiere atención<\/span>/)
-  html = await render(createElement(mod.DetailView, { id: 'e1' }), {
+  const html = await render(createElement(mod.ProjectChannelsEditor, { value: ['Proyecto Alfa=111111111111111111', 'Proyecto Beta=222222222222222222'] }), {}, 'es')
+  assert.match(html, /Canales por proyecto/)
+  assert.match(html, /value="Proyecto Alfa"/)
+  assert.match(html, /value="222222222222222222"/)
+  assert.match(html, /Añadir proyecto/)
+  assert.match(html, /aria-label="Quitar — Proyecto 2"/)
+})
+
+test('models section: primary model and ordered backups', opts, async () => {
+  const { createElement } = await import('react')
+  const html = await render(createElement(mod.ModelsSection, { llm: SETTINGS.llm }), {}, 'es')
+  assert.match(html, /Modelo principal/)
+  assert.match(html, /value="openrouter"/)
+  assert.match(html, /value="nous"/)
+  assert.match(html, /aria-label="Respaldo 1"/)
+  assert.match(html, /En uso: openrouter \/ m1/)
+})
+
+test('a discarded recording (no audio) is its own filter and state, not a failure', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('summary')
+  const empty = { ...MEETING, id: 'e1', title: 'Sala vacía', state: 'empty' }
+  const html = await render(createElement(mod.MeetingDetail, { id: 'e1' }), {
     '/v1/meetings/e1': { ...DETAIL, meeting: empty, notes: null, tasks: [], transcript_total: 0, waiting_destination: null,
-      job: { state: 'done', stage: 'transcribe', attempts: 0, failed_stage: null, error: '' } },
-    '/v1/meetings/e1/transcript?limit=200': { items: [], total: 0, next_cursor: null }, '/v1/status': STATUS
-  }, 'en')
-  assert.match(html, /No audio was captured/)
-  assert.doesNotMatch(html, /Reprocess…/)
+      audio: { available: false, reason: 'empty' } }
+  }, 'es')
+  assert.match(html, /Descartada: sin audio/)
+  assert.match(html, /No se captó audio/)
 })
