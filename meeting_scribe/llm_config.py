@@ -196,7 +196,7 @@ def fallback_remove(store: AuxStore, which: str) -> LlmView:
     """By 1-based position, ``provider`` (every entry of it) or ``provider:model``."""
     chain = list(view(store).fallback_chain)
     which = _clean(which)
-    if which.isdigit():
+    if re.fullmatch(r"[0-9]+", which):
         i = int(which) - 1
         if not 0 <= i < len(chain):
             raise ValueError(f"no fallback at position {which} (chain has {len(chain)})")

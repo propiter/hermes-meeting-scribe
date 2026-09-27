@@ -15,12 +15,13 @@ from typing import Callable, Optional, Protocol, Union
 
 from .config import PRIMARY_COMMAND, Settings
 from .domain.models import Stage
+from .domain.text import is_ascii_digits
 from .i18n import t
 from .pipeline.service import MeetingService
 from .storage.artifacts import fmt_ts, read_notes, render_notes_md
 
 log = logging.getLogger(__name__)
-_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
+_MENTION_RE = re.compile(r"^<@!?([0-9]+)>$")
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ class MeetingCommands:
         return "\n".join(lines)
 
     def _cmd_list(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
-        n = int(args[0]) if args and args[0].isdigit() else 10
+        n = int(args[0]) if args and is_ascii_digits(args[0]) else 10
         meetings = self.service.repo.list_meetings(limit=max(1, min(n, 50)))
         if not meetings:
             return t("cmd.list_empty", lang)
@@ -169,7 +170,7 @@ class MeetingCommands:
 
     def _cmd_link(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         m = _MENTION_RE.match(args[0]) if args else None
-        user_id = m.group(1) if m else (args[0] if args and args[0].isdigit() else None)
+        user_id = m.group(1) if m else (args[0] if args and is_ascii_digits(args[0]) else None)
         if user_id is None or len(args) < 2:
             return t("cmd.usage", lang, usage=f"/{cmd} link @user <linear-email-or-name>")
         target = " ".join(args[1:])

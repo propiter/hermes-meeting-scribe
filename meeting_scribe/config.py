@@ -14,11 +14,13 @@ import re
 from dataclasses import dataclass, field, fields
 from typing import Any, Callable, Mapping, Optional
 
+from .domain.text import is_ascii_digits
+
 Getter = Callable[..., Any]
 PRIMARY_COMMAND = "meeting"
 MODES = ("approve", "auto", "off")
 _ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-_CHANNEL_MENTION_RE = re.compile(r"^<#(\d+)>$")
+_CHANNEL_MENTION_RE = re.compile(r"^<#([0-9]+)>$")
 _NAME_MAX = 100  # Discord caps channel and server names at 100 characters
 
 
@@ -204,7 +206,7 @@ def _channel_value(raw: str) -> str:
         return mention.group(1)
     if value.startswith("<"):
         raise ValueError("expected a text channel (id, <#id> or name), not a user or role mention")
-    if not value or value.isdigit():
+    if not value or is_ascii_digits(value):
         return value
     name = value.lstrip("#").strip()
     if not name:
@@ -217,7 +219,7 @@ def channel_ref(value: str) -> tuple[str, str]:
     value = (value or "").strip()
     if not value:
         return "", ""
-    return ("id", value) if value.isdigit() else ("name", value)
+    return ("id", value) if is_ascii_digits(value) else ("name", value)
 
 
 def _normalize_aliases(values: tuple[str, ...]) -> tuple[str, ...]:

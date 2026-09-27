@@ -12,6 +12,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from ..domain.models import Candidate, Meeting
 from ..domain.names import clean_channel_name
+from ..domain.text import is_ascii_digits
 from .routing import ChannelInfo
 
 log = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ def guild_of(adapter: Any, meeting: Meeting, fallback_channels: Sequence[str] = 
         return None
     get_channel = getattr(client, "get_channel", None)
     for cid in fallback_channels:
-        if not str(cid).isdigit() or not callable(get_channel):
+        if not is_ascii_digits(str(cid)) or not callable(get_channel):
             continue
         channel = get_channel(int(cid))
         guild = getattr(channel, "guild", None)

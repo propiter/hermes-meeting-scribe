@@ -127,3 +127,20 @@ def test_google_meet_and_transcript_settings_defaults_and_bounds():
     from meeting_scribe.config import settings_from_mapping
     low = settings_from_mapping({"google_meet_poll_minutes": 0})
     assert low.google_meet_poll_minutes == 5 and low.warnings  # below the minimum: default + warning
+
+
+# -- review: only ASCII digits are ids ('²'.isdigit() is True but int('²') raises) -----------------
+@pytest.mark.parametrize("value", ["²", "١٢٣", "１２３"])
+def test_non_ascii_digits_are_a_channel_name_not_an_id(value):
+    from meeting_scribe.config import channel_ref, settings_from_mapping
+
+    assert channel_ref(value)[0] == "name"
+    assert settings_from_mapping({"delivery_discord_channel": value}).delivery_discord_channel == value
+
+
+def test_channel_mention_with_non_ascii_digits_is_not_an_id():
+    from meeting_scribe.config import channel_ref, validate_value
+
+    assert channel_ref(validate_value("delivery_discord_channel", "<#123>")) == ("id", "123")
+    with pytest.raises(ValueError):
+        validate_value("delivery_discord_channel", "<#١٢٣>")

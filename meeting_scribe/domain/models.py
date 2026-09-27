@@ -10,6 +10,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Optional
 
+from .text import is_ascii_digits
+
 
 class InvalidTransition(ValueError):
     """Raised when a state change is not allowed by the meeting state machine."""
@@ -117,7 +119,7 @@ SOURCE_GOOGLE_MEET = "google_meet"
 
 def is_discord_user_id(user_id: Optional[str]) -> bool:
     """Discord snowflakes are digits; imported speakers (``gmeet:<id>``) are not mentionable/DMable."""
-    return bool(user_id) and str(user_id).isdigit()
+    return bool(user_id) and is_ascii_digits(str(user_id))
 
 
 @dataclass(frozen=True)

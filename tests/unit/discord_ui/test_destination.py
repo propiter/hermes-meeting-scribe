@@ -130,3 +130,13 @@ def test_report_is_serialisable(meet):
     d = resolve(bot_with("general"), meet, settings_from_mapping({}))
     rep = json.loads(json.dumps(d.report()))
     assert rep["guild"]["name"] == "Example Team" and rep["targets"] == ["300"]
+
+
+# -- review: non-ASCII digits never reach int() ----------------------------------------------------
+@pytest.mark.parametrize("value", ["²", "١٢٣"])
+def test_non_ascii_digits_in_channel_or_guild_do_not_crash(meet, value):
+    bot = bot_with("general")
+    d = resolve(bot, meet, settings_from_mapping({"google_meet_discord_channel": value}))
+    assert "google_meet_discord_channel" in [s.key for s in d.steps]
+    guild, _source, problem = pick_guild(bot, value)
+    assert guild is None and problem

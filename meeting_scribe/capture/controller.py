@@ -19,6 +19,7 @@ from typing import Any, Callable, Coroutine, Optional
 from ..audio.ffmpeg import Ffmpeg, FfmpegNotFound
 from ..commands import Caller
 from ..config import Settings
+from ..domain.text import is_ascii_digits
 from ..i18n import t
 from .compat import CompatResult, probe
 from .receiver import scribe_receiver_class
@@ -27,7 +28,7 @@ from .tracks import TrackWriter
 
 log = logging.getLogger(__name__)
 WriterFactory = Callable[[Optional[Ffmpeg], Any, float, int], Writer]
-_CHANNEL_MENTION = re.compile(r"^<#(\d+)>$")
+_CHANNEL_MENTION = re.compile(r"^<#([0-9]+)>$")
 
 
 def compat_for_adapter(adapter: Any) -> CompatResult:
@@ -185,7 +186,7 @@ class CaptureManager:
         if target:
             raw = target.strip()
             m = _CHANNEL_MENTION.match(raw)
-            cid = m.group(1) if m else (raw if raw.isdigit() else None)
+            cid = m.group(1) if m else (raw if is_ascii_digits(raw) else None)
             if cid is not None:
                 ch = guild.get_channel(int(cid))
             else:
@@ -196,7 +197,7 @@ class CaptureManager:
             if not is_voice_channel(ch):
                 return None, t("capture.target_not_voice", self.lang, channel=ch.name)
             return ch, None
-        member = guild.get_member(int(caller.user_id)) if str(caller.user_id).isdigit() else None
+        member = guild.get_member(int(caller.user_id)) if is_ascii_digits(str(caller.user_id)) else None
         voice = getattr(getattr(member, "voice", None), "channel", None)
         return (voice, None) if voice is not None else (None, t("capture.join_voice_first", self.lang))
 

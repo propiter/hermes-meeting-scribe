@@ -15,6 +15,8 @@ import uuid
 from functools import lru_cache
 from typing import Optional
 
+from ..domain.text import is_ascii_digits
+
 
 @lru_cache(maxsize=1)
 def _nonce() -> str:
@@ -36,7 +38,7 @@ def owner_alive(owner: Optional[str]) -> bool:
         return False
     host, _, rest = owner.partition(":")
     pid_text = rest.partition(":")[0]
-    if host != socket.gethostname() or not pid_text.isdigit():
+    if host != socket.gethostname() or not is_ascii_digits(pid_text):
         return False
     pid = int(pid_text)
     if pid == os.getpid():
@@ -60,7 +62,7 @@ def owner_dead(owner: Optional[str]) -> bool:
         return False
     host, _, rest = owner.partition(":")
     pid_text = rest.partition(":")[0]
-    if host != socket.gethostname() or not pid_text.isdigit():
+    if host != socket.gethostname() or not is_ascii_digits(pid_text):
         return False
     pid = int(pid_text)
     if pid == os.getpid():

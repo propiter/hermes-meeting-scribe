@@ -13,7 +13,16 @@ empty to the hallucination filter. :func:`fold` keeps letters of every script:
 """
 from __future__ import annotations
 
+import re
 import unicodedata
+
+_ASCII_DIGITS = re.compile(r"[0-9]+")
+
+
+def is_ascii_digits(value: object) -> bool:
+    """``True`` only for ASCII ``0-9`` (``str.isdigit`` also accepts ``'²'``/``'١٢٣'``, which ``int`` rejects
+    or Discord never uses as ids)."""
+    return isinstance(value, str) and _ASCII_DIGITS.fullmatch(value) is not None
 
 
 def _strip_ascii_accents(text: str) -> str:

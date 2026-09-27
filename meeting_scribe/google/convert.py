@@ -29,7 +29,7 @@ def parse_time(value: Any) -> Optional[datetime]:
         text = text[:-1] + "+00:00"
     if "." in text:
         head, _, rest = text.partition(".")
-        digits = "".join(ch for ch in rest if ch.isdigit())
+        digits = "".join(ch for ch in rest if "0" <= ch <= "9")
         tz = rest[len(digits):]
         text = f"{head}.{(digits + '000000')[:6]}{tz}"
     try:

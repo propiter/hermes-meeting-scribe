@@ -32,7 +32,7 @@ from typing import Any, Iterable, Optional, Sequence
 from ..config import Settings, channel_ref
 from ..domain.models import SOURCE_GOOGLE_MEET, Meeting
 from ..domain.names import clean_channel_name
-from ..domain.text import fold
+from ..domain.text import fold, is_ascii_digits
 
 REPORT_KV = "discord.destination_report"
 TEXT_KINDS = frozenset({"text", "news"})
@@ -109,7 +109,7 @@ def pick_guild(client: Any, setting: str) -> tuple[Any, str, str]:
     guilds = _guilds(client)
     value = (setting or "").strip()
     if value:
-        if value.isdigit():
+        if is_ascii_digits(value):
             getter = getattr(client, "get_guild", None)
             g = getter(int(value)) if callable(getter) else None
             g = g or next((x for x in guilds if str(getattr(x, "id", "")) == value), None)
@@ -188,7 +188,7 @@ def auto_channel(guild: Any, names: Sequence[str]) -> Resolved:
 
 def _guild_of_channel(client: Any, cid: str) -> Any:
     get_channel = getattr(client, "get_channel", None)
-    ch = get_channel(int(cid)) if callable(get_channel) and cid.isdigit() else None
+    ch = get_channel(int(cid)) if callable(get_channel) and is_ascii_digits(cid) else None
     return getattr(ch, "guild", None)
 
 
@@ -230,7 +230,7 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
                 d.guild_source = "channel" if guild is not None else d.guild_source
     if not imported:
         for cid in (meeting.text_channel_id, meeting.channel_id):
-            if cid and str(cid).isdigit() and str(cid) not in d.targets:
+            if cid and is_ascii_digits(str(cid)) and str(cid) not in d.targets:
                 d.targets.append(str(cid))
     auto = auto_channel(guild, s.delivery_auto_channel_names)
     d.steps.append(auto)
