@@ -82,6 +82,15 @@ Reuse `Repository`, `MeetingService`, the existing FTS index and per-item/per-si
 
 Use strict TDD, isolated homes/databases, neutral fixtures, fresh review and a real Desktop smoke test. Do not deploy to a live bot without explicit maintainer approval. Existing Discord behavior must remain functional without installing/enabling the visual half.
 
+### Catalog submission (after this release)
+
+The maintainer decided to submit to the Hermes plugin catalog only once this release (native page included) is complete. `docs/catalog-entry.yaml` holds the ready entry template: it states what gets recorded, where audio is kept and which external services receive data, and this repo's CI checks the entry's structure on every push. Before opening the catalog PR:
+
+- Pin the entry to the full 40-character release commit and bump `version`.
+- Reproduce the catalog's admission in a clean clone: its structural validator, plus `hermes plugins validate --install-deps` at the pinned commit. Prefer a clean machine or container: even with an isolated `HERMES_HOME` and `HERMES_RUNTIME_DIR`, the validator prepared dependencies in the machine's shared Hermes environment store. With the plugin already installed there, it reported "Two workspace members are both named `hermes-meeting-scribe`" even though validation passed, and PM garbage-collected an old unused environment. Confirm the dependency step on a clean machine before submitting.
+- Recheck upstream issue NousResearch/hermes-agent#124784 (Desktop "Install from Git" cannot consent to Python dependencies) and its fix PRs. The maintainer chose not to add a README workaround notice, expecting the upstream fix.
+- Keep all fixtures, docs and README free of any specific server's names.
+
 ### Sources and code navigation
 
 Official references (recheck when implementation starts):
