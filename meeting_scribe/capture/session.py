@@ -1,13 +1,21 @@
-"""One live recording in one guild (DESIGN §4).
+"""One live recording in one guild (DESIGN §4, §15).
 
 Lifecycle: ``start()`` joins with our OWN ``channel.connect()`` under the adapter's per-guild voice
 lock and registers the client in ``adapter._voice_clients`` (so Hermes' ``/voice status|leave``
 and shutdown see it) — but never in ``_voice_receivers``/``_voice_listen_tasks``/
-``_voice_text_channels``/``_voice_timeout_tasks``, so Hermes starts no agent turns, no TTS and no
-inactivity timer. A drain loop (0.5 s) moves timed frames from the receiver into per-speaker
-:class:`TrackWriter`s, sends the UDP keepalive, re-reads the DAVE session, and decides when to
-stop: explicit stop, no humans for ``autoleave.grace_seconds``, ``limits.max_duration_minutes``,
-or the voice client disappearing (network loss, ``/voice leave``, adapter disconnect → partial).
+``_voice_text_channels``/``_voice_timeout_tasks``, so Hermes starts no agent turns and no
+inactivity timer. Playback is muted on our voice client (see :func:`mute_playback`), so a Hermes
+voice-mode reply in another text chat of the guild can never be spoken into the meeting.
+
+A drain loop (0.5 s) moves timed frames from the receiver into per-speaker writers, sends the UDP
+keepalive, re-reads the DAVE session every tick, and decides when to stop: explicit stop, no
+humans for ``autoleave.grace_seconds``, ``limits.max_duration_minutes``, or the voice client being
+lost (``/voice leave``/adapter disconnect immediately; a discord.py reconnect only after it has
+not recovered for ``vc.timeout`` seconds → partial).
+
+Finalisation always completes (review W5): it runs as its own task shielded from the caller's
+cancellation and sets ``_finished`` in a ``finally``, so ``wait()`` and the controller's reaper
+can never hang.
 """
 from __future__ import annotations
 
@@ -22,11 +30,12 @@ from ..config import Settings
 from ..domain.ids import short_id
 from ..domain.models import Meeting, MeetingState, Speaker
 from ..i18n import t
+from .consent import Consent
 
 log = logging.getLogger(__name__)
 KEEPALIVE = b"\xf8\xff\xfe"
 KEEPALIVE_SECONDS = 15.0
-DAVE_REFRESH_SECONDS = 5.0
+RECONNECT_GRACE_SECONDS = 30.0  # discord.py's own VoiceClient.timeout default
 PARTIAL_REASONS = frozenset({"disconnected", "shutdown", "error"})
 
 
@@ -48,9 +57,28 @@ class SessionDeps:
     settings: Callable[[], Settings]
     receiver_cls: type
     writer_factory: Callable[[Any, float], Writer]
-    clock: Callable[[], float] = time.time
+    clock: Callable[[], float] = time.monotonic  # timeline clock; display times come from ``now``
     now: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
     tick: float = 0.5
+
+
+def mute_playback(vc: Any) -> None:
+    """Make ``vc.play`` a no-op that completes immediately (the recording client never speaks)."""
+    def play(source: Any, *, after: Optional[Callable[[Optional[Exception]], Any]] = None, **kw: Any) -> None:
+        log.info("meeting-scribe: refused audio playback into a recorded voice channel")
+        cleanup = getattr(source, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
+        if after is not None:
+            after(None)
+    try:
+        vc.play = play
+    except AttributeError as exc:  # a slotted client: nothing to guard, Hermes still has no text mapping
+        log.debug("meeting-scribe: cannot mute playback: %s", exc)
+
+
+def _conn_state_name(vc: Any) -> Optional[str]:
+    return getattr(getattr(getattr(vc, "_connection", None), "state", None), "name", None)
 
 
 class RecordingSession:
@@ -69,12 +97,15 @@ class RecordingSession:
         self.reason: Optional[str] = None
         self.done = False
         self._writers: dict[int, Writer] = {}
+        self._writer_errors: dict[int, str] = {}
         self._speakers: dict[str, Speaker] = {}
         self._task: Optional[asyncio.Task] = None
+        self._teardown: Optional[asyncio.Task] = None
         self._final_lock = asyncio.Lock()
         self._finished = asyncio.Event()
-        self._nick_before: Optional[str] = None
-        self._nick_changed = False
+        self._ready = asyncio.Event()  # the locked connect phase is over (success or failure)
+        self._unhealthy_since: Optional[float] = None
+        self.consent = Consent(self.guild, channel, text_channel, deps.settings)
 
     @property
     def guild_id(self) -> int:
@@ -86,26 +117,48 @@ class RecordingSession:
 
     # -- start ----------------------------------------------------------------------------------
     async def start(self) -> Meeting:
+        try:
+            await self._connect()
+        except BaseException:
+            self.done = True
+            self._finished.set()
+            raise
+        finally:
+            self._ready.set()
+        assert self.meeting is not None
+        self._task = asyncio.ensure_future(self._run())  # drains even while the consent calls below wait
+        try:
+            await self.consent.announce(t("capture.announce", self.lang, channel=self.channel.name))
+            if not self.done:
+                await self.consent.set_nickname()
+        except BaseException:  # e.g. the dispatch timeout cancelled us: never leave the bot behind
+            await asyncio.shield(self._finalize("error"))
+            raise
+        if self.done:  # stopped while announcing: undo a prefix applied meanwhile
+            await self.consent.restore_nickname()
+        return self.meeting
+
+    async def _connect(self) -> None:
         lock = self.adapter._voice_locks.setdefault(self.guild_id, asyncio.Lock())
         async with lock:
             existing = self.adapter._voice_clients.get(self.guild_id) or getattr(self.guild, "voice_client", None)
             if existing is not None and existing.is_connected():
                 raise Busy(t("capture.busy", self.lang))
             self.vc = await self.channel.connect()
+            mute_playback(self.vc)
             self.adapter._voice_clients[self.guild_id] = self.vc
             try:
                 self.receiver = self.deps.receiver_cls(self.vc, clock=self.deps.clock)
                 self.receiver.start()
                 self.t0 = self.deps.clock()
                 self._note_members()
-                self.meeting = await asyncio.to_thread(self.deps.service.begin_recording, self._new_meeting())
+                # Known before the row exists: live_meeting_ids() must cover it for recover() (W7).
+                self.meeting = self._new_meeting()
+                self.meeting = await asyncio.to_thread(self.deps.service.begin_recording, self.meeting)
             except BaseException:
+                self._stop_receiver()
                 await self._release_voice()
                 raise
-        await self._announce(t("capture.announce", self.lang, channel=self.channel.name))
-        await self._set_nickname()
-        self._task = asyncio.ensure_future(self._run())
-        return self.meeting
 
     def _new_meeting(self) -> Meeting:
         category = getattr(getattr(self.channel, "category", None), "name", "") or ""
@@ -137,8 +190,33 @@ class RecordingSession:
         return sp
 
     # -- loop -----------------------------------------------------------------------------------
-    def _connected(self) -> bool:
-        return self.vc is not None and self.vc.is_connected() and self.adapter._voice_clients.get(self.guild_id) is self.vc
+    def _voice_lost(self, now: float) -> bool:
+        vc = self.vc
+        if vc is None or self.adapter._voice_clients.get(self.guild_id) is not vc:
+            return True  # /voice leave, adapter disconnect, or someone replaced the client
+        if vc.is_connected():
+            self._unhealthy_since = None
+            return False
+        if _conn_state_name(vc) == "disconnected" and getattr(self.guild, "voice_client", None) is not vc:
+            return True  # discord.py tore the client down for good (cleanup ran)
+        if self._unhealthy_since is None:
+            self._unhealthy_since = now
+        grace = float(getattr(vc, "timeout", None) or RECONNECT_GRACE_SECONDS)
+        return now - self._unhealthy_since >= grace  # a resume/move that never recovered
+
+    def _writer_for(self, user_id: int) -> Optional[Writer]:
+        writer = self._writers.get(user_id)
+        if writer is not None or user_id in self._writer_errors:
+            return writer
+        assert self.meeting is not None
+        try:
+            path = self.deps.service.track_path(self.meeting, str(user_id))
+            writer = self._writers[user_id] = self.deps.writer_factory(path, self.t0)
+        except Exception as exc:  # one speaker's encoder failing must not end everyone's meeting
+            self._writer_errors[user_id] = f"{type(exc).__name__}: {exc}"
+            log.error("meeting-scribe: track writer for %s could not start: %s", user_id, exc)
+            return None
+        return writer
 
     def _drain(self) -> None:
         if self.receiver is None or self.meeting is None:
@@ -146,15 +224,13 @@ class RecordingSession:
         for user_id, frames in self.receiver.drain().items():
             if self._speaker_for(user_id) is None:
                 continue
-            writer = self._writers.get(user_id)
-            if writer is None:
-                path = self.deps.service.track_path(self.meeting, str(user_id))
-                writer = self._writers[user_id] = self.deps.writer_factory(path, self.t0)
-            writer.write(frames)
+            writer = self._writer_for(user_id)
+            if writer is not None:
+                writer.write(frames)
 
     async def _run(self) -> None:
         clock = self.deps.clock
-        last_keepalive = last_refresh = self.t0
+        last_keepalive = self.t0
         empty_since: Optional[float] = None
         reason = "error"
         try:
@@ -162,20 +238,18 @@ class RecordingSession:
                 await asyncio.sleep(self.deps.tick)
                 if self.done:
                     return
-                if not self._connected():
+                now = clock()
+                if self._voice_lost(now):
                     reason = "disconnected"
                     break
+                self.receiver.refresh_connection()  # DAVE key/session changes apply on the next tick
                 self._drain()
-                now = clock()
                 if now - last_keepalive >= KEEPALIVE_SECONDS:
                     last_keepalive = now
                     try:
                         self.vc._connection.send_packet(KEEPALIVE)
                     except Exception as exc:  # UDP socket mid-reconnect; the next tick retries
                         log.debug("meeting-scribe keepalive failed: %s", exc)
-                if now - last_refresh >= DAVE_REFRESH_SECONDS:
-                    last_refresh = now
-                    self.receiver.refresh_connection()
                 s = self.deps.settings()
                 if now - self.t0 >= s.limits_max_duration_minutes * 60:
                     reason = "max_duration"
@@ -196,6 +270,7 @@ class RecordingSession:
 
     # -- stop -----------------------------------------------------------------------------------
     async def stop(self, reason: str = "stopped") -> Optional[Meeting]:
+        await self._ready.wait()  # a stop during connect waits for the voice lock phase to settle
         await self._finalize(reason)
         return self.meeting
 
@@ -207,26 +282,37 @@ class RecordingSession:
             task, current = self._task, asyncio.current_task()
             if task is not None and task is not current and not task.done():
                 task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            if self.done:
-                self._finished.set()
-                return
-            self.reason = reason
+                await asyncio.gather(task, return_exceptions=True)
+            if self._teardown is None:
+                if self.done:  # failed during connect: already torn down
+                    self._finished.set()
+                    return
+                self.done = True
+                self.reason = reason
+                self._teardown = asyncio.ensure_future(self._tear_down(reason))
+        await asyncio.shield(self._teardown)
+
+    async def _tear_down(self, reason: str) -> None:
+        try:
             try:
                 self._drain()
             except Exception:
                 log.exception("meeting-scribe final drain failed")
-            self.done = True
             self._stop_receiver()
             await asyncio.to_thread(self._close_writers)
-            await self._restore_nickname()
+            await self.consent.restore_nickname()
             await self._release_voice()
-            await asyncio.to_thread(self._finish, reason in PARTIAL_REASONS)
-            await self._announce(t("capture.stopped", self.lang, reason=t(f"capture.reason_{reason}", self.lang),
-                                   id=self.meeting.id if self.meeting else "-"))
+            try:
+                await asyncio.to_thread(self._finish, reason in PARTIAL_REASONS)
+            except Exception:  # the row stays 'recording'; the owner's recover() closes it later
+                log.exception("meeting-scribe: recording %s could not be finished",
+                              self.meeting.id if self.meeting else "-")
+            await self.consent.announce(t("capture.stopped", self.lang,
+                                          reason=t(f"capture.reason_{reason}", self.lang),
+                                          id=self.meeting.id if self.meeting else "-"))
+        except Exception:
+            log.exception("meeting-scribe: finalize of guild %s failed", self.guild_id)
+        finally:
             self._finished.set()
 
     def finalize_sync(self, reason: str = "shutdown") -> None:
@@ -235,9 +321,19 @@ class RecordingSession:
             return
         self.done = True
         self.reason = reason
-        self._stop_receiver()
-        self._close_writers()
-        self._finish(True)
+        try:
+            self._stop_receiver()
+            self._close_writers()
+            self._finish(True)
+        finally:
+            self._finished_threadsafe()
+
+    def _finished_threadsafe(self) -> None:
+        loop = getattr(self._finished, "_loop", None)
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self._finished.set)
+        else:
+            self._finished.set()
 
     def _stop_receiver(self) -> None:
         if self.receiver is None:
@@ -269,43 +365,7 @@ class RecordingSession:
             return
         if self.adapter._voice_clients.get(self.guild_id) is vc:
             self.adapter._voice_clients.pop(self.guild_id, None)
-        if vc.is_connected():
-            try:
-                await vc.disconnect()
-            except Exception as exc:  # already torn down by discord.py
-                log.debug("meeting-scribe voice disconnect: %s", exc)
-
-    # -- consent --------------------------------------------------------------------------------
-    async def _announce(self, text: str) -> None:
-        if not self.deps.settings().consent_announce:
-            return
-        target = self.text_channel or self.channel
-        try:
-            await target.send(text)
-        except Exception as exc:  # missing Send Messages in the voice text chat must not stop recording
-            log.warning("meeting-scribe: announcement failed in %s: %s", getattr(target, "id", "?"), exc)
-
-    async def _set_nickname(self) -> None:
-        prefix = self.deps.settings().consent_nickname_prefix
-        me = getattr(self.guild, "me", None)
-        if not prefix or me is None:
-            return
-        current = getattr(me, "nick", None)
-        base = current or getattr(me, "display_name", "") or ""
-        if base.startswith(prefix):
-            return
-        try:
-            await me.edit(nick=(prefix + base)[:32])
-        except Exception as exc:  # needs Manage Nicknames; optional by design
-            log.info("meeting-scribe: nickname prefix not applied: %s", exc)
-            return
-        self._nick_before, self._nick_changed = current, True
-
-    async def _restore_nickname(self) -> None:
-        if not self._nick_changed:
-            return
-        self._nick_changed = False
-        try:
-            await self.guild.me.edit(nick=self._nick_before)
-        except Exception as exc:
-            log.info("meeting-scribe: nickname restore failed: %s", exc)
+        try:  # force: also tears down a client that is mid-reconnect (is_connected() False)
+            await vc.disconnect(force=True)
+        except Exception as exc:  # already torn down by discord.py
+            log.debug("meeting-scribe voice disconnect: %s", exc)

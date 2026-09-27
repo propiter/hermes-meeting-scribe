@@ -98,6 +98,7 @@ class FakeConn:
         self.hook: Optional[Callable] = None
         self.listeners: list[Callable] = []
         self.sent: list[bytes] = []
+        self.state = SimpleNamespace(name="connected")
 
     def add_socket_listener(self, cb: Callable) -> None:
         self.listeners.append(cb)
@@ -144,6 +145,8 @@ class FakeVoiceClient:
         self._connection = conn or FakeConn()
         self.connected = True
         self.disconnects = 0
+        self.forced: list[bool] = []
+        self.timeout = 30.0
         self.user = SimpleNamespace(id=9999)
 
     def is_connected(self) -> bool:
@@ -151,6 +154,7 @@ class FakeVoiceClient:
 
     async def disconnect(self, force: bool = False) -> None:
         self.disconnects += 1
+        self.forced.append(force)
         self.connected = False
 
 
@@ -177,6 +181,7 @@ class FakeGuild:
         self.members: dict[int, FakeMember] = {}
         self.channels: list[Any] = []
         self.me = FakeMember(9999, "Hermes", bot=True)
+        self.voice_client: Any = None
 
     def get_member(self, uid: int) -> Optional[FakeMember]:
         return self.members.get(uid) or (self.me if uid == self.me.id else None)

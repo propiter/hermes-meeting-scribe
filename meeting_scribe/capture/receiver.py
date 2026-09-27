@@ -1,10 +1,15 @@
-"""Scribe receiver: Hermes' ``VoiceReceiver`` with wall-clock-stamped buffers (DESIGN §4).
+"""Scribe receiver: Hermes' ``VoiceReceiver`` with timeline-stamped buffers (DESIGN §4, §15).
 
 Hermes' ``_on_packet`` decrypts (NaCl + DAVE) and decodes Opus, then appends PCM with
 ``self._buffers[ssrc].extend(pcm)`` under ``self._lock``. We swap ``_buffers`` for a
-``defaultdict(TimedBuffer)`` so every 20 ms frame is recorded with the wall-clock time it arrived,
-which is what lets :mod:`tracks` align each speaker to the meeting timeline. Nothing else of the
-packet path is copied; the compat probe verifies the seam still exists.
+:class:`_Buffers` mapping of :class:`TimedBuffer` so every 20 ms frame is recorded with the
+(monotonic) time it arrived, which is what lets :mod:`tracks` align each speaker to the meeting
+timeline. Nothing else of the packet path is copied; the compat probe verifies the seam exists.
+
+DAVE (review note): Hermes skips DAVE decryption for an SSRC that SPEAKING has not mapped yet and
+decodes the still-E2EE payload as Opus, which yields noise. While a DAVE session is active, frames
+of an unmapped SSRC are therefore dropped at the seam instead of being attached to the speaker
+once SPEAKING arrives.
 
 The scribe never calls ``check_silence``/``flush_pending`` (they would hand utterances to the
 agent) and ignores ``allowed_user_ids``: a meeting records everyone in the channel.
@@ -12,7 +17,6 @@ agent) and ignores ``allowed_user_ids``: a meeting records everyone in the chann
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 from typing import Any, Callable, Optional
 
 Clock = Callable[[], float]
@@ -21,18 +25,21 @@ _CLASSES: dict[type, type] = {}
 
 
 class TimedBuffer:
-    """Drop-in for the ``bytearray`` Hermes extends; keeps ``(wallclock, pcm)`` frames."""
+    """Drop-in for the ``bytearray`` Hermes extends; keeps ``(time, pcm)`` frames."""
 
-    __slots__ = ("_clock", "frames", "_size")
+    __slots__ = ("clock_fn", "frames", "_size", "_accept")
 
-    def __init__(self, clock: Clock = time.time) -> None:
-        self._clock = clock
+    def __init__(self, clock: Clock = time.monotonic, accept: Optional[Callable[[], bool]] = None) -> None:
+        self.clock_fn = clock
         self.frames: Frames = []
         self._size = 0
+        self._accept = accept
 
     def extend(self, pcm: bytes) -> None:
+        if self._accept is not None and not self._accept():
+            return
         data = bytes(pcm)
-        self.frames.append((self._clock(), data))
+        self.frames.append((self.clock_fn(), data))
         self._size += len(data)
 
     def __len__(self) -> int:
@@ -47,6 +54,18 @@ class TimedBuffer:
         self._size = sum(len(d) for _, d in kept)
 
 
+class _Buffers(dict):
+    """``defaultdict`` whose factory knows the SSRC (needed for the DAVE unmapped-SSRC guard)."""
+
+    def __init__(self, make: Callable[[int], TimedBuffer]) -> None:
+        super().__init__()
+        self._make = make
+
+    def __missing__(self, ssrc: int) -> TimedBuffer:
+        buf = self[ssrc] = self._make(ssrc)
+        return buf
+
+
 def scribe_receiver_class(base: type) -> type:
     """Build (once per base) the ``ScribeReceiver`` subclass of Hermes' ``VoiceReceiver``.
 
@@ -58,13 +77,18 @@ def scribe_receiver_class(base: type) -> type:
     class ScribeReceiver(base):  # type: ignore[valid-type, misc]
         UNMAPPED_MAX_AGE = 5.0  # seconds of audio kept for an SSRC before SPEAKING maps it
 
-        def __init__(self, voice_client: Any, *, clock: Clock = time.time) -> None:
+        def __init__(self, voice_client: Any, *, clock: Clock = time.monotonic) -> None:
             super().__init__(voice_client, allowed_user_ids=None)
             self._clock = clock
-            self._buffers = defaultdict(lambda: TimedBuffer(clock))
+            self._buffers = _Buffers(self._new_buffer)
+
+        def _new_buffer(self, ssrc: int) -> TimedBuffer:
+            def accept() -> bool:  # runs inside Hermes' ``with self._lock`` around extend()
+                return not (self._dave_session and not self._ssrc_to_user.get(ssrc))
+            return TimedBuffer(self._clock, accept)
 
         def refresh_connection(self) -> None:
-            """Re-read DAVE session / transport key after a voice reconnect or DAVE transition."""
+            """Re-read DAVE session / transport key (cheap attribute reads; called every tick)."""
             conn = self._vc._connection
             self._dave_session = getattr(conn, "dave_session", None)
             try:

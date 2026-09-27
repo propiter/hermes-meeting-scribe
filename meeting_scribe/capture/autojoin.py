@@ -6,6 +6,12 @@ gets ONE watcher task that waits ``autojoin.grace_seconds`` while re-checking th
 bursts of join/leave/mute events debounce to a single start. ``busy(guild)`` (a live or starting
 session, or any other voice client such as ``/voice join``) blocks a start: one voice connection
 per guild. Auto-leave is not decided here — the session polls the same human count every tick.
+
+Cooldown (review W2): after a manual ``/meeting stop`` or a ``max_duration`` stop the channel is
+put on cooldown until its human count drops below ``min_humans`` (people left, the meeting is
+over); otherwise the bot's own leave event would re-join 20 s after the user said stop. Voice
+events of bots (including our own) are ignored. ``close()`` may be called from any thread: the
+watchers are cancelled on their own loop (``call_soon_threadsafe``).
 """
 from __future__ import annotations
 
@@ -17,6 +23,7 @@ from typing import Any, Callable, Optional, Protocol
 from ..config import Settings
 
 log = logging.getLogger(__name__)
+COOLDOWN_REASONS = frozenset({"stopped", "max_duration"})
 
 
 class Starter(Protocol):
@@ -42,6 +49,8 @@ class AutoJoiner:
         self._clock = clock
         self._poll = poll
         self._watchers: dict[int, asyncio.Task] = {}
+        self._cooldown: set[int] = set()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def eligible(self, channel: Any) -> bool:
         s = self._settings()
@@ -51,12 +60,30 @@ class AutoJoiner:
             return False
         if _matches(channel, s.autojoin_ignore_channels):
             return False
-        return humans_in(channel) >= s.autojoin_min_humans and not self._starter.busy(channel.guild)
+        enough = humans_in(channel) >= s.autojoin_min_humans
+        if channel.id in self._cooldown:
+            if enough:
+                return False
+            self._cooldown.discard(channel.id)  # the meeting emptied out: auto-join may fire again
+        return enough and not self._starter.busy(channel.guild)
+
+    def note_session_end(self, session: Any) -> None:
+        """Controller callback: a deliberate stop must not be undone by auto-join."""
+        if getattr(session, "reason", None) in COOLDOWN_REASONS:
+            self._cooldown.add(session.channel.id)
 
     async def on_voice_state_update(self, member: Any, before: Any, after: Any) -> None:
+        self._loop = asyncio.get_running_loop()
         for channel in {id(c): c for c in (getattr(before, "channel", None), getattr(after, "channel", None))
                         if c is not None}.values():
+            if getattr(member, "bot", False):
+                self._clear_cooldown_if_quiet(channel)
+                continue
             self._consider(channel)
+
+    def _clear_cooldown_if_quiet(self, channel: Any) -> None:
+        if channel.id in self._cooldown and humans_in(channel) < self._settings().autojoin_min_humans:
+            self._cooldown.discard(channel.id)
 
     def _consider(self, channel: Any) -> None:
         task = self._watchers.get(channel.id)
@@ -85,6 +112,17 @@ class AutoJoiner:
                 del self._watchers[channel.id]
 
     def close(self) -> None:
-        for task in self._watchers.values():
+        loop = self._loop
+        try:
+            on_loop = asyncio.get_running_loop() is loop
+        except RuntimeError:
+            on_loop = False
+        if loop is not None and not on_loop and loop.is_running():
+            loop.call_soon_threadsafe(self._cancel_all)
+        else:
+            self._cancel_all()
+
+    def _cancel_all(self) -> None:
+        for task in list(self._watchers.values()):
             task.cancel()
         self._watchers.clear()

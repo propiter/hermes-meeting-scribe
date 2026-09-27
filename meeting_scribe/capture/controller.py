@@ -49,6 +49,9 @@ def default_writer(ff: Optional[Ffmpeg], path: Any, t0: float, kbps: int) -> Wri
     return TrackWriter(ff, path, t0=t0, bitrate_kbps=kbps)
 
 
+default_writer.requires_ffmpeg = True  # type: ignore[attr-defined]  # start_in fails fast without it
+
+
 def is_voice_channel(channel: Any) -> bool:
     return channel is not None and callable(getattr(channel, "connect", None)) and hasattr(channel, "members")
 
@@ -66,7 +69,7 @@ class CaptureManager:
     def __init__(self, *, service: Callable[[], Any], settings: Callable[[], Settings],
                  ffmpeg: Callable[[], Optional[Ffmpeg]], writer_factory: WriterFactory = default_writer,
                  compat: Optional[Callable[[Any], CompatResult]] = None, tick: float = 0.5,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self._service = service
         self._settings = settings
         self._ffmpeg = ffmpeg
@@ -138,10 +141,12 @@ class CaptureManager:
         return s if s is not None and not s.done else None
 
     def busy(self, guild: Any) -> bool:
+        """A live/starting session or ANY voice client of this guild (ours, ``/voice join``, or one
+        discord.py still holds mid-reconnect in ``guild.voice_client``) blocks a new start."""
         adapter = self.adapter
         vc = adapter._voice_clients.get(int(guild.id)) if adapter is not None else None
         return (int(guild.id) in self._starting or self.session_for(guild.id) is not None
-                or (vc is not None and vc.is_connected()))
+                or (vc is not None and vc.is_connected()) or getattr(guild, "voice_client", None) is not None)
 
     def _dispatch(self, make: Callable[[], Coroutine[Any, Any, str]], pending: str, timeout: float) -> str:
         loop = self._loop
@@ -222,19 +227,22 @@ class CaptureManager:
             raise AlreadyRecording(live)
         if gid in self._starting or self._receiver_cls is None:
             raise Busy(t("capture.busy", self.lang))
+        ff = self._ffmpeg()
+        if ff is None and getattr(self._writer_factory, "requires_ffmpeg", False):
+            raise FfmpegNotFound("ffmpeg is required for live capture")  # before joining the channel
         self._starting.add(gid)
         try:
-            ff = self._ffmpeg()
             kbps = self._settings().audio_bitrate_kbps
             deps = SessionDeps(service=self._service(), settings=self._settings, receiver_cls=self._receiver_cls,
                                writer_factory=lambda path, t0: self._writer_factory(ff, path, t0, kbps),
                                clock=self._clock, tick=self._tick)
             session = RecordingSession(self.adapter, channel, deps, started_by=started_by)
-            await session.start()
+            # Registered BEFORE start (review W7): /meeting stop and live_meeting_ids() see it at once.
             self._sessions[gid] = session
+            asyncio.ensure_future(self._reap(session))
+            await session.start()
         finally:
             self._starting.discard(gid)
-        asyncio.ensure_future(self._reap(session))
         return session
 
     async def _reap(self, session: RecordingSession) -> None:

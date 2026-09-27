@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -170,7 +171,8 @@ async def test_max_duration_stops(world):
 
 async def test_voice_disconnect_finalizes_partial(world):
     s = await started(world)
-    world["voice"].vc.connected = False
+    world["voice"].vc.connected = False  # discord.py gave up: state disconnected, client cleaned up
+    world["voice"].vc._connection.state = SimpleNamespace(name="disconnected")
     await asyncio.wait_for(s.wait(), 1)
     assert s.reason == "disconnected" and world["service"].finished[0][2] is True
 
