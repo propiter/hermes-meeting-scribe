@@ -7,7 +7,6 @@ import tracemalloc
 from pathlib import Path
 from typing import Any, Optional
 
-import pytest
 
 from meeting_scribe.capture.tracks import BYTES_PER_SAMPLE, SAMPLE_RATE, Aligner, Silence, TrackWriter
 

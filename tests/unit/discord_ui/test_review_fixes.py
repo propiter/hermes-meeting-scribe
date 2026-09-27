@@ -11,7 +11,6 @@ import pytest
 
 pytest.importorskip("discord")
 
-from meeting_scribe import discord_ui  # noqa: E402
 from meeting_scribe.config import settings_from_mapping  # noqa: E402
 from meeting_scribe.discord_ui.actions import ButtonActions  # noqa: E402
 REPLY_LIMIT = 1900  # Discord hard limit is 2000
@@ -21,7 +20,8 @@ from meeting_scribe.domain.models import Candidate, SinkResult  # noqa: E402
 from meeting_scribe.storage.artifacts import write_notes  # noqa: E402
 
 from .fakes import FakeAdapter, FakeBot, FakeInteraction  # noqa: E402
-from .test_install import Ctx, install_all, make_adapter, rt  # noqa: E402,F401
+from .test_install import install_all, make_adapter
+from .test_install import rt as rt  # noqa: F401  (fixture)
 from .test_sink import Svc as SinkSvc, Views  # noqa: E402
 
 
