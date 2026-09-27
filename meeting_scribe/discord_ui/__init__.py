@@ -1,4 +1,4 @@
-"""Discord UI (Phase B, DESIGN §8): notes sink, persistent buttons and the platform handler.
+"""Discord UI (Phase B, DESIGN §8, §16): notes/task sink, persistent buttons and the platform handler.
 
 ``install(ctx, runtime)`` registers ONE ``ctx.register_platform_handler('discord', factory)``.
 Hermes calls ``factory(bot, adapter)`` on the gateway loop at every connect (and on plugin
@@ -25,6 +25,7 @@ from typing import Any, Callable, Optional
 
 from ..domain.models import ActionItem, Meeting
 from .actions import ButtonActions
+from .guild import DiscordChannelCatalog
 from .render import RenderOptions
 from .sink import DiscordNotesSink
 
@@ -167,13 +168,10 @@ def install(ctx: Any, runtime: Any) -> UiState:
     from .views import ViewKit  # discord.py needed from here on
 
     holder: dict[str, UiState] = {}
-
-    async def refresh(meeting_id: str) -> None:
-        await holder["s"].sink.refresh(meeting_id)
-
     actions = ButtonActions(service=runtime.service, settings=runtime.settings, owners=runtime.owners,
-                            check_auth=lambda i: _check_auth(holder["s"])(i), refresh=refresh,
-                            project_view=lambda mid, cands: holder["s"].kit.project_view(mid, cands))
+                            check_auth=lambda i: _check_auth(holder["s"])(i), sink=lambda: holder["s"].sink,
+                            project_view=lambda mid, cands: holder["s"].kit.project_view(mid, cands),
+                            move_view=lambda mid, iid, opts: holder["s"].kit.move_view(mid, iid, opts))
     kit = ViewKit(actions)
     sink = DiscordNotesSink(settings=runtime.settings, service=runtime.service, adapter=lambda: holder["s"].adapter,
                             loop=lambda: holder["s"].loop, options=_render_options(runtime), views=kit)
@@ -200,5 +198,9 @@ def install(ctx: Any, runtime: Any) -> UiState:
         on_unload(meeting_scribe_discord_unload)
     _STATES[runtime] = state
     runtime.add_sink(sink)
+    add_catalog = getattr(runtime, "add_catalog", None)
+    if callable(add_catalog):  # the guild's channels become project candidates (§16)
+        add_catalog(DiscordChannelCatalog(adapter=lambda: state.adapter, loop=lambda: state.loop,
+                                          ignore_prefixes=lambda: runtime.settings().channel_name_ignore_prefixes))
     ctx.register_platform_handler("discord", _factory(state))
     return state

@@ -1,89 +1,136 @@
-"""What a click on a notes button does (DESIGN §8), independent of discord.py.
+"""What a click on a task button does (DESIGN §8, §16), independent of discord.py.
 
-Authorization:
-  * Kanban (``ok``, ``allk``): owners only (``owners`` config → first ``DISCORD_ALLOWED_USERS``) —
-    Kanban is the owner's personal task board.
-  * Everything else (``lin``, ``alll``, ``no``, ``prj``, ``psel``): owners, or users Hermes itself
-    authorizes for component clicks (``adapter._component_check_auth``: allowed users/roles,
-    allow-all flags, pairing approvals).
-Service calls hit SQLite/Kanban/Linear, so they run in a worker thread; the interaction is
-deferred first (Discord's 3 s deadline) and answered with an ephemeral follow-up.
+Authorization is per task (:mod:`auth`). Service calls hit SQLite/Kanban/Linear, so they run in a
+worker thread; the interaction is deferred first (Discord's 3 s deadline) and answered with an
+ephemeral follow-up. After an action only THAT task's message (plus its assignee's DM and the index
+counts) is re-rendered; a click that came from an ephemeral panel re-renders the panel too.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Optional, Sequence
+import re
+from typing import Any, Callable, Optional, Sequence
 
 from ..config import Settings
 from ..domain.models import Candidate
 from ..i18n import t
+from .auth import MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, TASK_ACTIONS, check_task
 
 log = logging.getLogger(__name__)
-OWNER_ONLY = frozenset({"ok", "allk"})
 SELECT_LIMIT = 25
 REPLY_LIMIT = 1900  # Discord rejects messages over 2000 characters (review S2)
+_PAGE_RE = re.compile(r"^(?P<scope>[am])(?P<page>\d{1,3})$")
 
 
 def clip_reply(text: str, limit: int = REPLY_LIMIT) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
+def _from_panel(interaction: Any) -> bool:
+    """The click came from an ephemeral panel or a DM (not from a public task message)."""
+    flags = getattr(getattr(interaction, "message", None), "flags", None)
+    return bool(getattr(flags, "ephemeral", False)) or getattr(interaction, "guild", 1) is None
+
+
 class ButtonActions:
     def __init__(self, *, service: Callable[[], Any], settings: Callable[[], Settings],
-                 owners: Callable[[], Sequence[str]], check_auth: Callable[[Any], bool],
-                 refresh: Callable[[str], Awaitable[None]],
-                 project_view: Callable[[str, Sequence[Candidate]], Any]) -> None:
+                 owners: Callable[[], Sequence[str]], check_auth: Callable[[Any], bool], sink: Callable[[], Any],
+                 project_view: Callable[[str, Sequence[Candidate]], Any],
+                 move_view: Callable[[str, str, Sequence[tuple[str, str]]], Any]) -> None:
         self._service = service
         self._settings = settings
         self._owners = owners
         self._check_auth = check_auth
-        self._refresh = refresh
+        self._sink = sink
         self._project_view = project_view
+        self._move_view = move_view
 
     @property
     def lang(self) -> str:
         return self._settings().ui_language
 
-    def is_owner(self, interaction: Any) -> bool:
-        return str(getattr(interaction.user, "id", "")) in {str(o) for o in self._owners()}
+    def _uid(self, interaction: Any) -> str:
+        return str(getattr(interaction.user, "id", ""))
 
-    def authorized(self, interaction: Any, action: str) -> bool:
-        if self.is_owner(interaction):
-            return True
-        if action in OWNER_ONLY:
-            return False
+    def _owner_ids(self) -> frozenset[str]:
+        return frozenset(str(o) for o in self._owners())
+
+    def is_owner(self, interaction: Any) -> bool:
+        return self._uid(interaction) in self._owner_ids()
+
+    def _hermes_allows(self, interaction: Any) -> bool:
         try:
             return bool(self._check_auth(interaction))
         except Exception:  # fail closed
             log.exception("meeting-scribe: component auth check failed")
             return False
 
+    async def _deny(self, interaction: Any, message: str) -> None:
+        await interaction.response.send_message(clip_reply(message), ephemeral=True)
+
+    async def _authorize(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> bool:
+        if action in OPEN_ACTIONS:
+            return True
+        if item_id == "all" or action in MEETING_ACTIONS:  # 0.1 meeting-wide buttons keep their rule
+            if self.is_owner(interaction):
+                return True
+            if action in MEETING_OWNER_ONLY:
+                await self._deny(interaction, t("ui.owner_only", self.lang))
+                return False
+            if self._hermes_allows(interaction):
+                return True
+            await self._deny(interaction, t("ui.not_allowed", self.lang))
+            return False
+        item = await asyncio.to_thread(self._service().repo.get_action_item, meeting_id, item_id)
+        verdict = check_task(action, item, self._uid(interaction), self._owner_ids(), self.lang, item_id)
+        if not verdict.allowed:
+            await self._deny(interaction, verdict.message)
+        return verdict.allowed
+
     async def handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
                      values: Optional[Sequence[str]] = None) -> None:
-        if not self.authorized(interaction, action):
-            key = "ui.owner_only" if action in OWNER_ONLY else "ui.not_allowed"
-            await interaction.response.send_message(clip_reply(t(key, self.lang)), ephemeral=True)
+        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS:
             return
-        if action == "prj":
-            await self._offer_projects(interaction, meeting_id)
+        if not await self._authorize(interaction, action, meeting_id, item_id):
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
         if values is None:
             values = list((getattr(interaction, "data", None) or {}).get("values") or ())
+        if action == "prj":
+            await (self._offer_projects(interaction, meeting_id) if item_id == "all"
+                   else self._offer_channels(interaction, meeting_id, item_id))
+            return
+        if action in OPEN_ACTIONS:
+            await self._panel(interaction, action, meeting_id, item_id)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            reply = await asyncio.to_thread(self._run, action, meeting_id, item_id, list(values or ()))
+            if action == "tsel":
+                reply = await self._move(meeting_id, item_id, list(values or ()))
+            else:
+                reply = await asyncio.to_thread(self._run, action, meeting_id, item_id, list(values or ()))
         except (KeyError, LookupError, ValueError) as exc:
             reply = t("ui.action_failed", self.lang, error=str(exc).strip("'\""))
         except Exception as exc:  # Kanban/Linear outages: tell the clicker, keep the gateway healthy
             log.exception("meeting-scribe button %s failed", action)
             reply = t("ui.action_failed", self.lang, error=f"{type(exc).__name__}: {exc}")
         else:
-            try:
-                await self._refresh(meeting_id)
-            except Exception:  # stale buttons are cosmetic; the action itself succeeded
-                log.exception("meeting-scribe: refreshing notes of %s failed", meeting_id)
+            await self._after(interaction, action, meeting_id, item_id)
         await interaction.followup.send(clip_reply(reply), ephemeral=True)
+
+    async def _after(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> None:
+        sink = self._sink()
+        try:
+            if item_id == "all" or action in MEETING_ACTIONS:
+                await sink.refresh(meeting_id)
+            elif action != "tsel":  # a move already re-published everything
+                await sink.refresh_item(meeting_id, item_id)
+            if _from_panel(interaction) and action in TASK_ACTIONS:
+                view = await sink.task_panel(meeting_id, self._uid(interaction), "m", 0,
+                                             is_owner=self.is_owner(interaction), item_id=item_id)
+                await interaction.edit_original_response(view=view)
+        except Exception:  # stale buttons are cosmetic; the action itself succeeded
+            log.exception("meeting-scribe: refreshing tasks of %s failed", meeting_id)
 
     def _run(self, action: str, meeting_id: str, item_id: str, values: list[str]) -> str:
         svc = self._service()
@@ -106,6 +153,51 @@ class ButtonActions:
             chosen = svc.set_project(meeting_id, values[0])
             return t("ui.project_saved", lang, project=chosen.name)
         raise ValueError(f"unknown action {action}")
+
+    async def _move(self, meeting_id: str, item_id: str, values: list[str]) -> str:
+        if not values:
+            raise ValueError(t("ui.no_selection", self.lang))
+        mention = await self._sink().move_item(meeting_id, item_id, values[0])
+        item = await asyncio.to_thread(self._service().repo.get_action_item, meeting_id, item_id)
+        project = (getattr(item, "project", None) or getattr(item, "project_hint", None) or mention)
+        return t("tasks.moved", self.lang, channel=mention, project=project)
+
+    async def _panel(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> None:
+        scope, page = "m", 0
+        m = _PAGE_RE.match(item_id) if action == "pg" else None
+        if m:
+            scope, page = m["scope"], int(m["page"])
+        in_place = action == "pg"
+        if in_place:
+            await interaction.response.defer()  # updates the panel message itself
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            view = await self._sink().task_panel(meeting_id, self._uid(interaction), scope, page,
+                                                 is_owner=self.is_owner(interaction))
+        except Exception as exc:
+            log.exception("meeting-scribe: task panel of %s failed", meeting_id)
+            await interaction.followup.send(clip_reply(t("ui.action_failed", self.lang, error=str(exc))),
+                                            ephemeral=True)
+            return
+        if in_place:
+            await interaction.edit_original_response(view=view)
+        else:
+            await interaction.followup.send(view=view, ephemeral=True)
+
+    async def _offer_channels(self, interaction: Any, meeting_id: str, item_id: str) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            options = list(await self._sink().move_options(meeting_id, item_id))[:SELECT_LIMIT]
+        except Exception as exc:
+            await interaction.followup.send(clip_reply(t("ui.action_failed", self.lang, error=str(exc))),
+                                            ephemeral=True)
+            return
+        if not options:
+            await interaction.followup.send(t("ui.no_projects", self.lang), ephemeral=True)
+            return
+        await interaction.followup.send(t("tasks.pick_channel", self.lang),
+                                        view=self._move_view(meeting_id, item_id, options), ephemeral=True)
 
     async def _offer_projects(self, interaction: Any, meeting_id: str) -> None:
         # Candidate lookup can hit Linear over HTTP: defer first, Discord's deadline is 3 s (S1).

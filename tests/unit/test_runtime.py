@@ -218,3 +218,12 @@ def test_resolved_key_wins_over_first_name_match(tmp_path, meeting):
     m = dc_replace(meeting, project="Website", project_key="linear:B")
     assert rt.item_sinks()["linear"]._project_for(m, Notes("t", "t", "s"), ActionItem(id="a1", title="x")) == b
     rt.close()
+
+
+def test_extra_catalogs_join_the_candidates(tmp_path):
+    """Phase B adds the Discord channels of the guild as project candidates (DESIGN §16)."""
+    h, _ = host(tmp_path)
+    rt = Runtime(h)
+    extra = object()
+    rt.add_catalog(extra)
+    assert rt.catalogs()[-1] is extra

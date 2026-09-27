@@ -1,4 +1,4 @@
-"""discord.py glue: persistent ``DynamicItem`` buttons and the project select (DESIGN §8).
+"""discord.py glue: persistent ``DynamicItem`` buttons, selects and the task panel (DESIGN §8, §16).
 
 Each :class:`ViewKit` builds its OWN DynamicItem subclasses bound to one ``ButtonActions``: Hermes
 may run several profiles/bots in one process and each bot must route clicks to its own runtime.
@@ -15,9 +15,11 @@ import discord
 
 from ..domain.models import Candidate
 from .render import ButtonSpec
+from .render_tasks import TaskPanel
 
-BUTTON_TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
-SELECT_TEMPLATE = r"mscribe:(?P<action>psel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg):(?P<meeting>[a-z0-9]{1,16}):"
+                   r"(?P<item>[A-Za-z0-9_-]{1,40})")
+SELECT_TEMPLATE = r"mscribe:(?P<action>psel|tsel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _STYLES = {"success": discord.ButtonStyle.success, "primary": discord.ButtonStyle.primary,
            "danger": discord.ButtonStyle.danger, "secondary": discord.ButtonStyle.secondary}
 
@@ -55,7 +57,7 @@ class ViewKit:
                 super().__init__(select)
                 m = re.fullmatch(SELECT_TEMPLATE, select.custom_id or "")
                 assert m is not None
-                self.meeting_id, self.item_id = m["meeting"], m["item"]
+                self.action, self.meeting_id, self.item_id = m["action"], m["meeting"], m["item"]
 
             @classmethod
             async def from_custom_id(cls, interaction: Any, item: Any, match: re.Match[str]) -> "ScribeSelect":
@@ -64,7 +66,7 @@ class ViewKit:
 
             async def callback(self, interaction: Any) -> None:
                 values = list((getattr(interaction, "data", None) or {}).get("values") or ())
-                await kit.handler.handle(interaction, "psel", self.meeting_id, self.item_id, values)
+                await kit.handler.handle(interaction, self.action, self.meeting_id, self.item_id, values)
 
         self.button_cls = ScribeButton
         self.select_cls = ScribeSelect
@@ -72,17 +74,47 @@ class ViewKit:
     def register(self, bot: Any) -> None:
         bot.add_dynamic_items(self.button_cls, self.select_cls)
 
+    def _button(self, spec: ButtonSpec, *, row: Optional[int]) -> Any:
+        button = discord.ui.Button(label=_clip(spec.label, 80), custom_id=spec.custom_id,
+                                   style=_STYLES.get(spec.style, discord.ButtonStyle.secondary),
+                                   emoji=spec.emoji, row=row)
+        item = self.button_cls(button)
+        if row is not None:
+            item.row = row
+        return item
+
     def view(self, buttons: Sequence[ButtonSpec]) -> Optional[discord.ui.View]:
         if not buttons:
             return None
         view = discord.ui.View(timeout=None)
         for spec in buttons:
-            button = discord.ui.Button(label=_clip(spec.label, 80), custom_id=spec.custom_id,
-                                       style=_STYLES.get(spec.style, discord.ButtonStyle.secondary),
-                                       emoji=spec.emoji, row=spec.row)
-            item = self.button_cls(button)
-            item.row = spec.row
-            view.add_item(item)
+            view.add_item(self._button(spec, row=spec.row))
+        return view
+
+    def panel_view(self, panel: TaskPanel) -> discord.ui.LayoutView:
+        """Components v2: header, then per task its text with ITS button row right under it, then nav."""
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.TextDisplay(panel.header))
+        for block in panel.blocks:
+            view.add_item(discord.ui.TextDisplay(block.content))
+            if block.buttons:
+                row: discord.ui.ActionRow = discord.ui.ActionRow()
+                for spec in block.buttons[:5]:
+                    row.add_item(self._button(spec, row=None))
+                view.add_item(row)
+        if panel.nav:
+            nav: discord.ui.ActionRow = discord.ui.ActionRow()
+            for spec in panel.nav[:5]:
+                nav.add_item(self._button(spec, row=None))
+            view.add_item(nav)
+        return view
+
+    def move_view(self, meeting_id: str, item_id: str, options: Sequence[tuple[str, str]]) -> discord.ui.View:
+        opts = [discord.SelectOption(label=_clip(label), value=str(value)) for value, label in options][:25]
+        select = discord.ui.Select(custom_id=f"mscribe:tsel:{meeting_id}:{item_id}", options=opts, min_values=1,
+                                   max_values=1)
+        view = discord.ui.View(timeout=None)
+        view.add_item(self.select_cls(select))
         return view
 
     def send_kwargs(self) -> dict[str, Any]:

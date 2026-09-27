@@ -123,10 +123,16 @@ async def test_button_auth_uses_owners_and_hermes_helper(rt, monkeypatch):
     ctx.handlers["discord"][0](adapter._client, adapter)
     actions = discord_ui.state_for(rt).actions
     user = lambda uid: SimpleNamespace(user=SimpleNamespace(id=uid))  # noqa: E731
-    assert actions.authorized(user(77), "lin") and not actions.authorized(user(78), "lin")
-    assert not actions.authorized(user(77), "ok")  # Kanban: owners only
+    # Hermes' helper still gates the 0.1 meeting-wide buttons; task buttons are per assignee (§16).
+    assert actions._hermes_allows(user(77)) and not actions._hermes_allows(user(78))
+    assert not actions.is_owner(user(77))
     rt.set_config("owners", ["77"])
-    assert actions.authorized(user(77), "ok")
+    assert actions.is_owner(user(77))
+
+
+def test_install_adds_the_discord_channels_catalog(rt, monkeypatch):
+    install_all(rt, monkeypatch)
+    assert any(getattr(c, "name", "") == "discord" for c in rt.catalogs())
 
 
 def test_unload_shuts_capture_down(rt, monkeypatch):

@@ -17,13 +17,14 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from ..analyze.projects import find_candidate, gather_candidates
 from ..config import Settings
 from ..domain.models import (
-    ActionStatus, Candidate, Meeting, MeetingState, SinkResult, Speaker, Stage,
+    ActionItem, ActionStatus, Candidate, Meeting, MeetingState, SinkResult, Speaker, Stage,
 )
 from ..domain.ports import Clock, ProjectCatalog
 from ..storage.artifacts import read_notes, write_notes
 from ..storage.layout import Layout
 from ..storage.repo import Repository
 from .runner import PipelineRunner
+from .task_moves import apply_move
 
 
 class MeetingService:
@@ -142,6 +143,11 @@ class MeetingService:
         if self.repo.get_action_item(meeting.id, item_id) is None:
             raise KeyError(item_id)
         self.repo.set_action_status(meeting.id, item_id, ActionStatus.DISMISSED)
+
+    def move_item(self, meeting_id: str, item_id: str, channel_id: str, name: str) -> ActionItem:
+        """📁: file one task under a Discord channel, and learn the mapping (DESIGN §16)."""
+        meeting = self.require(meeting_id)
+        return apply_move(self.repo, self.folder(meeting), meeting, item_id, channel_id, name)
 
     # -- projects & people --------------------------------------------------------------------
     def candidates(self, meeting: Meeting) -> list[Candidate]:

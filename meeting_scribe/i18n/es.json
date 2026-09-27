@@ -91,6 +91,7 @@
   "tasks.pick_channel": "¿A dónde pertenece esta tarea?",
   "tasks.thread_name": "📋 {title} · {date}",
   "tasks.uncertain": "proyecto no seguro — confirma con 📁",
+  "tasks.unknown": "No encontré la tarea {item} (quizá la reunión se reprocesó).",
   "transcript.title": "Transcripción — {title}",
   "ui.action_failed": "No se pudo hacer: {error}",
   "ui.approved": "Enviada a {sink}: {ref}",

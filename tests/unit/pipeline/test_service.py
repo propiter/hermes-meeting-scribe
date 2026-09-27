@@ -107,3 +107,16 @@ def test_status_and_search(prepo, layout, settings, clock, meeting):
     assert st["queued"] == 0 and st["recent"][0]["id"] == m.id
     assert service.search("informe")[0]["meeting_id"] == m.id
     assert service.find(m.id[:4]).id == m.id
+
+
+def test_move_item_files_the_task_under_a_channel_and_learns(prepo, layout, settings, clock, meeting):
+    service, runner, _ = svc(prepo, layout, settings, clock)
+    m = _processed(service, runner, prepo, layout, meeting)
+    moved = service.move_item(m.id, "a1", "502", "nebula")
+    assert moved.project == "nebula" and moved.project_key == "discord:502"
+    assert prepo.get_action_item(m.id, "a1").project_key == "discord:502"
+    assert prepo.project_channel("nebula") == "502"
+    notes = read_notes(layout.meeting_folder(m))
+    assert next(a for a in notes.action_items if a.id == "a1").project == "nebula"
+    with pytest.raises(KeyError):
+        service.move_item(m.id, "nope", "502", "nebula")

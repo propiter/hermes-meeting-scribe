@@ -63,6 +63,7 @@ class Runtime:
         self.clock = SystemClock()
         self.capture: Optional[CaptureController] = None
         self._extra_sinks: list[Sink] = []
+        self._extra_catalogs: list[ProjectCatalog] = []
         self._lock = threading.RLock()
         self._repos: dict[Path, Repository] = {}
         self._services: dict[Path, MeetingService] = {}
@@ -104,7 +105,12 @@ class Runtime:
         cats: list[ProjectCatalog] = list(self.host.project_sources())
         cats.append(LearnedCatalog(self.repo()))
         cats.append(CallableCatalog("linear", linear_projects(self.linear_backend)))
+        cats.extend(self._extra_catalogs)
         return cats
+
+    def add_catalog(self, catalog: ProjectCatalog) -> None:
+        """Phase B adds the guild's Discord channels as project candidates (DESIGN §16)."""
+        self._extra_catalogs.append(catalog)
 
     def project_for(self, meeting: Meeting, notes: Notes, item: ActionItem, *,
                     sources: Optional[Sequence[str]] = None) -> Optional[Candidate]:

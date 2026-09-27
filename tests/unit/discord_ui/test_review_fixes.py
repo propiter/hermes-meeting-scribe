@@ -124,9 +124,10 @@ class ActSvc:
 def actions(svc: ActSvc) -> ButtonActions:
     async def refresh(mid: str) -> None:
         return None
+    sink = SimpleNamespace(refresh=refresh, refresh_item=lambda mid, iid: refresh(mid))
     return ButtonActions(service=lambda: svc, settings=lambda: settings_from_mapping({}), owners=lambda: ("11",),
-                         check_auth=lambda i: True, refresh=refresh,
-                         project_view=lambda mid, cands: ("select", mid))
+                         check_auth=lambda i: True, sink=lambda: sink,
+                         project_view=lambda mid, cands: ("select", mid), move_view=lambda *a: ("move",))
 
 
 async def test_project_picker_defers_before_the_catalog_lookup():

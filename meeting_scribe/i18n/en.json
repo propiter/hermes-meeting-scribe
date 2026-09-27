@@ -91,6 +91,7 @@
   "tasks.pick_channel": "Where does this task belong?",
   "tasks.thread_name": "📋 {title} · {date}",
   "tasks.uncertain": "project not certain — confirm with 📁",
+  "tasks.unknown": "Task {item} was not found (maybe the meeting was reprocessed).",
   "transcript.title": "Transcript — {title}",
   "ui.action_failed": "Could not do that: {error}",
   "ui.approved": "Sent to {sink}: {ref}",
