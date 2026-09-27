@@ -62,6 +62,23 @@ def _iso_date(value: Any) -> Optional[str]:
         return None
 
 
+def _seconds(value: Any) -> Optional[float]:
+    """``3.5``, ``"3.5"``, ``"12:30"`` (mm:ss) or ``"1:02:03"`` → seconds; anything else → None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value >= 0 else None
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+        return float(raw)
+    m = re.fullmatch(r"(?:(\d+):)?(\d{1,2}):(\d{2}(?:\.\d+)?)", raw)
+    if not m:
+        return None
+    return int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+
+
 def _conf(value: Any) -> float:
     try:
         return min(1.0, max(0.0, float(value)))
@@ -97,7 +114,6 @@ class LlmAnalyzer:
                 continue
             owner = match_owner(it.get("owner_speaker_id"), it.get("owner_name"), speakers)
             conf = _conf(it.get("project_confidence"))
-            t0 = it.get("t0")
             title = " ".join(str(it["title"]).split())
             item = ActionItem(
                 id=action_item_id(title, owner.user_id if owner else None), title=title,
@@ -108,7 +124,7 @@ class LlmAnalyzer:
                 due=_iso_date(it.get("due")),
                 project=self._candidate(it.get("project"), conf, candidates, min_conf),
                 project_confidence=conf, quote=str(it.get("quote") or "").strip(),
-                t0=float(t0) if isinstance(t0, (int, float)) and not isinstance(t0, bool) else None)
+                t0=_seconds(it.get("t0")))
             out.setdefault(item.id, item)
         return tuple(out.values())
 

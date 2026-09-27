@@ -3,6 +3,7 @@ plugin validator's sandbox) never need a running gateway."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from .domain.models import Candidate, Meeting
 
+log = logging.getLogger(__name__)
 AUX_TASK = "meeting_scribe"
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
@@ -37,9 +39,13 @@ class HermesStructuredLLM:
 
     def complete_json(self, *, instructions: str, text: str, json_schema: Mapping[str, Any],
                       schema_name: str) -> Mapping[str, Any]:
-        result = self._llm().complete_structured(
-            instructions=instructions, input=[{"type": "text", "text": text}], json_schema=dict(json_schema),
-            schema_name=schema_name, task=AUX_TASK, timeout=self._timeout, purpose="meeting analysis")
+        base = dict(instructions=instructions, input=[{"type": "text", "text": text}], schema_name=schema_name,
+                    task=AUX_TASK, timeout=self._timeout, purpose="meeting analysis")
+        try:
+            result = self._llm().complete_structured(json_schema=dict(json_schema), **base)
+        except ValueError as exc:  # Hermes' schema validation; our normaliser copes with the variants
+            log.warning("meeting-scribe: structured output rejected (%s); retrying in plain JSON mode", exc)
+            result = self._llm().complete_structured(json_mode=True, **base)
         parsed = getattr(result, "parsed", None)
         return parsed if isinstance(parsed, Mapping) else parse_json_text(getattr(result, "text", ""))
 

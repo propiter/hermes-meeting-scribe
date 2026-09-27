@@ -133,3 +133,24 @@ def test_cyrillic_owner_name_matches_speaker():
     speakers = [Speaker("11", "Иван Петров"), Speaker("12", "Ана")]
     assert match_owner(None, "иван петров", speakers).user_id == "11"
     assert match_owner(None, "Ана", speakers).user_id == "12"
+
+
+@pytest.mark.parametrize("patch,expect_t0", [
+    ({"quote": None}, 3.5), ({"priority": "high"}, 3.5), ({"project_confidence": None}, 3.5),
+    ({"t0": "12:30"}, 750.0), ({"t0": "1:02:03"}, 3723.0), ({"t0": "3.5"}, 3.5), ({"t0": "soon"}, None),
+    ({"owner_speaker_id": 11}, 3.5),
+])
+def test_normaliser_handles_loose_llm_variants(meeting, utterances, patch, expect_t0):
+    """Review finding 8: the loosened schema lets these through; the normaliser must cope."""
+    item = {"title": "Enviar credenciales", "owner_speaker_id": "11", "t0": 3.5, **patch}
+    llm = FakeLLM(lambda name, text: full(action_items=[item], topics=None, decisions=None, language=None))
+    notes = analyzer(llm).analyze(meeting, utterances, CANDS)
+    (a,) = notes.action_items
+    assert a.title == "Enviar credenciales" and a.t0 == expect_t0 and a.quote == ""
+    assert a.owner_speaker_id == "11" and notes.topics == () and notes.decisions == ()
+
+
+def test_schemas_only_require_what_extract_needs():
+    item = NOTES_SCHEMA["properties"]["action_items"]["items"]
+    assert item["required"] == ["title"] and item.get("additionalProperties", True) is not False
+    assert NOTES_SCHEMA.get("additionalProperties", True) is not False
