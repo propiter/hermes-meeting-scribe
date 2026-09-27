@@ -77,7 +77,9 @@ proveedor de LLM.
 
 Una reunión pasa por estos estados: `recording → captured → transcribing → transcribed → analyzing →
 analyzed → delivering → done`. Si una etapa falla, se reintenta sola con espera creciente. Cuando se
-agotan los reintentos, `reprocess` la retoma desde esa etapa.
+agotan los reintentos, `reprocess` la retoma desde esa etapa. Una grabación en la que nadie habló
+termina como `empty` («Sin audio: descartada»): no es un error, no se reintenta, no se publica nada
+y no hay nada que reprocesar.
 
 ## Requisitos
 

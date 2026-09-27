@@ -179,6 +179,8 @@ class MeetingCommands:
         meeting = self.service.find(args[0])
         if meeting is None:
             return t("cmd.not_found", lang, id=args[0])
+        if meeting.state is MeetingState.EMPTY:
+            return t("cmd.reprocess_empty", lang, id=meeting.id)
         used = self.service.effective_stage(meeting, stage)
         self.service.reprocess(meeting.id, stage)
         reply = t("cmd.reprocess_queued", lang, id=meeting.id, stage=stage_label(used, lang, redo=True))

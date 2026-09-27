@@ -115,14 +115,21 @@ class MeetingService:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def finish_recording(self, meeting_id: str, *, speakers: Sequence[Speaker] = (), partial: bool = False) -> Meeting:
+    def finish_recording(self, meeting_id: str, *, speakers: Sequence[Speaker] = (), partial: bool = False,
+                         heard: bool = True) -> Meeting:
+        """``heard=False``: the capture never received audio from anyone, so the meeting ends
+        ``empty`` right away (no job, no transcription, nothing published)."""
         meeting = self.repo.get_meeting(meeting_id)
         if meeting is None:
             raise KeyError(meeting_id)
         merged = {s.user_id: s for s in meeting.speakers}
         merged.update({s.user_id: s for s in speakers})
         meeting = replace(meeting, speakers=tuple(merged.values()), ended_at=meeting.ended_at or self.clock.now(),
-                          partial=meeting.partial or partial).with_state(MeetingState.CAPTURED)
+                          partial=meeting.partial or partial)
+        if not heard:
+            log.info("meeting-scribe %s: nobody was heard; discarded without processing", meeting.id)
+            return self.runner.stages.discard(meeting)
+        meeting = meeting.with_state(MeetingState.CAPTURED)
         meeting = self.runner.stages.persist(meeting)
         self.runner.enqueue(meeting.id, Stage.TRANSCRIBE)
         return meeting

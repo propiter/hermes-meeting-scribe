@@ -205,3 +205,16 @@ def test_google_status_never_exposes_tokens(repo, tmp_path):
     blob = json.dumps(st)
     for secret in ("RTOKEN", "ATOKEN", "CSECRET", "cid", "ya29.secretsecret"):
         assert secret not in blob
+
+
+def test_discarded_recordings_have_their_own_group_not_failed(repo, tmp_path, meeting):
+    from meeting_scribe.desktop.queries import STATE_GROUPS
+
+    assert sorted(s for g in STATE_GROUPS.values() for s in g) == sorted(s.value for s in MeetingState)
+    repo.save_meeting(replace(meeting, id="e0", state=MeetingState.EMPTY))
+    repo.save_meeting(replace(meeting, id="f0", state=MeetingState.FAILED))
+    lib = Library(repo, tmp_path)
+    facets = lib.facets()
+    assert facets["states"]["empty"] == 1 and facets["states"]["failed"] == 1
+    assert [m["id"] for m in lib.meetings(state="empty")["items"]] == ["e0"]
+    assert [m["id"] for m in lib.meetings(state="failed")["items"]] == ["f0"]

@@ -95,7 +95,18 @@ CREATE INDEX desktop_commands_state ON desktop_commands(state, created_at);
 _V6 = """
 ALTER TABLE desktop_commands ADD COLUMN owner TEXT;
 """
-_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6)
+# v7: a recording in which nobody was heard is ``empty`` (discarded), no longer ``failed``. Rows an
+# older version parked as failed for exactly that reason ("no audio tracks" while transcribing)
+# are reclassified; every other failure is left alone. Data-only and idempotent (it only matches
+# rows still ``failed``); the ``meta.json`` mirror is rewritten the next time the row is saved.
+_V7 = """
+UPDATE meetings SET state='empty', data=json_set(data, '$.state', 'empty')
+  WHERE state='failed' AND id IN (SELECT meeting_id FROM jobs WHERE state='failed'
+    AND failed_stage='transcribe' AND error LIKE 'TranscriptionError: no audio tracks in %');
+UPDATE jobs SET state='done', error=NULL, failed_stage=NULL, next_retry_at=NULL, owner=NULL, heartbeat=NULL
+  WHERE state='failed' AND meeting_id IN (SELECT id FROM meetings WHERE state='empty');
+"""
+_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7)
 SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 

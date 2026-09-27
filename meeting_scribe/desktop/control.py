@@ -17,6 +17,7 @@ import re
 import time
 from typing import Any, Mapping
 
+from ..domain.errors import NothingToReprocess
 from ..domain.models import MeetingState, Stage
 from ..llm_config import redact
 from ..storage.owner import process_owner_id
@@ -43,6 +44,8 @@ def _refuse_busy(repo: Any, meeting: Any) -> None:
     job = repo.get_job(meeting.id)
     if meeting.state == MeetingState.RECORDING:
         raise ValueError("meeting is still recording")
+    if meeting.state == MeetingState.EMPTY:
+        raise NothingToReprocess("no audio was captured; there is nothing to reprocess")
     if job is not None and job.state == "running":
         raise ValueError("meeting is being processed right now; try again when the stage finishes")
 

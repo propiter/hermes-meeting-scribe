@@ -73,7 +73,9 @@ Audio never leaves your machine. Only transcript text is sent, and only to your 
 
 A meeting moves through these states: `recording → captured → transcribing → transcribed →
 analyzing → analyzed → delivering → done`. A failed stage is retried automatically with backoff.
-Once the retries are used up, `reprocess` resumes from that stage.
+Once the retries are used up, `reprocess` resumes from that stage. A recording in which nobody
+spoke ends as `empty` ("No audio: discarded"): not an error, no retries, nothing published, and
+nothing to reprocess.
 
 ## Requirements
 

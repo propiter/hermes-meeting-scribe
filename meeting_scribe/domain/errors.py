@@ -23,5 +23,16 @@ class NotesNotReady(ValueError):
     """The meeting has no notes yet (still being processed)."""
 
 
+class EmptyRecording(Exception):
+    """The recording holds no voice at all (no track, or only silence the transcriber drops).
+
+    Not a failure: the pipeline ends the meeting as ``empty`` without retrying, spending LLM or
+    publishing anything."""
+
+
+class NothingToReprocess(ValueError):
+    """The meeting was discarded because no audio was captured; there is nothing to redo."""
+
+
 class ChannelUnavailable(LookupError):
     """The Discord channel picked for a task is gone or the bot cannot post there."""

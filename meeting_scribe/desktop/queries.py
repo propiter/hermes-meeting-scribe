@@ -31,6 +31,7 @@ STATE_GROUPS: dict[str, tuple[str, ...]] = {
     "processing": ("captured", "transcribing", "transcribed", "analyzing", "analyzed", "delivering"),
     "done": ("done",),
     "failed": ("failed",),
+    "empty": ("empty",),  # nobody was heard: discarded, never "needs attention"
 }
 WAITING_KV = "pipeline.waiting_destination."
 ARTIFACTS = ("notes.json", "recording.ogg", "recording.mka", "transcript.json")

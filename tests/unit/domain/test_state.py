@@ -19,7 +19,7 @@ def test_happy_path_is_allowed():
     assert state is MeetingState.DONE
 
 
-@pytest.mark.parametrize("state", [s for s in MeetingState if s not in (MeetingState.DONE, MeetingState.FAILED)])
+@pytest.mark.parametrize("state", [s for s in MeetingState if not s.terminal])
 def test_every_active_state_can_fail(state):
     assert transition(state, MeetingState.FAILED) is MeetingState.FAILED
 
@@ -63,3 +63,18 @@ def test_stage_order_and_next_stage():
     assert Stage.parse("transcribe") is Stage.TRANSCRIBE
     with pytest.raises(ValueError):
         Stage.parse("nope")
+
+
+def test_empty_is_terminal_reachable_from_capture_and_processing_and_never_rewound():
+    assert MeetingState.EMPTY.terminal
+    for src in (MeetingState.RECORDING, MeetingState.CAPTURED, MeetingState.TRANSCRIBING,
+                MeetingState.TRANSCRIBED, MeetingState.ANALYZING):
+        assert transition(src, MeetingState.EMPTY) is MeetingState.EMPTY
+    for src in (MeetingState.DONE, MeetingState.FAILED, MeetingState.DELIVERING):
+        with pytest.raises(InvalidTransition):
+            transition(src, MeetingState.EMPTY)
+    with pytest.raises(InvalidTransition):
+        transition(MeetingState.EMPTY, MeetingState.FAILED)
+    with pytest.raises(InvalidTransition):
+        transition(MeetingState.EMPTY, MeetingState.CAPTURED, rewind=True)
+    assert stage_after(MeetingState.EMPTY) is None

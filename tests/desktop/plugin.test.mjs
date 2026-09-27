@@ -246,3 +246,21 @@ test('settings form is generated from the schema with origins and models', opts,
   assert.doesNotMatch(html, /ms-set-llm_provider/)
   assert.match(html, /for="ms-set-autojoin_min_humans"/)
 })
+
+test('a discarded recording (no audio) is a label and a filter of its own, not a failure', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('library'); mod.$selected.set(null)
+  const empty = { ...MEETING, id: 'e1', title: 'Quiet room', state: 'empty' }
+  const list = { items: [empty], next_cursor: null, facets: { ...LIST.facets, states: { ...LIST.facets.states, empty: 1 } } }
+  let html = await render(createElement(mod.MeetingsPage), { '/v1/meetings?limit=30': list }, 'es')
+  assert.match(html, /Sin audio: descartada/)
+  assert.match(html, /value="empty"/)
+  assert.doesNotMatch(html, /Requiere atención<\/span>/)
+  html = await render(createElement(mod.DetailView, { id: 'e1' }), {
+    '/v1/meetings/e1': { ...DETAIL, meeting: empty, notes: null, tasks: [], transcript_total: 0, waiting_destination: null,
+      job: { state: 'done', stage: 'transcribe', attempts: 0, failed_stage: null, error: '' } },
+    '/v1/meetings/e1/transcript?limit=200': { items: [], total: 0, next_cursor: null }, '/v1/status': STATUS
+  }, 'en')
+  assert.match(html, /No audio was captured/)
+  assert.doesNotMatch(html, /Reprocess…/)
+})

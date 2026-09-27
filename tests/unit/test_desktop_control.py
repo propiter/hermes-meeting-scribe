@@ -204,3 +204,9 @@ def test_gateway_worker_consumes_commands_and_publishes_heartbeat(tmp_path, meet
         assert float(repo.kv_get(control.HEARTBEAT_KV)) > 0
     finally:
         rt.close()
+
+
+def test_submit_refuses_a_discarded_recording(repo, meeting):
+    repo.save_meeting(replace(meeting, state=MeetingState.EMPTY))
+    with pytest.raises(ValueError, match="no audio"):
+        Commands(repo).submit("request-e", meeting.id, {"action": "reprocess", "stage": "transcribe"})

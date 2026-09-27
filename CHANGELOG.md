@@ -81,6 +81,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **A recording in which nobody spoke is discarded, not failed.** When someone joined and left
+  before speaking (auto-join), the pipeline raised `no audio tracks`, retried three times and left
+  the meeting `failed`, cluttering `status`, `/meeting list`, doctor and the Desktop page. Now the
+  meeting ends in a new terminal state `empty` ("No audio: discarded" / «Sin audio: descartada»):
+  decided by the capture when no person's audio ever arrived, and by the pipeline when there are no
+  tracks, no utterances or an empty transcript. No retries, no LLM call, nothing published; the
+  job ends `done` without error. The stop message says "No audio was captured; there are no notes
+  to prepare." instead of promising notes. `reprocess` of an `empty` meeting is refused (chat,
+  CLI exit 1, Desktop). Desktop gets its own `empty` filter/facet and label, and hides the
+  reprocess button for it. Tracks, scratch and utterances are removed; the folder with `meta.json`
+  stays. Schema v7 reclassifies existing `failed` rows whose job failed at transcribe with
+  `TranscriptionError: no audio tracks in …` (idempotent, data only; other failures untouched).
+
 - **Notes left in a DM by an older version are moved only on request and safely**: nothing moves on
   button clicks, 📁 moves or retries; `reprocess <id> --from deliver` moves the meeting to an
   explicitly configured channel (never the automatic one), publishing there first and deleting the

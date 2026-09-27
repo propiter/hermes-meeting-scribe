@@ -18,7 +18,8 @@ from ..analyze.reconcile import reconcile_ids
 from ..audio.archive import build_archive
 from ..audio.ffmpeg import Ffmpeg
 from ..config import Settings
-from ..domain.models import Meeting, SinkResult, Stage
+from ..domain.errors import EmptyRecording
+from ..domain.models import Meeting, MeetingState, SinkResult, Stage
 from ..domain.ports import Analyzer, ProjectCatalog, Sink, Transcriber
 from ..storage.artifacts import (
     NOTES_JSON, read_notes, read_transcript, write_meta, write_notes, write_transcript, write_transcript_md,
@@ -89,6 +90,18 @@ class Stages:
         write_meta(folder, meeting)
         return meeting
 
+    def discard(self, meeting: Meeting) -> Meeting:
+        """End a meeting in which no voice was captured (DESIGN §9, ``empty``).
+
+        The folder and its ``meta.json`` stay (the row points at them and they cost nothing); the
+        per-speaker tracks, the decoding scratch and any transcript are removed whatever
+        ``audio.retention`` says: there is no speech in them worth keeping."""
+        folder = self.folder(meeting)
+        shutil.rmtree(Layout.tracks_dir(folder), ignore_errors=True)
+        shutil.rmtree(Layout.work_dir(folder), ignore_errors=True)
+        self.repo.replace_utterances(meeting.id, [])
+        return self.persist(meeting.with_state(MeetingState.EMPTY))
+
     def run(self, stage: Stage, meeting: Meeting) -> Meeting:
         return {Stage.TRANSCRIBE: self.transcribe, Stage.ANALYZE: self.analyze,
                 Stage.DELIVER: self.deliver, Stage.ARCHIVE: self.archive}[stage](meeting)
@@ -98,6 +111,8 @@ class Stages:
         folder = self.folder(meeting)
         cb = (lambda track, frac: self.progress(meeting.id, track, frac)) if self.progress else None
         utterances = self.transcriber.transcribe(meeting, folder, cb)
+        if not utterances:
+            raise EmptyRecording("the transcription found no speech")
         write_transcript(folder, utterances)
         write_transcript_md(folder, meeting, utterances, self.settings().ui_language)
         self.repo.replace_utterances(meeting.id, utterances)
@@ -106,6 +121,8 @@ class Stages:
     def analyze(self, meeting: Meeting) -> Meeting:
         folder = self.folder(meeting)
         utterances = read_transcript(folder)
+        if not utterances:  # never ask the LLM to summarise nothing (imports, older rows)
+            raise EmptyRecording("the transcript has no lines")
         candidates, _errors = gather_candidates(self.catalogs(), meeting)
         notes = self.analyzer.analyze(meeting, utterances, candidates)
         # Rephrased titles must keep their ids, or a reprocess duplicates Kanban/Linear items.

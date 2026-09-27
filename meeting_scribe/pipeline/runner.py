@@ -21,6 +21,7 @@ from dataclasses import replace
 from datetime import timedelta
 from typing import Any, Callable, Iterable, Optional, Sequence
 
+from ..domain.errors import EmptyRecording, NothingToReprocess
 from ..domain.models import (
     KV_MOVE_FROM_DM, SOURCE_DISCORD, STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
 )
@@ -136,6 +137,8 @@ class PipelineRunner:
         meeting = self._meeting(meeting_id)
         if meeting.state is MeetingState.RECORDING:
             raise ValueError("meeting is still recording")
+        if meeting.state is MeetingState.EMPTY:
+            raise NothingToReprocess("no audio was captured; there is nothing to reprocess")
         job = self.repo.get_job(meeting_id)
         if job is not None and job.state == "running":
             raise ValueError("meeting is being processed right now")
@@ -285,6 +288,9 @@ class PipelineRunner:
                 meeting = self.stages.run(stage, meeting)
                 output = _OUTPUT[stage]
                 meeting = self.stages.persist(meeting.with_state(output) if output else meeting)
+        except EmptyRecording as exc:  # nobody was heard: a terminal outcome, never retried
+            self._discard(job_id, meeting_id, stage, exc)
+            return
         except StageDeferred as exc:  # e.g. Discord still connecting after a gateway start: no attempt used
             if self._defer(job_id, meeting_id, stage, exc):
                 return
@@ -298,6 +304,14 @@ class PipelineRunner:
         self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)
         self.repo.complete_job(job_id)
         self._emit(meeting_id, "done", self.stages.last_results.pop(meeting_id, []))
+
+    def _discard(self, job_id: int, meeting_id: str, stage: Stage, exc: Exception) -> None:
+        log.info("meeting-scribe %s discarded at %s: no voice captured (%s)", meeting_id, stage.value, exc)
+        for kv in (_DEFER_KV, WAITING_KV, SINKS_DONE_KV, KV_MOVE_FROM_DM):
+            self.repo.kv_set(kv + meeting_id, None)
+        self.stages.discard(self._meeting(meeting_id))
+        self.repo.complete_job(job_id)
+        self._emit(meeting_id, "discarded", {"stage": stage.value})
 
     def _defer(self, job_id: int, meeting_id: str, stage: Stage, exc: Exception) -> bool:
         """Re-queue without using an attempt; ``False`` once the wait exceeded ``DEFER_MAX_SECONDS``.

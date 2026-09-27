@@ -44,7 +44,7 @@ class Svc:
     def track_path(self, m: Any, uid: str) -> Path:
         return self.root / f"{uid}.ogg"
 
-    def finish_recording(self, mid: str, *, speakers: Any = (), partial: bool = False) -> None:
+    def finish_recording(self, mid: str, *, speakers: Any = (), partial: bool = False, heard: bool = True) -> None:
         if self.fail_finish:
             raise RuntimeError("sqlite locked")
         self.finished.append((mid, partial))

@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional, Protocol
 
 from . import cli_google, doctor, llm_config
 from .config import CHANNEL_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
-from .domain.models import Stage
+from .domain.models import MeetingState, Stage
 from .i18n import t
 from .pipeline.service import MeetingService
 from .storage.artifacts import read_notes, read_transcript, render_notes_md
@@ -253,6 +253,9 @@ def _reprocess(args: argparse.Namespace, rt: CliRuntime) -> int:
     if meeting is None:
         return 1
     service = rt.service()
+    if meeting.state is MeetingState.EMPTY:
+        _print(t("cmd.reprocess_empty", rt.settings().ui_language, id=meeting.id))
+        return 1
     asked = Stage.parse(args.stage)
     stage = service.effective_stage(meeting, asked)
     if stage is not asked:

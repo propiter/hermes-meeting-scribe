@@ -256,3 +256,12 @@ def test_llm_set_to_the_default_says_so(lrt, capsys):
     assert code == 0 and "default" in out and "Saved" not in out
     code, out = run(lrt, ["llm", "set", "--provider", "prov-a"], capsys)
     assert code == 0 and "Saved" in out
+
+
+def test_reprocess_of_a_discarded_meeting_is_refused(rt, capsys):
+    from dataclasses import replace
+    repo = rt.service().repo
+    repo.save_meeting(replace(repo.get_meeting(rt.mid), state=MeetingState.EMPTY))
+    code, out = run(rt, ["reprocess", rt.mid, "--from", "transcribe"], capsys)
+    assert code == 1 and "nothing to reprocess" in out
+    assert repo.get_meeting(rt.mid).state is MeetingState.EMPTY

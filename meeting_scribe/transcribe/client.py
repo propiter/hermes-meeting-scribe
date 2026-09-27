@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from ..audio.archive import extract_tracks
 from ..audio.ffmpeg import Ffmpeg, decode_to_wav, probe_duration
 from ..config import Settings
+from ..domain.errors import EmptyRecording
 from ..domain.models import Meeting, Speaker, Utterance
 from .filters import RawSegment, RawWord
 from .merge import TrackResult, merge_tracks
@@ -30,6 +31,10 @@ _RTF = {"tiny": 0.15, "base": 0.25, "small": 0.6, "medium": 1.5, "large": 3.0, "
 
 class TranscriptionError(RuntimeError):
     pass
+
+
+class NoAudioTracks(TranscriptionError, EmptyRecording):
+    """Nothing was captured for anyone: the meeting is discarded, not failed."""
 
 
 def realtime_factor(model: str) -> float:
@@ -68,7 +73,7 @@ class SubprocessTranscriber:
         archive = folder / "recording.mka"
         if archive.exists():
             return extract_tracks(ff, archive, folder / "tracks"), True
-        raise TranscriptionError(f"no audio tracks in {folder}")
+        raise NoAudioTracks(f"no audio tracks in {folder}")
 
     def _env(self) -> dict[str, str]:
         env = dict(os.environ)

@@ -99,12 +99,14 @@ export const LOCALES = {
     state: {
       recording: 'Recording', captured: 'Waiting to process', transcribing: 'Transcribing',
       transcribed: 'Transcribed', analyzing: 'Writing notes', analyzed: 'Notes ready',
-      delivering: 'Publishing', done: 'Done', failed: 'Needs attention', processing: 'In progress'
+      delivering: 'Publishing', done: 'Done', failed: 'Needs attention', processing: 'In progress',
+      empty: 'No audio: discarded'
     },
     detail: {
       summary: 'Summary', tldr: 'In short', topics: 'Topics', decisions: 'Decisions',
       questions: 'Open questions', tasks: 'Tasks', transcript: 'Transcript', audio: 'Recording',
       noNotes: 'The notes are not ready yet. They appear here once the meeting has been processed.',
+      empty: 'No audio was captured in this recording (nobody spoke), so there are no notes. Nothing was published and there is nothing to reprocess.',
       noDecisions: 'No decisions were recorded.', noQuestions: 'No open questions.',
       noTasks: 'No tasks came out of this meeting.',
       owner: 'Owner', due: 'Due', project: 'Project', noProject: 'No project',
@@ -267,12 +269,14 @@ export const LOCALES = {
     state: {
       recording: 'Grabando', captured: 'Esperando proceso', transcribing: 'Transcribiendo',
       transcribed: 'Transcrita', analyzing: 'Escribiendo notas', analyzed: 'Notas listas',
-      delivering: 'Publicando', done: 'Lista', failed: 'Requiere atención', processing: 'En proceso'
+      delivering: 'Publicando', done: 'Lista', failed: 'Requiere atención', processing: 'En proceso',
+      empty: 'Sin audio: descartada'
     },
     detail: {
       summary: 'Resumen', tldr: 'En pocas palabras', topics: 'Temas', decisions: 'Decisiones',
       questions: 'Preguntas abiertas', tasks: 'Tareas', transcript: 'Transcripción', audio: 'Grabación',
       noNotes: 'Las notas aún no están listas. Aparecerán aquí cuando termine el proceso de la reunión.',
+      empty: 'No se captó audio en esta grabación (nadie habló), así que no hay notas. No se publicó nada y no hay nada que reprocesar.',
       noDecisions: 'No se registraron decisiones.', noQuestions: 'No hay preguntas abiertas.',
       noTasks: 'De esta reunión no salieron tareas.',
       owner: 'Responsable', due: 'Fecha', project: 'Proyecto', noProject: 'Sin proyecto',
@@ -590,7 +594,7 @@ function ExternalLink({ href, children }) {
 // ---------------------------------------------------------------------------------------------
 // library
 // ---------------------------------------------------------------------------------------------
-const STATE_FILTERS = ['recording', 'processing', 'done', 'failed']
+const STATE_FILTERS = ['recording', 'processing', 'done', 'failed', 'empty']
 const SOURCE_FILTERS = ['discord', 'google_meet']
 
 export function LibraryView() {
@@ -751,10 +755,11 @@ export function DetailView({ id }) {
           m.channel_name ? h('dd', null, [m.guild_name, m.channel_name].filter(Boolean).join(' › ')) : null,
           people ? h('dt', null, t('detail.people')) : null,
           people ? h('dd', null, people) : null)),
-      h(ReprocessControl, {
+      m.state === 'empty' ? null : h(ReprocessControl, {
         meeting: m, job, commandId: trackedCommand,
         onSubmitted: rid => setCommandId(rid), onFinished: () => query.refetch()
       })),
+    m.state === 'empty' ? h('p', { className: 'ms-note', role: 'status' }, t('detail.empty')) : null,
     m.partial ? h('p', { className: 'ms-note' }, t('detail.partial')) : null,
     job && job.state === 'failed'
       ? h('div', { className: 'ms-note ms-note-bad', role: 'status' },
@@ -770,7 +775,7 @@ export function DetailView({ id }) {
     d.dm_notes
       ? h('div', { className: 'ms-note', role: 'status' }, h('strong', null, t('detail.dmNotes')), h('p', null, t('detail.dmNotesHelp')))
       : null,
-    h(NotesBlock, { notes }),
+    m.state === 'empty' ? null : h(NotesBlock, { notes }),
     h(TasksBlock, { tasks: d.tasks || [] }),
     h(AudioBlock, { audio: d.audio || {} }),
     h(TranscriptBlock, { id: m.id, total: d.transcript_total || 0 }))

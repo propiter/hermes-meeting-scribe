@@ -32,6 +32,7 @@ class FakeService:
     root: Path
     begun: list = field(default_factory=list)
     finished: list = field(default_factory=list)
+    heard: list = field(default_factory=list)
 
     def begin_recording(self, meeting):
         assert meeting.state is MeetingState.RECORDING
@@ -41,8 +42,9 @@ class FakeService:
     def track_path(self, meeting, user_id):
         return self.root / meeting.id / "tracks" / f"{user_id}.ogg"
 
-    def finish_recording(self, meeting_id, *, speakers=(), partial=False):
+    def finish_recording(self, meeting_id, *, speakers=(), partial=False, heard=True):
         self.finished.append((meeting_id, tuple(speakers), partial))
+        self.heard.append(heard)
 
 
 class FakeWriter:
@@ -211,3 +213,34 @@ async def test_finalize_sync_without_loop_marks_partial(world):
     assert FakeWriter.instances == [] or all(w.closed for w in FakeWriter.instances)
     await s.stop("stopped")  # no double finish
     assert len(world["service"].finished) == 1
+
+
+async def test_nobody_heard_finishes_as_empty_and_says_so(world):
+    """Auto-join case: someone joins and leaves before speaking; no frame ever arrives."""
+    s = await started(world, **{"autoleave_grace_seconds": 30})
+    world["voice"].members = [m for m in world["voice"].members if m.bot]
+    await run_ticks()
+    world["clock"].t += 31
+    await asyncio.wait_for(s.wait(), 1)
+    assert s.heard is False and world["service"].heard == [False]
+    last = world["voice"].sent[-1]["content"]
+    assert "No audio was captured" in last and "preparing the notes" not in last
+
+
+async def test_someone_heard_finishes_normally(world):
+    s = await started(world)
+    s.receiver.map_ssrc(1, 42)
+    s.receiver._buffers[1].extend(FRAME)
+    await run_ticks()
+    await s.stop("stopped")
+    assert s.heard is True and world["service"].heard == [True]
+    assert "preparing the notes" in world["voice"].sent[-1]["content"]
+
+
+async def test_only_a_bot_heard_counts_as_nobody(world):
+    s = await started(world)
+    s.receiver.map_ssrc(2, 77)
+    s.receiver._buffers[2].extend(FRAME)
+    await run_ticks()
+    await s.stop("stopped")
+    assert s.heard is False and world["service"].heard == [False]

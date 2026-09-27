@@ -270,7 +270,8 @@ class CaptureManager:
         if session is None:
             return t("capture.not_recording", self.lang)
         meeting = await session.stop("stopped")
-        return t("capture.stop_ok", self.lang, id=meeting.id if meeting else "-")
+        return t("capture.stop_ok" if session.heard else "capture.stop_empty", self.lang,
+                 id=meeting.id if meeting else "-")
 
     # -- shutdown -------------------------------------------------------------------------------
     def shutdown(self, timeout: float = 20.0) -> None:

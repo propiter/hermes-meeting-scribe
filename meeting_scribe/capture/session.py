@@ -312,7 +312,7 @@ class RecordingSession:
             except Exception:  # the row stays 'recording'; the owner's recover() closes it later
                 log.exception("meeting-scribe: recording %s could not be finished",
                               self.meeting.id if self.meeting else "-")
-            await self.consent.announce(t("capture.stopped", self.lang,
+            await self.consent.announce(t("capture.stopped" if self.heard else "capture.stopped_empty", self.lang,
                                           reason=t(f"capture.reason_{reason}", self.lang),
                                           id=self.meeting.id if self.meeting else "-"))
         except Exception:
@@ -357,12 +357,19 @@ class RecordingSession:
             if writer.error:
                 log.warning("meeting-scribe: track %s had errors: %s", uid, writer.error)
 
+    @property
+    def heard(self) -> bool:
+        """Whether audio of any person (never a bot) reached a track writer during the recording.
+
+        A writer that failed to start still counts: audio arrived, the pipeline decides the rest."""
+        return bool(self._writers or self._writer_errors)
+
     def _finish(self, partial: bool) -> None:
         if self.meeting is None:
             return
         self.meeting = replace(self.meeting, speakers=tuple(self._speakers.values()))
         self.deps.service.finish_recording(self.meeting.id, speakers=tuple(self._speakers.values()),
-                                           partial=partial)
+                                           partial=partial, heard=self.heard)
 
     async def _release_voice(self) -> None:
         vc = self.vc

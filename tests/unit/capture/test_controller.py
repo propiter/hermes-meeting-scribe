@@ -30,7 +30,7 @@ class Svc:
     def track_path(self, m, uid):
         return self.root / f"{uid}.ogg"
 
-    def finish_recording(self, mid, *, speakers=(), partial=False):
+    def finish_recording(self, mid, *, speakers=(), partial=False, heard=True):
         self.finished.append((mid, partial))
 
 
@@ -228,3 +228,11 @@ async def test_meeting_stays_live_until_teardown_finishes(world):
         gate.set()
         await stopping
     assert mgr.live_meeting_ids() == set()
+
+
+async def test_stop_reply_says_no_audio_when_nobody_was_heard(world):
+    mgr = world["mgr"]
+    mgr.attach(world["adapter"]._client, world["adapter"])
+    await in_thread(mgr.start, caller(), None)
+    stop = await in_thread(mgr.stop, caller())
+    assert "No audio was captured" in stop and "preparing the notes" not in stop

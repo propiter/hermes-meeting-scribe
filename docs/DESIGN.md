@@ -226,6 +226,16 @@ analyzed → delivering → done`; `failed` keeps `failed_stage` + error + attem
 in non-terminal states resume; `recording` rows with no live session become
 `captured` (partial=true).
 
+`empty` (terminal, not an error): nobody's voice was captured. The capture decides it when it
+closes (no frame from any person ever reached a track writer: the row goes straight from
+`recording` to `empty`, no job is queued); the pipeline decides it too (defence in depth) when the
+folder has no tracks, the transcription yields no utterances or `analyze` finds an empty
+transcript. The job ends `done` with no error and no attempt used; nothing is analyzed or
+published. The folder and `meta.json` stay (the row points at them); `tracks/`, `.work/` and any
+utterances are removed whatever `audio.retention` says. `reprocess` of an `empty` meeting is
+refused. Schema v7 reclassifies rows an older version parked as `failed` with
+`TranscriptionError: no audio tracks in …` at the transcribe stage (idempotent, data only).
+
 ## 10. Configuration (`plugins.entries.meeting-scribe.settings`)
 
 Declared in `plugin.yaml` `config_schema` (Desktop form for free). Wizard:

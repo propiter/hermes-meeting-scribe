@@ -27,10 +27,13 @@ class MeetingState(str, Enum):
     DELIVERING = "delivering"
     DONE = "done"
     FAILED = "failed"
+    # Nobody's voice was captured (a person joined and left without speaking, or every track was
+    # silence the transcriber drops): nothing to write notes about. Terminal, not an error.
+    EMPTY = "empty"
 
     @property
     def terminal(self) -> bool:
-        return self in (MeetingState.DONE, MeetingState.FAILED)
+        return self in (MeetingState.DONE, MeetingState.FAILED, MeetingState.EMPTY)
 
 
 class Stage(str, Enum):
@@ -64,7 +67,10 @@ _FORWARD: dict[MeetingState, frozenset[MeetingState]] = {
     _S.DELIVERING: frozenset({_S.DONE}),
     _S.DONE: frozenset(),
     _S.FAILED: frozenset(),
+    _S.EMPTY: frozenset(),
 }
+# Where a recording may turn out to hold no voice: before any notes exist (never once analyzed).
+_CAN_BE_EMPTY = frozenset({_S.RECORDING, _S.CAPTURED, _S.TRANSCRIBING, _S.TRANSCRIBED, _S.ANALYZING})
 _ORDER = [_S.RECORDING, _S.CAPTURED, _S.TRANSCRIBING, _S.TRANSCRIBED, _S.ANALYZING, _S.ANALYZED,
           _S.DELIVERING, _S.DONE]
 _REWIND_TARGETS = frozenset({_S.CAPTURED, _S.TRANSCRIBED, _S.ANALYZED})
@@ -85,8 +91,10 @@ def transition(current: MeetingState, target: MeetingState, *, rewind: bool = Fa
     """
     if target is _S.FAILED and not current.terminal:
         return target
+    if target is _S.EMPTY and current in _CAN_BE_EMPTY:
+        return target
     if rewind:
-        if target not in _REWIND_TARGETS or current is _S.RECORDING:
+        if target not in _REWIND_TARGETS or current in (_S.RECORDING, _S.EMPTY):
             raise InvalidTransition(f"cannot rewind {current.value} -> {target.value}")
         if current is _S.FAILED or _ORDER.index(current) >= _ORDER.index(target):
             return target
