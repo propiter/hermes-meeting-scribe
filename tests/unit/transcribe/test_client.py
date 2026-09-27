@@ -84,3 +84,17 @@ def test_tracks_restored_from_archive(ff, fake_worker, make_track, tmp_path, mee
 def test_timeout_scales_with_duration_and_model():
     assert worker_timeout(3600, "medium", floor=300) > worker_timeout(3600, "tiny", floor=300)
     assert worker_timeout(10, "tiny", floor=900) == 900
+
+
+def test_timeout_scales_with_the_sum_of_track_durations(ff, fake_worker, make_track, tmp_path, meeting,
+                                                        monkeypatch):
+    """Review finding 9: five 60-min speakers are ~5 h of sequential work, not 1 h."""
+    for sid in ("10", "11", "12"):
+        make_track(sid, 1.0)
+    monkeypatch.setattr("meeting_scribe.transcribe.client.probe_duration", lambda ff_, path: 3600.0)
+    seen: list[float] = []
+    real = worker_timeout
+    monkeypatch.setattr("meeting_scribe.transcribe.client.worker_timeout",
+                        lambda secs, model, **kw: seen.append(secs) or real(secs, model, **kw))
+    _transcriber(ff, fake_worker).transcribe(meeting, tmp_path)
+    assert seen == [3 * 3600.0]

@@ -2,7 +2,8 @@
 
 Steps: ensure per-speaker tracks exist (restoring them from ``recording.mka`` for reprocess),
 decode each to 16 kHz wav in ``.work/``, launch the worker with ``sys.executable`` under ``nice``,
-poll its progress file, enforce a timeout scaled by audio duration, then merge results.
+poll its progress file, enforce a timeout scaled by the SUM of track durations (the worker
+processes tracks sequentially), then merge results.
 ``.work/`` survives failures so a retry resumes from finished tracks.
 """
 from __future__ import annotations
@@ -94,7 +95,7 @@ class SubprocessTranscriber:
             wav = work / f"{sid}.wav"
             if not wav.exists():
                 decode_to_wav(ff, src, wav)
-            total = max(total, probe_duration(ff, src))
+            total += probe_duration(ff, src)  # the worker runs tracks one after another (finding 9)
             job_tracks.append({"speaker_id": sid, "wav": str(wav), "out": str(work / f"{sid}.json")})
         job = {"tracks": job_tracks, "model": settings.transcribe_model, "device": settings.transcribe_device,
                "compute_type": settings.transcribe_compute_type, "cpu_threads": settings.effective_cpu_threads,
