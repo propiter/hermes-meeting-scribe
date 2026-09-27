@@ -226,3 +226,28 @@ def test_doctor_warns_about_a_non_numeric_channel_in_config():
     s = settings_from_mapping({"google_meet_discord_channel": "meet-notes"})
     assert s.google_meet_discord_channel == ""
     assert any("google_meet_discord_channel" in w for w in s.warnings)
+
+
+# -- finding 17: a failed revoke is not silent -------------------------------------------------------
+@pytest.mark.parametrize("failure", ["http", "network"])
+def test_disconnect_warns_when_the_revoke_fails(grt, client_file, capsys, monkeypatch, failure):
+    from meeting_scribe.google.http import TransportError
+    connect(grt, client_file, capsys, monkeypatch)
+    inner = grt.google_transport.handler
+
+    def handler(method, url, headers, body):
+        if url.startswith("https://oauth2.googleapis.com/revoke"):
+            if failure == "network":
+                raise TransportError("offline")
+            return jresp(503, {"error": "backendError"})
+        return inner(method, url, headers, body)
+    grt.google_transport.handler = handler
+    code, out = run(grt, ["google", "disconnect"], capsys)
+    assert code == 0 and grt.google_files().read_token() is None  # the local token is gone anyway
+    assert "https://myaccount.google.com/permissions" in out
+
+
+def test_disconnect_success_does_not_warn(grt, client_file, capsys, monkeypatch):
+    connect(grt, client_file, capsys, monkeypatch)
+    code, out = run(grt, ["google", "disconnect"], capsys)
+    assert code == 0 and "myaccount.google.com" not in out

@@ -298,6 +298,9 @@ def refresh_token(transport: Transport, client: ClientConfig, token: Mapping[str
     return _token_from(resp.json(), time.time() if now is None else now, token)
 
 
+PERMISSIONS_URL = "https://myaccount.google.com/permissions"  # where a user removes a grant by hand
+
+
 def revoke(transport: Transport, token: Mapping[str, Any]) -> bool:
     """Best effort: revoke the refresh token (revokes the whole grant). ``False`` on any failure."""
     value = token.get("refresh_token") or token.get("access_token")

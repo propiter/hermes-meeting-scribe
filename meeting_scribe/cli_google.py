@@ -170,7 +170,10 @@ def _disconnect(args: argparse.Namespace, rt: Any) -> int:
     lang = rt.settings().ui_language
     files = rt.google_files()
     token = files.read_token() or {}
-    revoked = oauth.revoke(rt.google_transport or UrllibTransport(), token) if token else False
+    has_grant = bool(token.get("refresh_token") or token.get("access_token"))
+    revoked = oauth.revoke(rt.google_transport or UrllibTransport(), token) if has_grant else False
     files.delete_token()
     _print(t("google.disconnected", lang, revoked=t("google.revoked", lang) if revoked else ""))
+    if has_grant and not revoked:  # the grant may still be valid at Google: tell the user where to remove it
+        _print(t("google.revoke_failed", lang, url=oauth.PERMISSIONS_URL))
     return 0

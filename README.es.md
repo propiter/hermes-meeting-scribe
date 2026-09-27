@@ -377,6 +377,9 @@ hermes meeting-scribe google disconnect
   (máximo 30 días). Volver a ejecutar `connect` (tras una revocación o con un cliente nuevo)
   conserva la hora de la primera conexión, así que las reuniones que terminaron mientras el acceso
   estaba roto se recuperan (dentro de los 30 días de Meet); solo `google disconnect` la reinicia.
+  `disconnect` revoca la autorización en Google y borra el token local; si la revocación falla (sin
+  red, error de Google) lo avisa e indica https://myaccount.google.com/permissions para quitar el
+  acceso a mano.
 - Una conferencia se importa una sola vez (única por el nombre de su registro en Meet), aunque haya
   reinicios o dos procesos. Si la transcripción aún se está generando (`ENDED`) se reintenta en el
   siguiente sondeo.

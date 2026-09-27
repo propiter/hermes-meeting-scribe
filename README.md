@@ -364,7 +364,9 @@ hermes meeting-scribe google disconnect
   automatically; use `google sync --days N` for an explicit backfill (max 30 days). Running
   `connect` again (after a revocation, or with a new client) keeps the original connection time,
   so meetings that ended while access was broken are still picked up (within Meet's 30 days);
-  only `google disconnect` resets it.
+  only `google disconnect` resets it. `disconnect` revokes the grant at Google and deletes the local
+  token; if the revoke fails (offline, Google error) it says so and points to
+  https://myaccount.google.com/permissions to remove the access by hand.
 - A conference is imported once, ever (unique on its Meet record name), even across restarts or two
   processes. A transcript still being generated (`ENDED`) is retried on the next poll.
 - Notes go to `google_meet_discord_channel`, else `delivery_discord_channel`, else the gateway's

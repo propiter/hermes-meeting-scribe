@@ -67,6 +67,7 @@
   "google.no_client": "Google: no OAuth client stored. Pass --client-secret <file.json> (Cloud Console → Credentials → OAuth client, type Desktop app).",
   "google.not_connected": "Google: not connected. Run `hermes meeting-scribe google connect --client-secret <file.json>`.",
   "google.reconnected": "✅ Google reconnected. Meet transcripts ending after the first connection ({since}, at most 30 days back) that are not imported yet will be imported{extra}.",
+  "google.revoke_failed": "⚠️ Could not revoke the access at Google (network or Google error). The local token is deleted, but the grant may still be active: remove it at {url}",
   "google.revoked": ", access revoked at Google",
   "google.status_connected": "Google: connected (scope meetings.space.readonly; the account is not read).",
   "google.status_disconnected": "Google: disconnected — access was revoked or expired. Run `hermes meeting-scribe google connect` again.",
