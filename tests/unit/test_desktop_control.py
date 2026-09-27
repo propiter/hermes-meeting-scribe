@@ -25,7 +25,12 @@ def fake_service(repo, calls, fail=None):
         if fail:
             raise fail
         calls.append((mid, stage))
-    return SimpleNamespace(repo=repo, reprocess=reprocess, require=lambda mid: repo.get_meeting(mid))
+    def prepare_audio(mid):
+        if fail:
+            raise fail
+        calls.append((mid, "prepare_audio"))
+    return SimpleNamespace(repo=repo, reprocess=reprocess, prepare_audio=prepare_audio,
+                           require=lambda mid: repo.get_meeting(mid))
 
 
 def test_submit_is_idempotent_and_execution_is_gateway_side(repo, meeting):
@@ -54,8 +59,10 @@ def test_submit_is_idempotent_and_execution_is_gateway_side(repo, meeting):
     ("ok", {"action": "reprocess", "stage": "archive"}),
     ("ok", {"action": "reprocess", "stage": "analyze", "actor": "spoof"}),
     ("ok", {"action": "reprocess"}),
+    ("ok", {"action": "prepare_audio", "stage": "analyze"}),
+    ("ok", {"action": "prepare_audio", "path": "/etc/passwd"}),
 ])
-def test_submit_rejects_anything_but_reprocess(repo, meeting, rid, body):
+def test_submit_rejects_anything_but_the_two_commands(repo, meeting, rid, body):
     with pytest.raises(ValueError):
         Commands(repo).submit(rid, meeting.id, body)
 
@@ -210,3 +217,13 @@ def test_submit_refuses_a_discarded_recording(repo, meeting):
     repo.save_meeting(replace(meeting, state=MeetingState.EMPTY))
     with pytest.raises(ValueError, match="no audio"):
         Commands(repo).submit("request-e", meeting.id, {"action": "reprocess", "stage": "transcribe"})
+
+
+def test_prepare_audio_is_queued_and_run_by_the_gateway_even_for_a_finished_meeting(repo, meeting):
+    repo.save_meeting(replace(meeting, state=MeetingState.DONE))
+    queue = Commands(repo)
+    got = queue.submit("audio-1", meeting.id, {"action": "prepare_audio"})
+    assert got["state"] == "queued" and got["action"] == "prepare_audio" and got["stage"] is None
+    calls = []
+    assert execute_one(fake_service(repo, calls)) is True
+    assert calls == [(meeting.id, "prepare_audio")] and queue.get("audio-1")["state"] == "done"

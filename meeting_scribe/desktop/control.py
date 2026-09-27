@@ -122,11 +122,7 @@ class Commands:
     def _submit_locked(self, rid: str, mid: str, body: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(rid, str) or not _RID_RE.fullmatch(rid):
             raise ValueError("invalid request id")
-        if set(body) != {"action", "stage"} or body.get("action") != "reprocess":
-            raise ValueError("invalid command")
-        if body.get("stage") not in REPROCESS_STAGES:
-            raise ValueError("invalid stage")
-        encoded = json.dumps({"action": "reprocess", "stage": body["stage"]}, sort_keys=True)
+        encoded = _encode(body)
         old = self.repo._x("SELECT meeting_id,body FROM desktop_commands WHERE id=?", (rid,)).fetchone()
         if old is not None:
             if old["meeting_id"] != mid or old["body"] != encoded:
@@ -135,7 +131,8 @@ class Commands:
         meeting = self.repo.get_meeting(mid)
         if meeting is None:
             raise KeyError(mid)
-        _refuse_busy(self.repo, meeting)
+        if body["action"] == "reprocess":
+            _refuse_busy(self.repo, meeting)
         pending = self.repo._x("SELECT id FROM desktop_commands WHERE meeting_id=? AND state IN ('queued','running','unknown')",
                                (mid,)).fetchone()
         if pending is not None:
@@ -147,6 +144,20 @@ class Commands:
         if row["body"] != encoded or row["meeting_id"] != mid:  # a concurrent submit won the INSERT
             raise ValueError("request id already used")
         return self.get(rid)
+
+
+def _encode(body: Mapping[str, Any]) -> str:
+    """The two commands the page may queue: ``reprocess`` from a stage, and ``prepare_audio``
+    (write the listening copy of an older multitrack archive)."""
+    if not isinstance(body, Mapping):
+        raise ValueError("invalid command")
+    if body.get("action") == "prepare_audio" and set(body) == {"action"}:
+        return json.dumps({"action": "prepare_audio"}, sort_keys=True)
+    if set(body) != {"action", "stage"} or body.get("action") != "reprocess":
+        raise ValueError("invalid command")
+    if body.get("stage") not in REPROCESS_STAGES:
+        raise ValueError("invalid stage")
+    return json.dumps({"action": "reprocess", "stage": body["stage"]}, sort_keys=True)
 
 
 def execute_one(service: Any) -> bool:
@@ -162,11 +173,13 @@ def execute_one(service: Any) -> bool:
     error = ""
     try:
         body = json.loads(row["body"])
-        if body.get("action") != "reprocess" or body.get("stage") not in REPROCESS_STAGES:
-            raise ValueError("invalid command")
+        _encode(body)
         meeting = service.require(row["meeting_id"])
-        _refuse_busy(repo, meeting)
-        service.reprocess(meeting.id, Stage(body["stage"]))
+        if body["action"] == "prepare_audio":
+            service.prepare_audio(meeting.id)
+        else:
+            _refuse_busy(repo, meeting)
+            service.reprocess(meeting.id, Stage(body["stage"]))
     except Exception as exc:  # reported to the page; the worker keeps running
         error = redact(f"{type(exc).__name__}: {exc}")[:500]
     repo._x("UPDATE desktop_commands SET state=?,error=?,updated_at=? WHERE id=?",

@@ -61,6 +61,14 @@ class MeetingService:
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         return self.repo.search(query, limit)
 
+    def prepare_audio(self, id_or_prefix: str) -> Path:
+        """Write the listening copy (``playback.ogg``) of a meeting archived before copies existed."""
+        from ..audio.ffmpeg import resolve_ffmpeg
+        from ..audio.playback import build_playback
+
+        meeting = self.require(id_or_prefix)
+        return build_playback(resolve_ffmpeg(self.settings().audio_ffmpeg_path), self.folder(meeting))
+
     def status(self, recent: int = 5) -> dict[str, Any]:
         jobs = {j.meeting_id: j for j in self.repo.list_jobs(("queued", "running", "failed"))}
         rows = []
