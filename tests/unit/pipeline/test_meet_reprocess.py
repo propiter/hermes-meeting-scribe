@@ -57,7 +57,7 @@ def test_command_and_cli_explain_the_mapping(world):
     mid = _imported(world)
     cmds = MeetingCommands(lambda: service, lambda: settings_from_mapping({}), capture=lambda: None)
     out = cmds.handle(f"reprocess {mid}", Caller("discord", "1", "1"), "meeting")
-    assert "analyze" in out and "no audio" in out.lower()
+    assert "analyze" in out and "without audio" in out.lower()
 
 
 def test_cli_reprocess_explains_the_mapping(world, capsys):
@@ -67,7 +67,7 @@ def test_cli_reprocess_explains_the_mapping(world, capsys):
     mid = _imported(world)
     code = cli.dispatch(parse(["reprocess", mid, "--now"]), FakeRuntime(service, {}))
     out = capsys.readouterr().out
-    assert code == 0 and "no audio" in out.lower() and "done" in out
+    assert code == 0 and "without audio" in out.lower() and "done" in out
 
 
 def test_a_legacy_transcribe_job_on_an_imported_meeting_runs_analyze(world):

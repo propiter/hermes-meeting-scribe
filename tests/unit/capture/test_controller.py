@@ -78,7 +78,7 @@ def in_thread(fn, *args):
 
 
 async def test_not_connected_before_attach(world):
-    assert "not connected" in (await in_thread(world["mgr"].start, caller(), None)).lower()
+    assert "still connecting" in (await in_thread(world["mgr"].start, caller(), None)).lower()
 
 
 async def test_start_resolves_callers_voice_channel_from_executor(world):

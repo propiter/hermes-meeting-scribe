@@ -109,7 +109,7 @@ def test_command_handler_uses_session_caller(ctx, monkeypatch):
     monkeypatch.setattr(plugin, "caller_from_session", lambda: plugin.Caller("discord", "1", "2"))
     handler = ctx.commands["rec"][0]
     assert "/rec" in handler("help")
-    assert "not connected" in handler("")  # capture installed, gateway not connected in unit tests
+    assert "still connecting" in handler("")  # capture installed, gateway not connected in unit tests
 
 
 def test_tool_handlers_return_json(ctx):

@@ -47,8 +47,8 @@ def test_help_and_unknown(prepo, layout, settings, clock):
 
 def test_start_stop_without_capture_is_honest(prepo, layout, settings, clock):
     cmds, *_ = make(prepo, layout, settings, clock)
-    assert "not available" in cmds.handle("", CALLER, "meeting")
-    assert "not available" in cmds.handle("stop", CALLER, "meeting")
+    assert "isn't available" in cmds.handle("", CALLER, "meeting")
+    assert "isn't available" in cmds.handle("stop", CALLER, "meeting")
 
 
 def test_start_stop_delegate_to_capture(prepo, layout, settings, clock):
@@ -66,7 +66,7 @@ def test_list_show_search_status(prepo, layout, settings, clock, meeting):
     assert mid in cmds.handle("list 5", CALLER, "meeting")
     assert "Informe semanal" in cmds.handle(f"show {mid[:5]}", CALLER, "meeting")
     assert "Yo envío el informe" in cmds.handle("search informe", CALLER, "meeting")
-    assert "Queue: 0" in cmds.handle("status", CALLER, "meeting")
+    assert "waiting to be processed: 0" in cmds.handle("status", CALLER, "meeting")
     assert "No meeting" in cmds.handle("show zzz", CALLER, "meeting")
 
 

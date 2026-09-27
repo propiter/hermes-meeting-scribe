@@ -81,7 +81,7 @@ def test_slash_command_answers(manager):
     handler = manager._plugin_commands["meeting"]["handler"]
     reply = handler("help")
     assert "/meeting" in reply
-    assert "not connected" in handler("start")  # capture installed; no Discord connection here
+    assert "still connecting" in handler("start")  # capture installed; no Discord connection here
 
 
 def test_cli_command_config_roundtrip(manager, hermes_home, capsys):
