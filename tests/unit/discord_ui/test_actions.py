@@ -94,7 +94,8 @@ async def test_strangers_are_rejected(env):
 async def test_project_button_offers_candidates_then_select_saves(env):
     i = FakeInteraction(11)
     await env.acts.handle(i, "prj", "k3v7q2ab", "all")
-    view = i.response.sent[0]["view"]
+    assert i.response.deferred  # deferred before the (possibly slow) catalog lookup
+    view = i.followup.sent[0]["view"]
     assert view == ("select", "k3v7q2ab", ("hermes:p1", "kanban:ops"))
     j = FakeInteraction(11, values=["hermes:p1"])
     await env.acts.handle(j, "psel", "k3v7q2ab", "all")

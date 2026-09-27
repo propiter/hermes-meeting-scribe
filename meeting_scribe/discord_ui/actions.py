@@ -22,6 +22,11 @@ from ..i18n import t
 log = logging.getLogger(__name__)
 OWNER_ONLY = frozenset({"ok", "allk"})
 SELECT_LIMIT = 25
+REPLY_LIMIT = 1900  # Discord rejects messages over 2000 characters (review S2)
+
+
+def clip_reply(text: str, limit: int = REPLY_LIMIT) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
 class ButtonActions:
@@ -58,7 +63,7 @@ class ButtonActions:
                      values: Optional[Sequence[str]] = None) -> None:
         if not self.authorized(interaction, action):
             key = "ui.owner_only" if action in OWNER_ONLY else "ui.not_allowed"
-            await interaction.response.send_message(t(key, self.lang), ephemeral=True)
+            await interaction.response.send_message(clip_reply(t(key, self.lang)), ephemeral=True)
             return
         if action == "prj":
             await self._offer_projects(interaction, meeting_id)
@@ -78,7 +83,7 @@ class ButtonActions:
                 await self._refresh(meeting_id)
             except Exception:  # stale buttons are cosmetic; the action itself succeeded
                 log.exception("meeting-scribe: refreshing notes of %s failed", meeting_id)
-        await interaction.followup.send(reply, ephemeral=True)
+        await interaction.followup.send(clip_reply(reply), ephemeral=True)
 
     def _run(self, action: str, meeting_id: str, item_id: str, values: list[str]) -> str:
         svc = self._service()
@@ -103,15 +108,18 @@ class ButtonActions:
         raise ValueError(f"unknown action {action}")
 
     async def _offer_projects(self, interaction: Any, meeting_id: str) -> None:
+        # Candidate lookup can hit Linear over HTTP: defer first, Discord's deadline is 3 s (S1).
+        await interaction.response.defer(ephemeral=True, thinking=True)
         svc = self._service()
         try:
             meeting = await asyncio.to_thread(svc.require, meeting_id)
             cands = (await asyncio.to_thread(svc.candidates, meeting))[:SELECT_LIMIT]
         except Exception as exc:  # unknown meeting / catalog outage
-            await interaction.response.send_message(t("ui.action_failed", self.lang, error=str(exc)), ephemeral=True)
+            await interaction.followup.send(clip_reply(t("ui.action_failed", self.lang, error=str(exc))),
+                                            ephemeral=True)
             return
         if not cands:
-            await interaction.response.send_message(t("ui.no_projects", self.lang), ephemeral=True)
+            await interaction.followup.send(t("ui.no_projects", self.lang), ephemeral=True)
             return
-        await interaction.response.send_message(t("ui.pick_project", self.lang), view=self._project_view(meeting_id, cands),
-                                                ephemeral=True)
+        await interaction.followup.send(t("ui.pick_project", self.lang), view=self._project_view(meeting_id, cands),
+                                        ephemeral=True)

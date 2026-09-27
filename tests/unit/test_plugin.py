@@ -74,7 +74,7 @@ def test_register_wires_everything(ctx):
     assert ctx.commands["meeting"][1]  # args hint so Discord shows an argument field
     assert "meeting-scribe" in ctx.cli and set(ctx.skills) == {"meeting-scribe"}
     assert rt.capture is not None and hasattr(rt.capture, "start")  # Phase B installed
-    assert len(ctx.platform_handlers["discord"]) == 1 and len(ctx.unload) == 2
+    assert len(ctx.platform_handlers["discord"]) == 1 and len(ctx.unload) == 3
     assert any(getattr(s, "name", "") == "discord" for s in rt.sinks())
 
 
@@ -126,3 +126,18 @@ def test_broken_phase_b_install_does_not_break_core(ctx, monkeypatch):
     monkeypatch.setitem(sys.modules, "meeting_scribe.capture", SimpleNamespace(install=boom))
     plugin.register(ctx, ROOT)
     assert set(ctx.tools) == {"meeting_search", "meeting_get"}
+
+
+def test_unload_closes_runtime_and_drops_registry(tmp_path, monkeypatch):
+    """Review W3: a reload must not leave the old pipeline thread / SQLite handle running."""
+    c = FakeCtx(tmp_path, {})
+    monkeypatch.setattr(plugin, "_host_overrides", lambda: {"data_dir": lambda: tmp_path / "d",
+                                                           "secret": lambda name: None,
+                                                           "mcp_allowed": lambda: False})
+    rt = plugin.register(c, ROOT)
+    closed: list = []
+    real_close = rt.close
+    monkeypatch.setattr(rt, "close", lambda: (closed.append(1), real_close()))
+    for cb in reversed(c.unload):
+        cb()
+    assert closed == [1] and id(c) not in plugin.RUNTIMES

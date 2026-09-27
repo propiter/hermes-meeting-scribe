@@ -100,6 +100,14 @@ def register(ctx: Any, plugin_root: Path) -> Runtime:
                                 description="Meeting notes, decisions and action items from transcripts")
     runtime = Runtime(build_host(ctx))
     RUNTIMES[id(ctx)] = runtime
+    on_unload = getattr(ctx, "on_unload", None)
+    if callable(on_unload):
+        # Registered FIRST so it runs LAST (Hermes unwinds in reverse): after capture/UI teardown.
+        def meeting_scribe_runtime_close() -> None:
+            if RUNTIMES.get(id(ctx)) is runtime:
+                del RUNTIMES[id(ctx)]
+            runtime.close()  # stops the pipeline thread and closes SQLite (review W3)
+        on_unload(meeting_scribe_runtime_close)
 
     tools = MeetingTools(runtime.service)
     ctx.register_tool("meeting_search", TOOLSET, SCHEMAS["meeting_search"], tools.search,

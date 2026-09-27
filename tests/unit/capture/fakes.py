@@ -227,6 +227,11 @@ class FakeBot:
     def add_dynamic_items(self, *items: type) -> None:
         self.dynamic_items.extend(items)
 
+    def remove_dynamic_items(self, *items: type) -> None:
+        for item in items:
+            if item in self.dynamic_items:
+                self.dynamic_items.remove(item)
+
 
 class FakeAdapter:
     def __init__(self, bot: FakeBot) -> None:

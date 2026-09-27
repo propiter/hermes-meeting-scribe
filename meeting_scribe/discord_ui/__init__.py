@@ -6,10 +6,17 @@ re-wire). The factory: stores a weak adapter ref + the loop, attaches the captur
 adds the ``on_voice_state_update`` listener (auto-join), registers the DynamicItem classes and
 starts the pipeline worker with the live meeting ids so it never processes a recording in progress.
 A reconnect with a NEW bot moves the listener; calling twice with the same bot is a no-op.
+
+Reload safety (review W3): Hermes skips a factory whose ``(plugin, __qualname__)`` it already
+wired on the same client, so every install gets a UNIQUE qualname — a reloaded plugin re-wires
+the live bot. ``ctx.on_unload`` detaches this install from the bot (listener + DynamicItems) on the
+gateway loop (``call_soon_threadsafe``/``run_coroutine_threadsafe``; unload runs on a worker
+thread) so an old instance can never keep auto-recording behind the new one's back.
 """
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import sys
 import weakref
@@ -23,6 +30,8 @@ from .sink import DiscordNotesSink
 
 log = logging.getLogger(__name__)
 _STATES: "weakref.WeakKeyDictionary[Any, UiState]" = weakref.WeakKeyDictionary()
+_INSTALLS = itertools.count(1)
+DETACH_TIMEOUT = 10.0
 
 __all__ = ["install", "state_for", "UiState", "DiscordNotesSink"]
 
@@ -38,6 +47,7 @@ class UiState:
     bot_ref: Optional[Callable[[], Any]] = None
     autojoin: Any = None
     listener: Optional[Callable[..., Any]] = field(default=None, repr=False)
+    detached: bool = False
 
     @property
     def adapter(self) -> Any:
@@ -78,6 +88,8 @@ def _render_options(runtime: Any) -> Callable[[Meeting], RenderOptions]:
 
 def _factory(state: UiState) -> Callable[[Any, Any], None]:
     def meeting_scribe_discord(bot: Any, adapter: Any) -> None:
+        if state.detached:
+            return  # an unloaded install must never re-attach
         runtime = state.runtime
         state.adapter_ref = weakref.ref(adapter)
         try:
@@ -102,7 +114,51 @@ def _factory(state: UiState) -> Callable[[Any, Any], None]:
             runtime.start_pipeline(capture.live_meeting_ids() if capture is not None else ())
         except Exception:  # storage problems: commands and doctor report them
             log.exception("meeting-scribe: pipeline start on connect failed")
+    seq = next(_INSTALLS)
+    meeting_scribe_discord.__name__ = f"meeting_scribe_discord_{seq}"
+    meeting_scribe_discord.__qualname__ = f"meeting_scribe_discord_{seq}"
     return meeting_scribe_discord
+
+
+def _detach_from_bot(state: UiState) -> None:
+    """Loop-side: remove our listener and DynamicItems from the bot this install is wired to."""
+    bot = state.bot_ref() if state.bot_ref is not None else None
+    if bot is None:
+        return
+    if state.listener is not None:
+        try:
+            bot.remove_listener(state.listener, "on_voice_state_update")
+        except Exception as exc:  # already gone / client torn down
+            log.debug("meeting-scribe: removing listener on unload failed: %s", exc)
+    remove_items = getattr(bot, "remove_dynamic_items", None)
+    if callable(remove_items):
+        try:
+            remove_items(state.kit.button_cls, state.kit.select_cls)
+        except Exception as exc:
+            log.debug("meeting-scribe: removing dynamic items on unload failed: %s", exc)
+    state.bot_ref = None
+
+
+def unload(state: UiState) -> None:
+    """``ctx.on_unload`` callback (runs on a worker thread, or on the loop in tests)."""
+    state.detached = True
+    if state.autojoin is not None:
+        state.autojoin.close()
+    loop = state.loop
+    try:
+        on_loop = asyncio.get_running_loop() is loop
+    except RuntimeError:
+        on_loop = False
+    if loop is None or on_loop or not loop.is_running():
+        _detach_from_bot(state)
+        return
+
+    async def detach() -> None:
+        _detach_from_bot(state)
+    try:
+        asyncio.run_coroutine_threadsafe(detach(), loop).result(DETACH_TIMEOUT)
+    except Exception:  # loop wedged/closing: the bot is going away with it
+        log.exception("meeting-scribe: detaching from the Discord client failed")
 
 
 def install(ctx: Any, runtime: Any) -> UiState:
@@ -133,9 +189,13 @@ def install(ctx: Any, runtime: Any) -> UiState:
             except Exception:  # never let a plugin bug surface as a discord.py listener error storm
                 log.exception("meeting-scribe: voice state handling failed")
         state.listener = on_voice_state_update
-        on_unload = getattr(ctx, "on_unload", None)
-        if callable(on_unload):
-            on_unload(state.autojoin.close)
+        if hasattr(capture, "on_session_end"):
+            capture.on_session_end.append(state.autojoin.note_session_end)
+    on_unload = getattr(ctx, "on_unload", None)
+    if callable(on_unload):
+        def meeting_scribe_discord_unload() -> None:
+            unload(state)
+        on_unload(meeting_scribe_discord_unload)
     _STATES[runtime] = state
     runtime.add_sink(sink)
     ctx.register_platform_handler("discord", _factory(state))
