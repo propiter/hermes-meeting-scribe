@@ -68,6 +68,7 @@ class FakeChannel:
             self.fail_sends -= 1
             raise RuntimeError("503 Service Unavailable")
         msg = FakeMessage(self, content, view)
+        msg.file = kw.get("file")  # attachments (transcript, DESIGN §17.6)
         self.messages[msg.id] = msg
         return msg
 

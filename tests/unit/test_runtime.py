@@ -227,3 +227,27 @@ def test_extra_catalogs_join_the_candidates(tmp_path):
     extra = object()
     rt.add_catalog(extra)
     assert rt.catalogs()[-1] is extra
+
+
+def test_meet_poller_follows_the_pipeline_lifecycle(tmp_path):
+    """DESIGN §17: the poller thread starts with the worker (gateway) and stops with it (reload)."""
+    h, cfg = host(tmp_path, {"google_meet_enabled": True})
+    rt = Runtime(h)
+    rt.start_pipeline()
+    try:
+        assert rt.meet_poller_running
+        rt.start_pipeline()  # idempotent: still one poller
+        assert rt.meet_poller_running
+    finally:
+        rt.stop_pipeline()
+    assert not rt.meet_poller_running
+    rt.close()
+
+
+def test_google_paths_live_under_the_profile_data_dir(tmp_path):
+    h, _ = host(tmp_path)
+    rt = Runtime(h)
+    files = rt.google_files()
+    assert files.client_path == tmp_path / "data" / "google" / "client.json"
+    assert files.token_path == tmp_path / "data" / "google" / "token.json"
+    assert rt.google_connected_at() is None and not rt.google_credentials().connected()
