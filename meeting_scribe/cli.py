@@ -197,8 +197,11 @@ def _reprocess(args: argparse.Namespace, rt: CliRuntime) -> int:
     if meeting is None:
         return 1
     service = rt.service()
-    stage = Stage.parse(args.stage)
-    service.reprocess(meeting.id, stage)
+    asked = Stage.parse(args.stage)
+    stage = service.effective_stage(meeting, asked)
+    if stage is not asked:
+        _print(t("cmd.reprocess_no_audio", rt.settings().ui_language))
+    service.reprocess(meeting.id, asked)
     if args.now:
         while service.runner.run_once():
             pass

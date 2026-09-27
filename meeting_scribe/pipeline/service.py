@@ -24,7 +24,7 @@ from ..domain.ports import Clock, ProjectCatalog
 from ..storage.artifacts import read_notes, write_meta, write_notes, write_transcript, write_transcript_md
 from ..storage.layout import Layout
 from ..storage.repo import Repository
-from .runner import PipelineRunner
+from .runner import PipelineRunner, effective_stage
 from .task_moves import apply_move
 
 
@@ -119,6 +119,10 @@ class MeetingService:
         return meeting
 
     # -- processing control -------------------------------------------------------------------
+    def effective_stage(self, meeting: Meeting, stage: Stage) -> Stage:
+        """The stage a reprocess really starts from: imported meetings have no audio to re-transcribe."""
+        return effective_stage(meeting, stage)
+
     def reprocess(self, id_or_prefix: str, stage: Stage) -> Meeting:
         meeting = self.require(id_or_prefix)
         self.runner.reprocess(meeting.id, stage)

@@ -148,8 +148,10 @@ class MeetingCommands:
         meeting = self.service.find(args[0])
         if meeting is None:
             return t("cmd.not_found", lang, id=args[0])
+        used = self.service.effective_stage(meeting, stage)
         self.service.reprocess(meeting.id, stage)
-        return t("cmd.reprocess_queued", lang, id=meeting.id, stage=stage.value)
+        reply = t("cmd.reprocess_queued", lang, id=meeting.id, stage=used.value)
+        return reply + ("\n" + t("cmd.reprocess_no_audio", lang) if used is not stage else "")
 
     def _cmd_project(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         if len(args) < 2:

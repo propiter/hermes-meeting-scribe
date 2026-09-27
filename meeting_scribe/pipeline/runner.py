@@ -22,7 +22,7 @@ from datetime import timedelta
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ..domain.models import (
-    STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
+    SOURCE_DISCORD, STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
 )
 from ..domain.ports import Clock
 from ..storage.owner import owner_alive, owner_dead, process_owner_id
@@ -38,6 +38,25 @@ _OUTPUT: dict[Stage, Optional[MeetingState]] = {
     Stage.DELIVER: None, Stage.ARCHIVE: MeetingState.DONE}
 _IN_PROGRESS = {MeetingState.TRANSCRIBING: Stage.TRANSCRIBE, MeetingState.ANALYZING: Stage.ANALYZE,
                 MeetingState.DELIVERING: Stage.DELIVER}
+
+
+def effective_stage(meeting: Meeting, stage: Stage) -> Stage:
+    """Imported meetings (Google Meet) have no audio: re-transcribing them means re-analyzing."""
+    if stage is Stage.TRANSCRIBE and meeting.source != SOURCE_DISCORD:
+        return Stage.ANALYZE
+    return stage
+
+
+def _in_progress_rewind(meeting: Meeting) -> Meeting:
+    """Where an interrupted stage restarts from.
+
+    An imported meeting caught in ``transcribing`` (a reprocess queued by an older version) has its
+    transcript already: it goes FORWARD to ``transcribed`` (then ANALYZE), never to ``captured``.
+    """
+    stage = _IN_PROGRESS[meeting.state]
+    if effective_stage(meeting, stage) is not stage:
+        return replace(meeting, state=MeetingState.TRANSCRIBED)
+    return meeting.with_state(rewind_target(stage), rewind=True)
 
 
 def _thread_spawner(target: Callable[[], None], *, name: str, daemon: bool = True) -> threading.Thread:
@@ -89,15 +108,18 @@ class PipelineRunner:
         self._wake.set()
         return stage
 
-    def reprocess(self, meeting_id: str, stage: Stage) -> None:
+    def reprocess(self, meeting_id: str, stage: Stage) -> Stage:
+        """Rewind and queue; returns the stage actually used (see :func:`effective_stage`)."""
         meeting = self._meeting(meeting_id)
         if meeting.state is MeetingState.RECORDING:
             raise ValueError("meeting is still recording")
         job = self.repo.get_job(meeting_id)
         if job is not None and job.state == "running":
             raise ValueError("meeting is being processed right now")
+        stage = effective_stage(meeting, stage)
         self.stages.persist(meeting.with_state(rewind_target(stage), rewind=True))
         self.enqueue(meeting_id, stage)
+        return stage
 
     def recover(self, live_meeting_ids: Iterable[str], *, owns_capture: bool = False) -> dict[str, int]:
         """Resume after a restart: requeue STALE jobs, close orphan recordings, enqueue stragglers."""
@@ -121,8 +143,7 @@ class PipelineRunner:
                                                       ended_at=ended))
                 report["orphans"] += 1
             elif meeting.state in _IN_PROGRESS:
-                meeting = self.stages.persist(meeting.with_state(rewind_target(_IN_PROGRESS[meeting.state]),
-                                                                 rewind=True))
+                meeting = self.stages.persist(_in_progress_rewind(meeting))
             if meeting.id not in active and stage_after(meeting.state) is not None:
                 self.repo.enqueue_job(meeting.id, stage_after(meeting.state), now=self.clock.now())
                 report["resumed"] += 1
@@ -173,7 +194,7 @@ class PipelineRunner:
         for meeting_id in self.repo.requeue_stale(stale_before=now - self.LEASE_SECONDS, owner_dead=owner_dead):
             meeting = self.repo.get_meeting(meeting_id)
             if meeting is not None and meeting.state in _IN_PROGRESS:
-                self.stages.persist(meeting.with_state(rewind_target(_IN_PROGRESS[meeting.state]), rewind=True))
+                self.stages.persist(_in_progress_rewind(meeting))
             log.warning("meeting-scribe: took back abandoned job for meeting %s", meeting_id)
 
     def _heartbeat(self, job_id: int, stop: threading.Event) -> None:
@@ -188,6 +209,10 @@ class PipelineRunner:
 
     def _run_job(self, job_id: int, meeting_id: str, first: Stage, attempts: int) -> None:
         meeting = self._meeting(meeting_id)
+        if effective_stage(meeting, first) is not first:  # imported meeting queued at TRANSCRIBE (older version)
+            first = effective_stage(meeting, first)
+            if meeting.state in (MeetingState.CAPTURED, MeetingState.TRANSCRIBING, MeetingState.FAILED):
+                meeting = self.stages.persist(replace(meeting, state=MeetingState.TRANSCRIBED))
         stage = first
         try:
             for stage in STAGE_ORDER[STAGE_ORDER.index(first):]:

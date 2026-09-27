@@ -42,6 +42,7 @@
   "cmd.project_saved": "Reunión `{id}` asignada al proyecto «{project}»; se aprendió el mapeo del canal.",
   "cmd.project_unknown": "Proyecto desconocido «{project}». Candidatos: {candidates}",
   "cmd.reprocess_bad_stage": "Etapa desconocida `{stage}`. Usa transcribe, analyze o deliver.",
+  "cmd.reprocess_no_audio": "Reunión importada (sin audio): se vuelve a analizar su transcripción en lugar de retranscribir.",
   "cmd.reprocess_queued": "Reprocesando `{id}` desde {stage}.",
   "cmd.search_empty": "Sin resultados para «{query}».",
   "cmd.search_line": "`{id}` [{ts}] **{speaker}**: {text}",
