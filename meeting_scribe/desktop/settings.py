@@ -1,0 +1,226 @@
+"""Settings, LLM chain, Google and doctor for the Desktop page (dashboard process, no Runtime).
+
+Every value comes from the same place the CLI uses: plugin settings under
+``plugins.entries.meeting-scribe.settings`` (written through Hermes' own ``save_plugin_setting``,
+which enforces managed installs, administrator-managed keys and the cross-process lock) and the
+model chain under ``auxiliary.meeting_scribe`` (``llm_config.HermesAuxStore``). The form is
+generated from ``config.config_schema`` — the page holds no copy of the setting list.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Callable, Mapping, Optional
+
+from .. import doctor, llm_config
+from ..config import CHANNEL_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
+from ..llm_config import redact
+from ..storage.repo import Repository
+from .queries import WAITING_KV
+
+PLUGIN_ID = "meeting-scribe"
+_MISSING = object()
+
+
+# -- plugin settings store ------------------------------------------------------------------------
+@dataclass
+class SettingsStore:
+    """``read()`` returns the plugin's config entry mapping; ``write(key, value)`` persists one key."""
+
+    read: Callable[[], Mapping[str, Any]]
+    write: Callable[[str, Any], None]
+
+    def _lookup(self, key: str, default: Any = None) -> Any:
+        entry = self.read() or {}
+        for sub in ("settings", "config"):  # ``config`` is Hermes' legacy subtree
+            node: Any = entry.get(sub) if isinstance(entry, Mapping) else None
+            for seg in key.split("."):
+                if not isinstance(node, Mapping) or seg not in node:
+                    node = _MISSING
+                    break
+                node = node[seg]
+            if node is not _MISSING:
+                return node
+        return default
+
+    def settings(self) -> Settings:
+        return Settings.load(self._lookup)
+
+    def origin(self, key: str) -> str:
+        for name in (key, LEGACY_KEYS.get(key)):
+            if name and self._lookup(name, _MISSING) not in (_MISSING, None):
+                return "configured"
+        return "default"
+
+
+def hermes_settings_store() -> SettingsStore:
+    """Reads/writes through Hermes (resolved per call, so a request profile scope applies)."""
+    def read() -> Mapping[str, Any]:
+        from hermes_cli.config import load_config_readonly
+        from hermes_cli.plugins_state import _plugin_settings_entry
+
+        return _plugin_settings_entry(load_config_readonly() or {}, PLUGIN_ID) or {}
+
+    def write(key: str, value: Any) -> None:
+        from hermes_cli.plugins_state import _plugin_relative_segments, save_plugin_setting
+
+        save_plugin_setting(PLUGIN_ID, _plugin_relative_segments(key), value)
+    return SettingsStore(read, write)
+
+
+def settings_view(store: SettingsStore, lang: str) -> dict[str, Any]:
+    """Schema (groups, fields, localized labels) + current value/origin of every plugin setting."""
+    settings = store.settings()
+    invalid = {w.split("=", 1)[0] for w in settings.warnings}
+    values = {}
+    for key in SPEC:
+        value = getattr(settings, key)
+        values[key] = {"value": list(value) if isinstance(value, tuple) else value,
+                       "origin": "invalid" if key in invalid else store.origin(key)}
+    return {"schema": config_schema(lang), "values": values, "warnings": list(settings.warnings)}
+
+
+def set_setting(store: SettingsStore, repo: Optional[Repository], key: str, raw: Any) -> dict[str, Any]:
+    """Validate with the CLI's rules and persist; KeyError unknown key, ValueError invalid value,
+    PermissionError managed install/key. A destination change re-queues deliveries waiting for a
+    channel (a DB write the gateway worker picks up; no worker runs here)."""
+    key = canonical_key(key)
+    value = validate_value(key, raw)
+    store.write(key, value)
+    nudged = 0
+    if repo is not None and (key in CHANNEL_KEYS or key in ("delivery_discord_guild", "delivery_auto_channel_names")):
+        nudged = requeue_waiting(repo)
+    return {"key": key, "value": value, "requeued": nudged}
+
+
+def requeue_waiting(repo: Repository) -> int:
+    from datetime import datetime, timezone
+
+    n = 0
+    for k in repo.kv_prefix(WAITING_KV):
+        mid = k[len(WAITING_KV):]
+        job = repo.get_job(mid)
+        if job is not None and job.state == "queued":
+            repo.enqueue_job(mid, job.stage, now=datetime.now(timezone.utc))
+            n += 1
+    return n
+
+
+# -- LLM chain ------------------------------------------------------------------------------------
+def llm_view(store: Any) -> dict[str, Any]:
+    return llm_config.view(store).to_dict()
+
+
+def llm_update(store: Any, body: Mapping[str, Any]) -> dict[str, Any]:
+    """``{provider?, model?, base_url?, timeout?, fallback_chain?: [{provider, model, base_url?}]}``.
+
+    Validation is ``llm_config``'s (same as ``hermes meeting-scribe llm set|fallback set``); a base_url
+    with embedded credentials is stored as typed but only ever displayed through ``safe_url``."""
+    current = llm_config.view(store)
+    primary = {k: body[k] for k in ("provider", "model", "base_url", "timeout") if k in body}
+    if "timeout" in primary and primary["timeout"] is not None:
+        primary["timeout"] = float(primary["timeout"])
+    if primary.get("timeout") is None:
+        primary.pop("timeout", None)
+    # The page only ever sees ``safe_url`` of a stored base_url: sending that display form back must
+    # not overwrite the real value (which may carry credentials the page never had).
+    if current.primary.base_url and primary.get("base_url") == llm_config.safe_url(current.primary.base_url):
+        primary.pop("base_url")
+    if primary:
+        llm_config.set_primary(store, **primary)
+    if "fallback_chain" in body:
+        chain = body["fallback_chain"]
+        if not isinstance(chain, list) or len(chain) > 10:
+            raise ValueError("fallback_chain must be a list of at most 10 entries")
+        if not all(isinstance(e, Mapping) for e in chain):
+            raise ValueError("every fallback entry must be an object")
+        shown = {(lk.provider, lk.model, llm_config.safe_url(lk.base_url) if lk.base_url else ""): lk
+                 for lk in current.fallback_chain}
+        links = []
+        for e in chain:
+            wanted = llm_config.Link(str(e.get("provider") or "").strip(), str(e.get("model") or "").strip(),
+                                     str(e.get("base_url") or "").strip())
+            links.append(shown.get((wanted.provider, wanted.model, wanted.base_url), wanted))
+        if links:
+            llm_config.fallback_set(store, links)
+        else:
+            llm_config.fallback_clear(store)
+    if not any(k in body for k in ("provider", "model", "base_url", "timeout", "fallback_chain")):
+        raise ValueError("nothing to change")
+    return llm_view(store)
+
+
+# -- doctor ---------------------------------------------------------------------------------------
+@dataclass
+class DashboardDoctorEnv:
+    """What ``doctor.run_checks`` needs, without a Runtime. Checks that only the gateway can answer
+    (live capture, LLM reachability through the gateway's client) say so instead of guessing."""
+
+    store: SettingsStore
+    root: Path
+    repo: Repository
+    secret: Callable[[str], Optional[str]] = lambda _name: None
+    kanban: Any = None
+    aux_store: Any = None
+    _settings: Optional[Settings] = field(default=None, init=False)
+
+    def settings(self) -> Settings:
+        if self._settings is None:
+            self._settings = self.store.settings()
+        return self._settings
+
+    def data_dir(self) -> Path:
+        return self.root
+
+    def kanban_boards(self) -> list[dict[str, Any]]:
+        if self.kanban is None:
+            from ..sinks.kanban import HermesKanban
+            self.kanban = HermesKanban()
+        return self.kanban.list_boards()
+
+    def linear_backend(self) -> Any:
+        from ..sinks.linear import select_backend
+        return select_backend(lambda: self.secret("LINEAR_API_KEY"), None)
+
+    def capture_status(self) -> tuple[bool, str]:
+        return True, "live capture runs inside the gateway (see `hermes meeting-scribe doctor` there)"
+
+    def llm_status(self) -> tuple[bool, str]:
+        return True, "not probed from Desktop (run `hermes meeting-scribe llm test`)"
+
+    def llm_store(self) -> Any:
+        return self.aux_store
+
+    def google_files(self) -> Any:
+        from ..google.oauth import GoogleFiles
+        return GoogleFiles(lambda: self.root)
+
+    def google_credentials(self) -> Any:
+        from ..google.oauth import GoogleCredentials
+        return GoogleCredentials(self.google_files())
+
+    def service(self) -> Any:
+        from ..domain.models import KV_DM_NOTES
+
+        repo = self.repo
+        return SimpleNamespace(
+            repo=repo,
+            waiting_destination=lambda: {k[len(WAITING_KV):]: v for k, v in repo.kv_prefix(WAITING_KV).items()},
+            dm_notes=lambda: {k[len(KV_DM_NOTES):]: v for k, v in repo.kv_prefix(KV_DM_NOTES).items()})
+
+    def meet_importer(self) -> Any:
+        from ..google.importer import KV
+
+        return SimpleNamespace(status=lambda: {k[len(KV):]: v for k, v in self.repo.kv_prefix(KV).items()})
+
+
+def run_doctor(env: DashboardDoctorEnv) -> dict[str, Any]:
+    results, code = doctor.run_checks(doctor.registry, env)
+    return {"exit_code": code, "checks": [{"name": r.name, "status": r.status, "detail": redact(r.detail)}
+                                          for r in results]}
+
+
+def dumps(value: Any) -> str:  # tests: prove no secret leaks through any response shape
+    return json.dumps(value, default=str, ensure_ascii=False)

@@ -174,7 +174,16 @@ class Runtime:
                                         max_attempts=lambda: self.settings().pipeline_max_attempts)
                 self._services[path] = MeetingService(repo, self.layout(), runner, self.settings, clock=self.clock,
                                                       item_sinks=self.item_sinks, catalogs=self.catalogs)
+                self._wire_desktop(self._services[path])
             return self._services[path]
+
+    @staticmethod
+    def _wire_desktop(service: MeetingService) -> None:
+        """The gateway's worker is the only executor of Desktop commands (see ``desktop.control``)."""
+        from .desktop import control
+
+        service.runner.control = lambda: control.execute_one(service)
+        service.runner.pulse = lambda: control.pulse(service.repo)
 
     def start_pipeline(self, live_meeting_ids: Iterable[str] = (), *, owns_capture: bool = False) -> None:
         self.service().runner.start(live_meeting_ids, owns_capture=owns_capture)

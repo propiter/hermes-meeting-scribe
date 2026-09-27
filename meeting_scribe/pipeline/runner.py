@@ -87,6 +87,10 @@ class PipelineRunner:
         self.spawner = spawner
         self._max_attempts = max_attempts
         self.backoff = tuple(backoff)
+        # Desktop hooks (set by the runtime in the gateway): ``control`` runs one queued operator
+        # command (True when it did work); ``pulse`` records worker liveness for the Desktop page.
+        self.control: Optional[Callable[[], bool]] = None
+        self.pulse: Optional[Callable[[], None]] = None
         self._listeners: list[Listener] = []
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -181,6 +185,8 @@ class PipelineRunner:
 
     def run_once(self) -> bool:
         """Run one ready job to completion or failure; False when nothing is ready."""
+        if self.control is not None and self.control():
+            return True
         self._maybe_reclaim()
         job = self.repo.next_job(now=self.clock.now())
         if job is None:
@@ -244,6 +250,8 @@ class PipelineRunner:
         """Keep our lease fresh while a (possibly hours-long) stage runs."""
         while not stop.wait(self.HEARTBEAT_SECONDS):
             try:
+                if self.pulse is not None:
+                    self.pulse()
                 if not self.repo.heartbeat_job(job_id, self.owner, now=self.clock.now().timestamp()):
                     log.warning("meeting-scribe: lost the lease on job %s", job_id)
                     return
@@ -347,6 +355,8 @@ class PipelineRunner:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
+                if self.pulse is not None:
+                    self.pulse()
                 worked = self.run_once()
             except Exception:  # keep the worker alive; the job row keeps the error context
                 log.exception("meeting-scribe pipeline iteration crashed")

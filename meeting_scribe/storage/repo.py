@@ -84,7 +84,14 @@ CREATE UNIQUE INDEX meetings_source_external ON meetings(source, external_id) WH
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT, updated_at REAL NOT NULL);
 CREATE TABLE leases (name TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at REAL NOT NULL);
 """
-_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4)
+_V5 = """
+CREATE TABLE desktop_commands (
+  id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued', error TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE INDEX desktop_commands_state ON desktop_commands(state, created_at);
+"""
+_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5)
 SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 

@@ -26,8 +26,8 @@ def _imported(meeting, ext="conferenceRecords/abc-123", mid="m4imp001"):
 UTTS = [Utterance(0.0, 2.0, "gmeet:p1", "Ana", "Hola equipo"), Utterance(2.0, 4.0, "gmeet:p2", "Luis", "Listo")]
 
 
-def test_schema_is_v4():
-    assert SCHEMA_VERSION == 4
+def test_schema_is_v5():
+    assert SCHEMA_VERSION == 5  # v5: desktop_commands (Desktop operator queue)
 
 
 def test_meeting_source_defaults_to_discord_and_round_trips(repo, meeting):
@@ -112,7 +112,8 @@ def test_v3_database_upgrades_to_v4_in_place(tmp_path, meeting):
     conn.close()
     r = Repository(path)
     try:
-        assert r.user_version() == 4
+        assert r.user_version() == SCHEMA_VERSION  # upgrades straight through v4 and v5
+        assert r._x("SELECT COUNT(*) FROM desktop_commands").fetchone()[0] == 0
         got = r.get_meeting(meeting.id)
         assert got.source == SOURCE_DISCORD and got.external_id is None and got.channel_name == "Daily Sync"
         row = r._x("SELECT source FROM meetings WHERE id=?", (meeting.id,)).fetchone()
