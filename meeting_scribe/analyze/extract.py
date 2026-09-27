@@ -26,6 +26,7 @@ from .projects import hints_for
 from .schemas import CHUNK_SCHEMA, NOTES_SCHEMA
 
 FUZZY_RATIO = 0.85
+_SOURCE_SUFFIX_RE = re.compile(r"\s*\([^()]*\)\s*$")
 
 
 def _norm(text: str) -> str:
@@ -100,9 +101,10 @@ class LlmAnalyzer:
                    min_conf: float) -> Optional[str]:
         if not isinstance(value, str) or confidence < min_conf:
             return None
-        wanted = _norm(value)
+        # Models echo the candidate line format ("Chatio (hermes)"); the E2E run hit exactly that.
+        wanted = {_norm(value), _norm(_SOURCE_SUFFIX_RE.sub("", value))}
         for c in candidates:
-            if wanted in (_norm(c.name), _norm(c.key)):
+            if wanted & {_norm(c.name), _norm(c.key)}:
                 return c.name
         return None
 
@@ -147,7 +149,7 @@ class LlmAnalyzer:
         if not utterances:
             return Notes(meeting_title=meeting.title or meeting.channel_name, tldr="", summary="",
                          language=lang_setting if lang_setting != "auto" else (meeting.language or "en"))
-        context = prompts.candidates_block(candidates, hints_for(meeting))
+        context = prompts.candidates_block(candidates, hints_for(meeting), meeting.started_at.date())
         chunks = chunk_utterances(utterances, settings.analysis_chunk_chars)
         required = ("meeting_title", "tldr", "summary", "action_items")
         if len(chunks) == 1:

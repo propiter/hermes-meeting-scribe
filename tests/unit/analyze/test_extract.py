@@ -154,3 +154,38 @@ def test_schemas_only_require_what_extract_needs():
     item = NOTES_SCHEMA["properties"]["action_items"]["items"]
     assert item["required"] == ["title"] and item.get("additionalProperties", True) is not False
     assert NOTES_SCHEMA.get("additionalProperties", True) is not False
+
+
+def test_candidate_echoed_with_its_source_suffix_still_matches(meeting, utterances):
+    """E2E finding: the model copied the candidate line format and answered "Chatio (hermes)"."""
+    def resp(name, text):
+        data = full(project="Website (hermes)", project_confidence=0.9)
+        data["action_items"][0]["project"] = "Infra (source: linear)"
+        return data
+    notes = analyzer(FakeLLM(resp)).analyze(meeting, utterances, CANDS)
+    assert notes.project == "Website" and notes.action_items[0].project == "Infra"
+
+
+def test_prompt_gives_meeting_date_so_explicit_dates_get_a_year(meeting, utterances):
+    """E2E finding: "antes del treinta de septiembre" came back as due=null — the model had no year."""
+    llm = FakeLLM(lambda n, t: full())
+    analyzer(llm).analyze(meeting, utterances, CANDS)
+    call = llm.calls[0]
+    assert f"<meeting_date>{meeting.started_at.date().isoformat()}</meeting_date>" in call["text"]
+    assert "without a year" in call["instructions"]
+
+
+def test_prompt_asks_for_decisions_and_open_questions(meeting, utterances):
+    """E2E finding: the model omitted both although the meeting had them. The schema stays tolerant
+    (Hermes validates strictly, review finding 8), so the instructions must ask for them."""
+    llm = FakeLLM(lambda n, t: full())
+    analyzer(llm).analyze(meeting, utterances, CANDS)
+    assert "decisions lists every agreement" in llm.calls[0]["instructions"]
+    assert "open_questions every question left unresolved" in llm.calls[0]["instructions"]
+
+
+def test_missing_decisions_still_normalise_to_empty(meeting, utterances):
+    data = full()
+    del data["decisions"], data["open_questions"]
+    notes = analyzer(FakeLLM(lambda n, t: data)).analyze(meeting, utterances, CANDS)
+    assert notes.decisions == () and notes.open_questions == ()
