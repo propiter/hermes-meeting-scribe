@@ -346,14 +346,22 @@ Las notas (resumen, índice de tareas y transcripción) van al primero de estos 
   o que no existe nunca se adivina: `doctor` y `config list` lo avisan.
 - **Servidor.** Las reuniones de Meet no tienen servidor propio. Se usa el servidor de un id de canal
   configurado, si no `delivery_discord_guild` (id o nombre del servidor), si no el único servidor del
-  bot. Si el bot está en varios y no hay nada configurado, no adivina.
+  bot. Si el bot está en varios y no hay nada configurado, no adivina. Si `delivery_discord_guild`
+  está definido pero no coincide, o el servidor propio de una reunión de Discord no está disponible
+  para el bot, la reunión espera: los nombres de canal nunca se buscan en otros servidores. Un id de
+  canal de otro servidor (o de un DM) se ignora y `doctor` lo avisa.
 - **Automático.** El canal de sistema del servidor (si el bot puede escribir y adjuntar archivos
   allí); si no, el primer canal llamado como `delivery_auto_channel_names` (`general`, `meetings`,
-  `meeting-notes`, `notes`, `reuniones`, `notas`) donde el bot pueda escribir.
+  `meeting-notes`, `notes`, `reuniones`, `notas`) donde el bot pueda escribir. La elección automática
+  descarta canales NSFW y canales que `@everyone` no puede ver (un canal privado solo se usa si lo
+  configuras; entonces `doctor` avisa de que no todos ven las notas), y no elige nada hasta que el
+  servidor esté cargado.
 - **Nunca un DM.** No se usa el canal home del gateway: suele ser un DM, donde nadie más ve las notas
   y las tareas no se pueden enviar a los canales de proyecto.
-- **En espera.** Si nada se resuelve, la reunión espera (sin gastar intentos ni límite de tiempo).
-  `status` y `doctor` muestran el comando a ejecutar; tras `config set` de un canal se publica sola.
+- **En espera.** Si nada se resuelve (también "el bot no puede escribir en ningún canal automático"),
+  la reunión espera (sin gastar intentos ni límite de tiempo). `status` y `doctor` muestran el comando
+  a ejecutar; tras `config set` de un canal se publica sola. Los destinos que ya entregaron (archivos,
+  Obsidian, Kanban, Linear) no se repiten en cada reintento mientras espera.
 - **Tareas.** Una tarea con proyecto va a un hilo del canal de ese proyecto (ver "Tareas en
   Discord"), también en Meet. Una tarea sin proyecto va a `delivery_fallback_channel` si está
   definido; si no, bajo las notas.
@@ -365,6 +373,21 @@ hermes meeting-scribe config set delivery_discord_guild "Mi Equipo"   # solo si 
 hermes meeting-scribe doctor
 ```
 
+**Notas que una versión anterior publicó en un DM.** Versiones anteriores podían publicar una reunión
+en el canal home del gateway cuando era un DM. Esas reuniones siguen funcionando allí (botones,
+📋 Mis tareas) y nunca se mueven solas; `status` y `doctor` las listan. Para mover una a un canal del
+servidor, configura el canal explícitamente y vuelve a entregarla:
+
+```bash
+hermes meeting-scribe config set google_meet_discord_channel "#notas-reunion"   # o delivery_discord_channel
+hermes meeting-scribe reprocess <id> --from deliver                           # o /meeting reprocess <id> from=deliver
+```
+
+El traslado publica primero todo en el canal (resumen, tareas, índice; la transcripción solo si debía
+adjuntarse) y borra los mensajes del DM al final. Si el canal no se puede usar, el DM queda como está
+y el error explica por qué. Sin un canal configurado explícitamente las notas se quedan en el DM (el
+canal automático no se usa para esto) y el comando indica qué configurar.
+
 ### Modelos y respaldos
 
 El análisis de reuniones corre como la tarea auxiliar de Hermes `meeting_scribe`. Su modelo y su
@@ -375,7 +398,7 @@ editan lo mismo. Por defecto usa el modelo principal de Hermes (`provider: auto`
 ```bash
 hermes meeting-scribe llm show                         # proveedor, modelo, respaldos, timeout, origen
 hermes meeting-scribe llm set --provider <proveedor> --model <modelo>
-hermes meeting-scribe llm fallback add <proveedor>:<modelo>
+hermes meeting-scribe llm fallback add <proveedor>:<modelo>      # un respaldo necesita modelo
 hermes meeting-scribe llm fallback add <proveedor>:<modelo> --position 1
 hermes meeting-scribe llm fallback remove 2            # por posición, proveedor o proveedor:modelo
 hermes meeting-scribe llm fallback clear
@@ -401,7 +424,11 @@ colgada se abandona en segundo plano (Python no puede detenerla) y aún puede te
 tokens. `analysis_max_tokens` (8192 por defecto) se envía en cada llamada para que el proveedor no
 reserve toda la ventana de contexto, que es lo que convierte un saldo bajo en "402 … can only afford
 N". Una respuesta que no es JSON válido (normalmente cortada) se reintenta una vez al momento con una
-instrucción más estricta. `doctor` muestra la cadena y avisa si no hay respaldo.
+instrucción más estricta (ese fragmento se envía, y se cobra, dos veces; el intento puede durar hasta
+el doble del límite). Si aún hay dos llamadas colgadas, el siguiente análisis falla al momento con un
+error claro en vez de lanzar una tercera. `doctor` muestra la cadena y avisa si no hay respaldo o si
+una entrada no tiene modelo (Hermes la ignora). Editar la cadena conserva las claves extra escritas a
+mano en una entrada (`key_env`, `api_mode`, …), y las URL se muestran sin credenciales ni query.
 
 ## Tareas en Discord
 

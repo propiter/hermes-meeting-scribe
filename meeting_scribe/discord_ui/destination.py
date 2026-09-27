@@ -11,13 +11,16 @@ Channel settings hold an id or a NAME. A name is matched against the server's te
 removing decoration (emoji, ``#``, case, ``-``/``_``/spaces); ambiguous or unknown names are never
 guessed — they are reported and skipped.
 
-The server ("guild"): the meeting's own for Discord meetings; for imported meetings (no guild) the
-one of a configured channel id, else ``delivery_discord_guild`` (id or name), else the bot's only
-server. With several servers and nothing configured nothing is guessed.
+The server ("guild"): the meeting's own for Discord meetings (not cached → PENDING, never another
+server); for imported meetings (no guild) the one of a configured channel id, else
+``delivery_discord_guild`` (id or name; configured but unresolvable → PENDING), else the bot's only
+server. With several servers and nothing configured nothing is guessed. Configured ids of a DM or of
+another server are ignored and reported.
 
 AUTOMATIC, in that server: its system channel when the bot can post AND attach files there, else
 the first text channel whose clean name is in ``delivery_auto_channel_names`` (list order, then
-channel position) where the bot can post.
+channel position) where the bot can post. Never NSFW, never hidden from ``@everyone``, and nothing
+while the bot's member is not cached (permissions unknown).
 
 Never a DM: Hermes' home channel is no longer a fallback (it is often a DM with the owner, where
 nobody else sees the notes and tasks cannot be routed); every candidate must belong to a server.

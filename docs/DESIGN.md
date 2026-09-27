@@ -633,12 +633,24 @@ passed `timeout=600`, and the eventual answer was truncated (`LLM response is no
   (`run_with_deadline`, contextvars copied); when it does not return in time the attempt fails with
   `LlmTimeout` and enters the normal backoff. The thread cannot be killed: it is abandoned and its
   result discarded (it may still finish and cost tokens). No retry inside the same attempt after a
-  timeout.
+  timeout. Abandoned threads are tracked per task name: with `MAX_ABANDONED` (2) still alive the next
+  call fails at once with `TooManyHungCalls` (logged) instead of piling up threads and provider
+  connections; a finished thread frees its slot.
 - **`analysis_max_tokens`** (default 8192) is always sent so providers do not reserve the whole
   window (the cause of the 402 with a low balance).
 - **Non-JSON reply**: one immediate retry within the attempt, with an appended instruction to
-  answer with one complete JSON object; the second failure counts as a failed attempt. The existing
+  answer with one complete JSON object; the second failure counts as a failed attempt. Cost: that
+  chunk is sent and billed twice and the attempt may take up to 2 × the timeout. The existing
   schema-rejection → `json_mode` retry is unchanged (different failure).
+- **Chain edits keep hand-written keys**: `fallback add|remove|set` work on the stored entries, not on
+  the parsed `Link`s, so `key_env`, `api_key`, `api_mode`, `transport` and any other key survive
+  (`set` reuses the stored entry of a link it keeps). A fallback needs a model: Hermes'
+  `_resolve_fallback_entry` returns nothing without one, so `add`/`set` refuse it and `view().problems`
+  (hence `llm show` and `doctor`) flags existing model-less entries.
+- **No credentials in output**: `Link.label()`, `to_dict()` (JSON) and probe errors show a
+  `base_url` without userinfo, query string or fragment.
+- **Defaults**: `llm set` with a value equal to the plugin default (e.g. `--provider auto`) says
+  "using the default value" rather than "saved" — Hermes' writer strips values equal to defaults.
 - `doctor` shows `primary → fallback 1 → …` and warns when there is no fallback.
 
 ## 19. Where notes are posted (unreleased)
@@ -656,11 +668,26 @@ does not have guild info attached") and nobody else saw it.
   channel or nothing is reported (`doctor`, `config list`) and skipped — never guessed.
 - **Server**: the meeting's own (Discord); for imported meetings the server of a configured channel
   id, else `delivery_discord_guild` (id or name), else the bot's only server; with several servers
-  and nothing configured nothing is guessed. A name unique across all servers also fixes the server.
+  and nothing configured nothing is guessed. A name unique across all servers also fixes the server —
+  but ONLY in that last case: a Discord meeting whose server is not in the cache (not loaded, bot
+  removed) and a `delivery_discord_guild` that does not resolve are PENDING with that reason, never a
+  global name search (it would post one server's meeting in another server).
+- **Ids are checked too**: a configured channel id that the cache shows as a DM (`not_in_server`) or
+  as a channel of another server than the chosen one (`other_guild`) is ignored and reported, for
+  the notes channel and `delivery_fallback_channel`. The publisher repeats the check on the channel it
+  actually opens (ids not in the cache are fetched from the API).
+- **Ids are ASCII digits** (`domain.text.is_ascii_digits`): `str.isdigit()` also accepts `²` or
+  Arabic-Indic digits, which `int()` rejects or Discord never issues; such values are names.
 - **AUTOMATIC**: the server's `system_channel` when the bot can send AND attach files there (the
   transcript), else the first text channel whose clean name is in `delivery_auto_channel_names`
   (list order, then position) where it can send. Default names: general, meetings, meeting-notes,
-  notes, reuniones, notas.
+  notes, reuniones, notas. Never an NSFW channel nor one `@everyone` cannot view (`default_role`
+  permissions): notes are for the team, and a private channel is used only when configured
+  explicitly (then `doctor` warns that it is not visible to `@everyone`). Permissions must be KNOWN:
+  with `guild.me` not cached (server still loading) nothing is chosen automatically and the delivery
+  waits with "server … is not loaded yet"; `can_send` treats unknown permissions as "no". "No
+  automatic channel the bot can post in" is also PENDING (with the list of names and the skipped
+  private/NSFW channels), not a failure.
 - **Never a DM**: the home-channel fallback is REMOVED, not just filtered. It was only useful when
   it was a server channel, and then the automatic channel or an explicit setting covers it; keeping
   it would keep the surprising "posted where only I see it" failure and a second implicit rule.
@@ -671,9 +698,34 @@ does not have guild info attached") and nobody else saw it.
   problem: dropping the notes would be worse than waiting). The reason (with the exact
   `config set` command) is stored under `pipeline.waiting_destination.<id>` and shown by `status`
   and `doctor`; `config set` of a destination key re-queues waiting deliveries immediately. A
-  meeting already posted in a server channel keeps being edited where it is; one posted in a DM by
-  an older version is moved on its next delivery (DM messages deleted, pointers dropped, reposted —
-  `reprocess <id> --from deliver`).
+  meeting already posted keeps being edited where it is. While a delivery waits, the other sinks are
+  not re-run on every 2-minute retry: `pipeline.sinks_done.<id>` remembers the sinks that delivered
+  the current `notes.json` (sha256) during this job; it is dropped when the job ends, on an explicit
+  `reprocess` and whenever the notes change.
+- **Notes an older version posted in a DM** (the removed home-channel fallback) are moved ONLY
+  explicitly and safely. Rejected: moving them on any delivery (the first attempt did that) — a
+  button refresh or a 📁 move triggered it, it deleted the DM before knowing the server channel
+  worked (a deleted channel lost the notes and spent attempts), and it bypassed the legacy
+  transcript marker, posting a private DM transcript in `#general`.
+  - Trigger: `reprocess <id> --from deliver` (CLI or `/meeting reprocess <id> from=deliver`) sets
+    `discord.move_from_dm.<id>`; only the DELIVER stage reads it (`sink.publish`). Button refreshes,
+    `refresh_item` and `_move_item` never move. The flag is cleared after that delivery, when the job
+    fails for good, and by any other reprocess.
+  - Target: only a channel from `google_meet_discord_channel` / `delivery_discord_channel` (never
+    the automatic one). None configured → the notes stay in the DM and `discord.dm_notes.<id>`
+    stores the exact `config set` + `reprocess` commands (shown by `status`, `doctor` and the
+    reprocess reply).
+  - Order: open and check the channel (server, same guild) → save a `dm_move` pointer holding the old
+    DM pointers, then drop them → publish header, transcript, tasks, index in the channel (each
+    pointer saved as it is posted) → only then delete the DM messages and the `dm_move` pointer. A
+    failure before the delete leaves the DM untouched with a clear `DmMoveError`; a retry resumes
+    from the saved pointers without duplicates; if nothing new was posted yet and the channel went
+    away (or a button refresh runs meanwhile), the move is rolled back to the DM pointers.
+  - The transcript keeps its intent: the `{"skipped": "legacy"}` marker is not in the DM (it has no
+    channel) and stays; the new summary keeps the old `attach` flag, so a meeting that was not meant
+    to attach its transcript never does after the move. A transcript that was attached in the DM is
+    attached again in the channel before the DM copy is deleted.
+  - Until moved, a DM meeting works where it is (buttons, 📋 My tasks, edits in place).
 - **Tasks**: with a project → the project channel (routing of §16, candidates from the server chosen
   above, so Meet tasks route too); without → `delivery_fallback_channel` (id or name; anchor +
   thread like a project channel), else the notes chat as before.

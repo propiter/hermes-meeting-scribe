@@ -60,6 +60,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Notes left in a DM by an older version are moved only on request and safely**: nothing moves on
+  button clicks, 📁 moves or retries; `reprocess <id> --from deliver` moves the meeting to an
+  explicitly configured channel (never the automatic one), publishing there first and deleting the
+  DM messages last. A channel that cannot be used leaves the DM intact with a clear error; an
+  interrupted move resumes without duplicates. A meeting that was not meant to attach its transcript
+  (or predates attachments) does not attach it when moving. Without a configured channel the notes
+  stay in the DM and `status`, `doctor` and the reprocess reply say what to set.
+- Notes are never posted in another server: a Discord meeting whose server is not loaded, or a
+  `delivery_discord_guild` that does not match, now waits instead of looking a channel name up in
+  every server; configured channel ids of another server or a DM are ignored and reported.
+- The automatic channel is never NSFW nor hidden from `@everyone` (a private channel is used only if
+  configured, and `doctor` says so), and nothing is chosen while the server is still loading.
+- Non-ASCII digits (`²`, `١٢٣`) in ids no longer crash the delivery; they are treated as names.
+- `llm fallback add/set` require a model (Hermes skips fallbacks without one) and `llm show`/`doctor`
+  flag existing ones; editing the chain keeps extra keys of hand-written entries (`key_env`,
+  `api_key`, `api_mode`, `transport`, …); URLs are shown without credentials or query string; `llm
+  set` with a default value says it uses the default.
+- At most two timed-out analysis calls are left running; the next one fails fast with a clear error.
+- While a delivery waits for a Discord channel, sinks that already delivered (files, Obsidian,
+  Kanban, Linear) are not re-run every two minutes.
 - Folder and transcript file names are cut on word boundaries, so a Meet code is kept whole or left
   out (never `…-gmj-bcgo-bq`); the slug limit went from 40 to 60 characters.
 - Meet import: one failing conference (403/404/5xx, malformed data) no longer blocks the others; it

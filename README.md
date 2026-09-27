@@ -339,15 +339,21 @@ Notes (summary, task index and transcript) go to the first of these that works:
   unknown name is never guessed: `doctor` and `config list` report it.
 - **Server.** Meet meetings have no server of their own. The plugin uses the server of a channel id
   you configured, else `delivery_discord_guild` (server id or name), else the bot's only server. If
-  the bot is in several servers and none is set, it does not guess.
+  the bot is in several servers and none is set, it does not guess. If `delivery_discord_guild` is
+  set but does not match, or a Discord meeting's own server is not available to the bot, the meeting
+  waits — channel names are never looked up in other servers. A channel id from another server (or
+  a DM) is ignored and reported by `doctor`.
 - **Automatic.** The server's system channel (if the bot can post and attach files there), else the
   first channel named like `delivery_auto_channel_names` (`general`, `meetings`, `meeting-notes`,
-  `notes`, `reuniones`, `notas`) where the bot can post.
+  `notes`, `reuniones`, `notas`) where the bot can post. The automatic choice skips NSFW channels and
+  channels `@everyone` cannot see (a private channel is used only if you configure it; `doctor` then
+  notes that not everyone sees the notes), and chooses nothing until the server is fully loaded.
 - **Never a DM.** The gateway's home channel is not used: it is often a DM, where nobody else sees
   the notes and tasks cannot be routed to project channels.
-- **Waiting.** If nothing resolves, the meeting waits (no attempts are used, no time limit).
-  `status` and `doctor` show the command to run; after `config set` of a channel it is posted on
-  its own.
+- **Waiting.** If nothing resolves (including "the bot cannot post in any automatic channel"), the
+  meeting waits (no attempts are used, no time limit). `status` and `doctor` show the command to run;
+  after `config set` of a channel it is posted on its own. Sinks that already delivered (files,
+  Obsidian, Kanban, Linear) are not re-run on every retry while it waits.
 - **Tasks.** A task with a project goes to a thread in that project's channel (see "Tasks in
   Discord"), for Meet too. A task without a project goes to `delivery_fallback_channel` if set, else
   under the notes.
@@ -359,6 +365,21 @@ hermes meeting-scribe config set delivery_discord_guild "My Team"    # only if t
 hermes meeting-scribe doctor
 ```
 
+**Notes an older version posted in a DM.** Earlier versions could post a meeting to the gateway's
+home channel when it was a DM. Those meetings keep working there (buttons, 📋 My tasks) and are
+never moved by themselves; `status` and `doctor` list them. To move one to a server channel,
+configure the channel explicitly and re-deliver it:
+
+```bash
+hermes meeting-scribe config set google_meet_discord_channel "#meeting-notes"   # or delivery_discord_channel
+hermes meeting-scribe reprocess <id> --from deliver                           # or /meeting reprocess <id> from=deliver
+```
+
+The move posts everything in the channel first (summary, tasks, index; the transcript only if it was
+meant to be attached) and deletes the DM messages last. If the channel cannot be used, the DM stays
+as it is and the error says why. Without an explicitly configured channel the notes stay in the DM
+(the automatic channel is not used for this) and the command explains what to set.
+
 ### Models and fallbacks
 
 Meeting analysis runs as the Hermes auxiliary task `meeting_scribe`. Its model and fallback chain
@@ -369,7 +390,7 @@ default it uses Hermes' main model (`provider: auto`).
 ```bash
 hermes meeting-scribe llm show                         # provider, model, fallbacks, timeout, origin
 hermes meeting-scribe llm set --provider <provider> --model <model>
-hermes meeting-scribe llm fallback add <provider>:<model>
+hermes meeting-scribe llm fallback add <provider>:<model>        # a fallback needs a model
 hermes meeting-scribe llm fallback add <provider>:<model> --position 1
 hermes meeting-scribe llm fallback remove 2            # by position, provider or provider:model
 hermes meeting-scribe llm fallback clear
@@ -394,8 +415,12 @@ does not return fails the attempt, which is retried with backoff. The stuck call
 background (Python cannot stop it) and may still finish and use tokens. `analysis_max_tokens`
 (default 8192) is sent with every call so the provider does not reserve the whole context window,
 which is what turns a low balance into "402 … can only afford N". A reply that is not valid JSON
-(usually cut off) is retried once right away with a stricter instruction. `doctor` shows the chain
-and warns when there is no fallback.
+(usually cut off) is retried once right away with a stricter instruction (that chunk is sent, and
+billed, twice; the attempt can take up to twice the timeout). If two timed-out calls are still
+running, the next analysis fails fast with a clear error instead of starting a third. `doctor`
+shows the chain and warns when there is no fallback or when an entry has no model (Hermes skips it).
+Editing the chain keeps any extra keys you wrote by hand in an entry (`key_env`, `api_mode`, …), and
+URLs are printed without credentials or query string.
 
 ## Tasks in Discord
 
