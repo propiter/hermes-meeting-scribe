@@ -35,6 +35,7 @@ def hermes_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "os-home"))
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+    monkeypatch.delenv("_HERMES_GATEWAY", raising=False)  # not a gateway unless a test says so
     monkeypatch.setattr(plugins_mod, "get_bundled_plugins_dir", lambda: bundled)
     return home
 

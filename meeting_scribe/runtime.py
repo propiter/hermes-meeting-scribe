@@ -179,10 +179,11 @@ class Runtime:
     def stop_pipeline(self) -> None:
         with self._lock:
             poller, self._meet_poller = self._meet_poller, None
-            for svc in self._services.values():
-                svc.runner.stop()
+            runners = [svc.runner for svc in self._services.values()]
         if poller is not None:
             poller.stop()
+        for runner in runners:  # joined outside the lock (see close())
+            runner.stop()
 
     # -- Google Meet import (DESIGN §17) ----------------------------------------------------------
     def google_files(self) -> "GoogleFiles":
@@ -265,8 +266,11 @@ class Runtime:
         return bool(ok), str(detail)
 
     def close(self) -> None:
+        # Threads first and WITHOUT the runtime lock: the poller/worker may be waiting for it inside
+        # ``repo()``; joining them while holding it would time out and leave them on a closed DB.
+        self.stop_pipeline()
         with self._lock:
-            self.stop_pipeline()
+            self.stop_pipeline()  # anything started meanwhile
             for repo in self._repos.values():
                 repo.close()
             self._repos.clear()

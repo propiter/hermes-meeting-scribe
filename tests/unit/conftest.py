@@ -15,6 +15,13 @@ from meeting_scribe.domain.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _not_a_gateway(monkeypatch):
+    """Tests may run from inside a Hermes gateway shell (``_HERMES_GATEWAY=1`` inherited): register()
+    would then start background workers. Tests that need gateway behaviour patch it explicitly."""
+    monkeypatch.delenv("_HERMES_GATEWAY", raising=False)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem):
     """Run ``async def`` tests on a fresh event loop (no pytest-asyncio dependency)."""

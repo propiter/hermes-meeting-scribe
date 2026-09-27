@@ -251,3 +251,31 @@ def test_google_paths_live_under_the_profile_data_dir(tmp_path):
     assert files.client_path == tmp_path / "data" / "google" / "client.json"
     assert files.token_path == tmp_path / "data" / "google" / "token.json"
     assert rt.google_connected_at() is None and not rt.google_credentials().connected()
+
+
+def test_close_does_not_deadlock_with_a_poller_waiting_for_the_runtime_lock(tmp_path, caplog, monkeypatch):
+    """close() used to hold the runtime lock while joining the poller, whose tick needed that lock:
+    the join timed out and the thread then used the closed database (finding 14)."""
+    import logging
+    import time
+    from meeting_scribe.google.importer import MeetPoller
+    monkeypatch.setattr(MeetPoller, "FIRST_DELAY", 0.0)
+    entered = threading.Event()
+    real_tick = MeetPoller.tick
+
+    def slow_tick(self):
+        entered.set()
+        time.sleep(0.3)  # close() grabs the runtime lock meanwhile
+        return real_tick(self)
+    monkeypatch.setattr(MeetPoller, "tick", slow_tick)
+    h, _cfg = host(tmp_path, config={"google_meet_enabled": True})
+    rt = Runtime(h)
+    rt.start_pipeline()
+    poller = rt._meet_poller
+    assert entered.wait(5)
+    caplog.set_level(logging.ERROR)
+    t0 = time.monotonic()
+    rt.close()
+    assert time.monotonic() - t0 < 5
+    assert not poller.running
+    assert not any("closed database" in (r.getMessage() + str(r.exc_info)) for r in caplog.records)
