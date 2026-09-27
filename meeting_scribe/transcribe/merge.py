@@ -11,9 +11,10 @@ from dataclasses import dataclass, field, replace
 from typing import Sequence
 
 from ..domain.models import Speaker, Utterance, Word
-from .filters import RawSegment, keep_segments
+from .filters import RawSegment, RawWord, keep_segments
 
 MERGE_GAP = 1.0
+SPLIT_GAP = 1.5  # a pause longer than this inside one whisper segment starts a new utterance
 
 
 @dataclass(frozen=True)
@@ -32,8 +33,32 @@ def _to_utterance(track: TrackResult, seg: RawSegment) -> Utterance:
                      confidence=round(seg.avg_logprob, 4))
 
 
+def split_on_word_gaps(seg: RawSegment, gap: float = SPLIT_GAP) -> list[RawSegment]:
+    """Split a segment wherever its words are more than ``gap`` seconds apart.
+
+    On a timeline-aligned per-speaker track the other speakers' turns are silence, and whisper
+    often returns ONE segment across it (seen in the E2E run: 0.4→39.9 s holding speech at 0.4 s
+    and at 36.6 s). Left whole, that sentence would be ordered before everything said in between.
+    Needs word timestamps; segments without words are returned unchanged.
+    """
+    words = seg.words
+    if len(words) < 2:
+        return [seg]
+    groups: list[list[RawWord]] = [[words[0]]]
+    for prev, word in zip(words, words[1:]):
+        if word.start - prev.end > gap:
+            groups.append([])
+        groups[-1].append(word)
+    if len(groups) == 1:
+        return [seg]
+    return [replace(seg, start=g[0].start if i else seg.start, end=g[-1].end if i < len(groups) - 1 else seg.end,
+                    text="".join(w.word for w in g), words=tuple(g))
+            for i, g in enumerate(groups)]
+
+
 def merge_tracks(tracks: Sequence[TrackResult], gap: float = MERGE_GAP) -> list[Utterance]:
-    utts = sorted((_to_utterance(tr, s) for tr in tracks for s in keep_segments(tr.segments)),
+    utts = sorted((_to_utterance(tr, part) for tr in tracks for s in keep_segments(tr.segments)
+                   for part in split_on_word_gaps(s)),
                   key=lambda u: (u.t0, u.speaker_id))
     merged: list[Utterance] = []
     for u in utts:

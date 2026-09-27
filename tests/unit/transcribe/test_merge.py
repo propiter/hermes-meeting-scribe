@@ -33,3 +33,26 @@ def test_hallucinations_filtered_during_merge_and_text_stripped():
     utts = merge_tracks([ana])
     assert [u.text for u in utts] == ["hola"]
     assert utts[0].confidence == -0.2
+
+
+def test_segment_spanning_a_long_silence_is_split_on_word_gaps():
+    """E2E finding: on a per-speaker track whisper returns ONE segment across the silence while
+    others talk (0.4→39.9 s with speech at 0.4 and 36.6 s). Split on word gaps so the later
+    sentence is ordered after the other speakers' turns."""
+    w = lambda a, b, t: RawWord(a, b, t, 0.9)  # noqa: E731
+    pedro = TrackResult(Speaker("1", "Pedro"), 0.0, [
+        s(0.4, 39.9, " Buenos días. Me parece bien.",
+          (w(0.4, 1.0, " Buenos"), w(1.0, 1.7, " días."), w(36.6, 37.0, " Me"), w(37.0, 37.4, " parece"),
+           w(37.4, 39.9, " bien.")))])
+    laura = TrackResult(Speaker("2", "Laura"), 0.0, [s(12.0, 20.0, "Terminé las pruebas.")])
+    utts = merge_tracks([pedro, laura])
+    assert [(u.speaker, u.t0, u.t1, u.text) for u in utts] == [
+        ("Pedro", 0.4, 1.7, "Buenos días."), ("Laura", 12.0, 20.0, "Terminé las pruebas."),
+        ("Pedro", 36.6, 39.9, "Me parece bien.")]
+    assert [w.text for w in utts[2].words] == ["Me", "parece", "bien."]
+
+
+def test_short_word_gaps_do_not_split():
+    w = lambda a, b, t: RawWord(a, b, t, 0.9)  # noqa: E731
+    ana = TrackResult(Speaker("1", "Ana"), 0.0, [s(0, 3, "uno dos", (w(0, 1, " uno"), w(2.0, 3, " dos")))])
+    assert [u.text for u in merge_tracks([ana])] == ["uno dos"]
