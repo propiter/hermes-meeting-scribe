@@ -118,6 +118,18 @@ def llm_update(store: Any, body: Mapping[str, Any]) -> dict[str, Any]:
 
     Validation is ``llm_config``'s (same as ``hermes meeting-scribe llm set|fallback set``); a base_url
     with embedded credentials is stored as typed but only ever displayed through ``safe_url``."""
+    # Stage the complete edit before persisting anything. The real host holds its
+    # cross-process config lock around the read/validate/write transaction.
+    if hasattr(store, "update_atomic"):
+        store.update_atomic(lambda staged: _llm_update(staged, body))
+    else:
+        staged = llm_config.BufferedAuxStore(store)
+        _llm_update(staged, body)
+        store.write(staged.changes)
+    return llm_view(store)
+
+
+def _llm_update(store: Any, body: Mapping[str, Any]) -> dict[str, Any]:
     current = llm_config.view(store)
     primary = {k: body[k] for k in ("provider", "model", "base_url", "timeout") if k in body}
     if "timeout" in primary and primary["timeout"] is not None:

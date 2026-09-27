@@ -6,6 +6,8 @@ path other than the one audio file the host media player needs.
 """
 from __future__ import annotations
 
+import math
+
 import base64
 import binascii
 import json
@@ -53,6 +55,9 @@ def decode_cursor(value: str, kinds: tuple[type, ...]) -> Optional[list[Any]]:
     if not isinstance(data, list) or len(data) != len(kinds) or \
             not all(isinstance(v, k) and not isinstance(v, bool) for v, k in zip(data, kinds)):
         raise ValueError("invalid cursor")
+    for v, kind in zip(data, kinds):
+        if (kind is int and not -(2**63) <= v < 2**63) or (kind is float and not math.isfinite(v)):
+            raise ValueError("invalid cursor")
     return data
 
 

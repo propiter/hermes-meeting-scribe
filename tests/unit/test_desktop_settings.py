@@ -88,6 +88,14 @@ def test_llm_update_primary_and_fallbacks_through_llm_config():
             ds.llm_update(store, bad)
 
 
+def test_invalid_fallback_does_not_write_primary():
+    store = MemStore({"provider": "old", "model": "original"})
+    before = dict(store.task)
+    with pytest.raises(ValueError):
+        ds.llm_update(store, {"provider": "new", "fallback_chain": [{"provider": "openai"}]})
+    assert store.task == before
+
+
 def test_llm_update_keeps_redacted_fallback_base_url():
     store = MemStore({"provider": "a", "model": "m1",
                       "fallback_chain": [{"provider": "b", "model": "m2", "base_url": "https://k@x.example/v1"}]})

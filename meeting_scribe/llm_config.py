@@ -19,6 +19,8 @@ injected so everything else is tested with a dictionary.
 """
 from __future__ import annotations
 
+import math
+
 import contextvars
 import logging
 import re
@@ -164,9 +166,11 @@ def view(store: AuxStore) -> LlmView:
     raw_timeout = pick("timeout")
     try:
         timeout = float(raw_timeout) if raw_timeout not in (None, "") else None
-    except (TypeError, ValueError):
+        if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError("invalid timeout")
+    except (TypeError, ValueError, OverflowError):
         timeout = None
-        problems.append(f"{CONFIG_PATH}.timeout={raw_timeout!r} is not a number")
+        problems.append(f"{CONFIG_PATH}.timeout must be a finite positive number")
     chain_raw = user.get("fallback_chain")
     chain: list[Link] = []
     if chain_raw is not None and not isinstance(chain_raw, list):
@@ -196,7 +200,7 @@ def set_primary(store: AuxStore, *, provider: Optional[str] = None, model: Optio
     if base_url is not None:
         values["base_url"] = validate_link(Link("auto", "", _clean(base_url))).base_url
     if timeout is not None:
-        if timeout <= 0:
+        if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be a positive number of seconds")
         values["timeout"] = timeout
     if not values:
@@ -366,6 +370,25 @@ def run_with_deadline(fn: Callable[[], Any], seconds: float, *, name: str) -> An
 
 
 # -- Hermes-backed store ----------------------------------------------------------------------------
+class BufferedAuxStore:
+    """Validation workspace; never writes through to the underlying store."""
+
+    def __init__(self, store: AuxStore) -> None:
+        self.store = store
+        self.task = dict(store.user_task_config() or {})
+        self.changes: dict[str, Any] = {}
+
+    def user_task_config(self) -> Mapping[str, Any]:
+        return self.task
+
+    def main_model(self) -> Link:
+        return self.store.main_model()
+
+    def write(self, values: Mapping[str, Any]) -> None:
+        self.task.update(values)
+        self.changes.update(values)
+
+
 class HermesAuxStore:
     """Reads/writes ``auxiliary.meeting_scribe`` in the active profile's config.yaml."""
 
@@ -385,9 +408,24 @@ class HermesAuxStore:
                         _clean(model.get("base_url")))
         return Link("auto", _clean(model))
 
-    def write(self, values: Mapping[str, Any]) -> None:
-        import contextlib
+    def update_atomic(self, edit: Callable[[BufferedAuxStore], Any]) -> None:
+        from hermes_cli import config as hc
+        from hermes_cli.plugins_state import _locked_plugin_state
 
+        with _locked_plugin_state(hc.get_config_path()):
+            hc.read_user_config_raw()
+            staged = BufferedAuxStore(self)
+            edit(staged)
+            self._write_locked(staged.changes)
+
+    def write(self, values: Mapping[str, Any]) -> None:
+        from hermes_cli import config as hc
+        from hermes_cli.plugins_state import _locked_plugin_state
+
+        with _locked_plugin_state(hc.get_config_path()):
+            self._write_locked(values)
+
+    def _write_locked(self, values: Mapping[str, Any]) -> None:
         from hermes_cli import config as hc
 
         if hc.is_managed():
@@ -395,19 +433,13 @@ class HermesAuxStore:
         try:
             from hermes_cli import managed_scope
             managed = [k for k in values if managed_scope.is_key_managed(f"{CONFIG_PATH}.{k}")]
-        except Exception:  # older Hermes without managed scopes
+        except ImportError:  # older Hermes without managed scopes
             managed = []
         if managed:
             raise PermissionError(f"{CONFIG_PATH}.{managed[0]} is administrator-managed")
-        try:  # the cross-process lock Hermes' own plugin-settings writer uses; best effort
-            from hermes_cli.plugins_state import _locked_plugin_state
-            lock: Any = _locked_plugin_state(hc.get_config_path())
-        except Exception:
-            lock = contextlib.nullcontext()
         preserve = {("auxiliary", AUX_TASK, key) for key in values}
-        with lock:
-            hc.read_user_config_raw()  # fail closed on a malformed config.yaml before writing
-            hc.save_config({"auxiliary": {AUX_TASK: dict(values)}}, preserve_keys=preserve, merge_existing=True)
+        hc.read_user_config_raw()  # fail closed on a malformed config.yaml before writing
+        hc.save_config({"auxiliary": {AUX_TASK: dict(values)}}, preserve_keys=preserve, merge_existing=True)
 
     def probe(self, link: Link, timeout: float) -> tuple[bool, str]:
         from agent.auxiliary_client import resolve_provider_client

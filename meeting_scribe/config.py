@@ -9,6 +9,8 @@ default and surface as ``warnings`` (shown by ``doctor``).
 """
 from __future__ import annotations
 
+import math
+
 import os
 import re
 from dataclasses import dataclass, field, fields
@@ -174,7 +176,12 @@ def _coerce(opt: Opt, raw: Any) -> Any:
     if opt.kind in ("int", "float"):
         if isinstance(raw, bool):
             raise ValueError("expected a number")
-        value: float = int(str(raw).strip()) if opt.kind == "int" else float(raw)
+        try:
+            value: float = int(str(raw).strip()) if opt.kind == "int" else float(raw)
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError("expected a finite number") from None
+        if opt.kind == "float" and not math.isfinite(value):
+            raise ValueError("expected a finite number")
         if (opt.minimum is not None and value < opt.minimum) or (opt.maximum is not None and value > opt.maximum):
             raise ValueError(f"out of range [{opt.minimum}, {opt.maximum}]")
         return value
@@ -295,7 +302,7 @@ class Settings:
             try:
                 values[key] = opt.default if raw is None or raw is _MISSING else _coerce(opt, raw)
             except (ValueError, TypeError) as exc:
-                warnings.append(f"{key}={raw!r} is invalid ({exc}); using {opt.yaml_default!r}")
+                warnings.append(f"{key}=invalid; using {opt.yaml_default!r}")
                 values[key] = opt.default
         values["commands_aliases"] = _normalize_aliases(values["commands_aliases"])
         return cls(**values, warnings=tuple(warnings))

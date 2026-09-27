@@ -120,6 +120,56 @@ def test_settings_and_llm_round_trip_through_hermes_config(served):
     assert aux["fallback_chain"] == [{"provider": "nous", "model": "m2"}]
 
 
+def test_invalid_llm_edit_leaves_config_byte_identical(served):
+    c, home = served["client"], served["home"]
+    path = home / "config.yaml"
+    before = path.read_bytes()
+    r = c.put(f"{PREFIX}/v1/llm", json={"model": "new", "fallback_chain": [{"provider": "openai"}]})
+    assert r.status_code == 400
+    assert path.read_bytes() == before
+
+
+def test_llm_atomic_write_preserves_unknown_secrets_and_managed_keys(served, monkeypatch):
+    from hermes_cli import config as hc, managed_scope
+    c, home = served["client"], served["home"]
+    path = home / "config.yaml"
+    cfg = yaml.safe_load(path.read_text())
+    task = cfg["auxiliary"]["meeting_scribe"]
+    task.update({"api_key": "opaque-secret", "transport": "custom",
+                 "fallback_chain": [{"provider": "nous", "model": "backup", "api_key": "fallback-secret"}]})
+    path.write_text(yaml.safe_dump(cfg))
+    before = path.read_bytes()
+    monkeypatch.setattr(managed_scope, "is_key_managed", lambda key: key.endswith("fallback_chain"))
+    body = {"model": "new", "fallback_chain": [{"provider": "nous", "model": "backup"}]}
+    assert c.put(f"{PREFIX}/v1/llm", json=body).status_code == 403
+    assert path.read_bytes() == before
+    monkeypatch.setattr(managed_scope, "is_key_managed", lambda key: False)
+    original = hc.save_config
+    writes = []
+    def save(*args, **kwargs):
+        writes.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(hc, "save_config", save)
+    assert c.put(f"{PREFIX}/v1/llm", json=body).status_code == 200
+    assert len(writes) == 1
+    task = yaml.safe_load(path.read_text())["auxiliary"]["meeting_scribe"]
+    assert task["api_key"] == "opaque-secret" and task["transport"] == "custom"
+    assert task["fallback_chain"][0]["api_key"] == "fallback-secret"
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("GET", "/v1/settings", None), ("HEAD", "/v1/settings", None),
+    ("POST", "/v1/meetings/int0001a/commands", {"request_id": "anon", "action": "reprocess", "stage": "deliver", "confirm": True}),
+    ("PUT", "/v1/llm", {"model": "unauthorized"}),
+])
+def test_host_auth_all_methods_without_token(served, method, path, body):
+    from fastapi.testclient import TestClient
+    before = (served["home"] / "config.yaml").read_bytes()
+    anon = TestClient(served["ws"].app)
+    assert anon.request(method, PREFIX + path, json=body).status_code == 401
+    assert (served["home"] / "config.yaml").read_bytes() == before
+
+
 def test_status_doctor_and_reprocess_queue(served):
     c, home = served["client"], served["home"]
     mid = _seed(home)
