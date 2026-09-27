@@ -73,6 +73,11 @@ test('parseError reads Desktop transport errors', () => {
   assert.deepEqual(mod.parseError(new Error('404: {"detail":"not found"}')), { status: 404, message: 'not found' })
   assert.deepEqual(mod.parseError(new Error('400: {"detail":"transcribe_beam_size: must be <= 10"}')).message, 'transcribe_beam_size: must be <= 10')
   assert.deepEqual(mod.parseError(new Error('boom')), { status: 0, message: 'boom' })
+  // What Electron actually throws: the IPC wrapper prefixes the backend answer.
+  const ipc = new Error(`Error invoking remote method 'hermes:api': Error: 404: {"detail":"Plugin not found"}`)
+  assert.deepEqual(mod.parseError(ipc), { status: 404, message: 'Plugin not found' })
+  assert.equal(mod.failureKey(ipc, true), 'error.disabled')
+  assert.equal(mod.failureKey(new Error(`Error invoking remote method 'hermes:api': Error: 404: {"detail":"meeting not found"}`), true), 'error.notFound')
   assert.equal(mod.failureKey(new Error('404: {"detail":"Not Found"}'), false), 'error.disabled')
   assert.equal(mod.failureKey(new Error('404: {"detail":"not found"}'), true), 'error.notFound')
   assert.equal(mod.failureKey(new Error('500: x'), true), 'error.generic')
@@ -178,7 +183,7 @@ test('page renders the library with rows, filters and pager', opts, async () => 
   const { createElement } = await import('react')
   mod.$tab.set('library'); mod.$selected.set(null)
   const html = await render(createElement(mod.MeetingsPage), { '/v1/meetings?limit=30': LIST })
-  assert.match(html, /role="tablist"/)
+  assert.match(html, /data-sdk="segmented"/)
   assert.match(html, /Daily Sync/)
   assert.match(html, /Google Meet \(0\)/)
   assert.match(html, /Older/)
@@ -193,7 +198,7 @@ test('library empty, loading and error states', opts, async () => {
   html = await render(createElement(mod.MeetingsPage), {})
   assert.match(html, /Loading/)
   html = await render(createElement(mod.MeetingsPage), { '/v1/meetings?limit=30': new Error('404: {"detail":"Not Found"}') })
-  assert.match(html, /not reachable/)
+  assert.match(html, /not enabled in the profile “default”/)
 })
 
 test('detail renders notes, tasks with destinations, audio reason and transcript', opts, async () => {

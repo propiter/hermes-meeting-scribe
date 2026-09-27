@@ -23,12 +23,20 @@ import {
   EmptyState,
   ErrorState,
   host,
+  Input,
   PALETTE_AREA,
   ROUTES_AREA,
   SearchField,
+  SegmentedControl,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   SIDEBAR_NAV_AREA,
   StatusDot,
   Switch,
+  Textarea,
   useI18n,
   usePluginI18n,
   useQuery,
@@ -40,6 +48,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 export const ID = 'meeting-scribe'
 export const ROUTE = '/meeting-scribe'
+const ALL = '__all__'
 const Q = 'meeting-scribe'
 const PAGE_SIZE = 30
 const TRANSCRIPT_PAGE = 200
@@ -76,7 +85,7 @@ export const LOCALES = {
     error: {
       title: 'Something went wrong',
       notFound: 'This meeting no longer exists.',
-      disabled: 'The Meetings backend is not reachable. Check that the meeting-scribe plugin is enabled for this profile and that Hermes was restarted after installing it.',
+      disabled: profile => `Meetings is not enabled in the profile “${profile}”. Switch to the profile where the bot records meetings, or enable the meeting-scribe plugin in this one and restart Hermes.`,
       generic: message => `The server answered: ${message}`
     },
     library: {
@@ -246,7 +255,7 @@ export const LOCALES = {
     error: {
       title: 'Algo salió mal',
       notFound: 'Esta reunión ya no existe.',
-      disabled: 'No se puede conectar con el módulo de Reuniones. Comprueba que el plugin meeting-scribe esté activado en este perfil y que Hermes se haya reiniciado después de instalarlo.',
+      disabled: profile => `Reuniones no está activado en el perfil «${profile}». Cambia al perfil donde el bot graba las reuniones, o activa el plugin meeting-scribe en este y reinicia Hermes.`,
       generic: message => `El servidor respondió: ${message}`
     },
     library: {
@@ -410,7 +419,8 @@ export const LOCALES = {
 /** `"404: {\"detail\":\"not found\"}"` (Desktop's transport shape) → `{status, message}`. */
 export function parseError(error) {
   const raw = error instanceof Error ? error.message : String(error ?? '')
-  const m = /^(\d{3}):\s*([\s\S]*)$/.exec(raw)
+  // Electron IPC wraps the backend answer: "Error invoking remote method 'hermes:api': Error: 404: {...}".
+  const m = /(?:^|Error:\s*)(\d{3}):\s*([\s\S]*)$/.exec(raw)
   if (!m) return { status: 0, message: raw }
   let message = m[2]
   try {
@@ -554,7 +564,9 @@ function Loading() {
 /** 404 on a list/status/settings read means the backend route is not mounted (plugin disabled or
  *  Hermes not restarted); on a meeting read (`missingIsMeeting`) it means the meeting is gone. */
 export function failureKey(error, missingIsMeeting) {
-  const { status } = parseError(error)
+  const { status, message } = parseError(error)
+  // The host's own 404 (route not mounted) is never "meeting not found".
+  if (status === 404 && /^plugin not found$/i.test(message.trim())) return 'error.disabled'
   if (status === 404) return missingIsMeeting ? 'error.notFound' : 'error.disabled'
   if (/bridge unavailable|not registered/i.test(parseError(error).message)) return 'error.disabled'
   return 'error.generic'
@@ -564,7 +576,9 @@ function Failure({ error, onRetry, missingIsMeeting = false }) {
   const t = usePluginI18n(ID)
   const { status, message } = parseError(error)
   const key = failureKey(error, missingIsMeeting)
-  const description = key === 'error.generic' ? t(key, message || String(status)) : t(key)
+  const profile = useValue(host.state.profile) || 'default'
+  const description = key === 'error.generic' ? t(key, message || String(status))
+    : key === 'error.disabled' ? t(key, profile) : t(key)
   return h('div', { className: 'ms-failure', role: 'alert' },
     h(ErrorState, { title: t('error.title'), description },
       onRetry ? h(Button, { onClick: onRetry, variant: 'secondary', type: 'button' }, t('common.retry')) : null))
@@ -634,8 +648,11 @@ export function LibraryView() {
   const select = (id, label, value, onChange, options) =>
     h('div', { className: 'ms-filter' },
       h('label', { className: 'ms-label', htmlFor: id }, label),
-      h('select', { className: 'ms-input', id, value, onChange: e => onChange(e.target.value) },
-        options.map(([v, text]) => h('option', { key: v || 'all', value: v }, text))))
+      // Radix Select forbids an empty item value, so "all" travels as a sentinel.
+      h(Select, { value: value || ALL, onValueChange: v => onChange(v === ALL ? '' : v) },
+        h(SelectTrigger, { id, className: 'ms-select' }, h(SelectValue, null)),
+        h(SelectContent, null,
+          options.map(([v, text]) => h(SelectItem, { key: v || ALL, value: v || ALL }, text)))))
 
   const count = n => (typeof n === 'number' ? ` (${n})` : '')
 
@@ -676,10 +693,10 @@ export function LibraryView() {
           ...STATE_FILTERS.map(s => [s, t(`state.${s === 'processing' ? 'processing' : s}`) + count(facets?.states?.[s])])]),
       h('div', { className: 'ms-filter' },
         h('label', { className: 'ms-label', htmlFor: 'ms-f-since' }, t('library.since')),
-        h('input', { className: 'ms-input', id: 'ms-f-since', type: 'date', value: since, max: until || undefined, onChange: e => setSince(e.target.value) })),
+        h(Input, { className: 'ms-date', id: 'ms-f-since', type: 'date', value: since, max: until || undefined, onChange: e => setSince(e.target.value) })),
       h('div', { className: 'ms-filter' },
         h('label', { className: 'ms-label', htmlFor: 'ms-f-until' }, t('library.until')),
-        h('input', { className: 'ms-input', id: 'ms-f-until', type: 'date', value: until, min: since || undefined, onChange: e => setUntil(e.target.value) })),
+        h(Input, { className: 'ms-date', id: 'ms-f-until', type: 'date', value: until, min: since || undefined, onChange: e => setUntil(e.target.value) })),
       filtered ? h(Button, { type: 'button', variant: 'text', onClick: clear }, t('library.clear')) : null),
     data?.items?.length && facets
       ? h('p', { className: 'ms-muted', 'aria-live': 'polite' }, t('library.count', data.items.length, facets.total))
@@ -1226,14 +1243,16 @@ export function SettingField({ field, current, onSaved }) {
       h(Switch, { id, checked: Boolean(draft), disabled: state === 'saving', onCheckedChange: v => { setDraft(v); save(v) }, ...aria }),
       h('span', { className: 'ms-small' }, draft ? t('settings.yes') : t('settings.no')))
   } else if (field.choices?.length) {
-    control = h('select', { id, className: 'ms-input', value: String(draft), onChange: e => { setDraft(e.target.value); save(e.target.value) }, ...aria },
-      field.choices.map(c => h('option', { key: String(c), value: String(c) }, tOr(t, `choice.${field.key}.${c}`, String(c)))))
+    control = h(Select, { value: String(draft), disabled: state === 'saving', onValueChange: v => { setDraft(v); save(v) } },
+      h(SelectTrigger, { id, ...aria }, h(SelectValue, null)),
+      h(SelectContent, null,
+        field.choices.map(c => h(SelectItem, { key: String(c), value: String(c) }, tOr(t, `choice.${field.key}.${c}`, String(c))))))
   } else if (field.type === 'list') {
-    control = h('textarea', { id, className: 'ms-input ms-textarea', rows: Math.min(6, Math.max(2, String(draft).split('\n').length + 1)), value: draft, onChange: e => { setDraft(e.target.value); setState('idle') }, ...aria })
+    control = h(Textarea, { id, className: 'ms-textarea', rows: Math.min(6, Math.max(2, String(draft).split('\n').length + 1)), value: draft, onChange: e => { setDraft(e.target.value); setState('idle') }, ...aria })
   } else {
     const numeric = field.type === 'int' || field.type === 'float'
-    control = h('input', {
-      id, className: 'ms-input', type: numeric ? 'number' : 'text', value: draft,
+    control = h(Input, {
+      id, type: numeric ? 'number' : 'text', value: draft,
       step: field.type === 'float' ? 'any' : numeric ? 1 : undefined, min: field.minimum, max: field.maximum,
       onChange: e => { setDraft(e.target.value); setState('idle') },
       onKeyDown: e => { if (e.key === 'Enter' && dirty) { e.preventDefault(); save(draft) } },
@@ -1306,7 +1325,7 @@ export function ModelsSection({ id, title, llm, onSaved }) {
 
   const input = (fid, label, value, onChange, extra = {}) =>
     h(Field, { label, htmlFor: fid, help: extra.help },
-      h('input', { id: fid, className: 'ms-input', value, onChange: e => onChange(e.target.value), type: extra.type || 'text', min: extra.min, 'aria-describedby': extra.help ? `${fid}-help` : undefined }))
+      h(Input, { id: fid, value, onChange: e => onChange(e.target.value), type: extra.type || 'text', min: extra.min, 'aria-describedby': extra.help ? `${fid}-help` : undefined }))
 
   const sources = llm.sources || {}
   const effective = llm.effective ? [llm.effective.provider, llm.effective.model].filter(Boolean).join(' / ') : ''
@@ -1325,9 +1344,9 @@ export function ModelsSection({ id, title, llm, onSaved }) {
       form.chain.length === 0 ? h('p', { className: 'ms-muted' }, t('llm.noFallbacks')) : null,
       h('ol', { className: 'ms-plain' }, form.chain.map((r, i) => h('li', { key: r._k, className: 'ms-chain-row', 'aria-label': t('llm.row', i + 1) },
         h('span', { className: 'ms-chain-n', 'aria-hidden': 'true' }, String(i + 1)),
-        h('input', { className: 'ms-input', 'aria-label': `${t('llm.row', i + 1)} — ${t('llm.provider')}`, placeholder: t('llm.provider'), value: r.provider, onChange: e => setRow(i, { provider: e.target.value }) }),
-        h('input', { className: 'ms-input', 'aria-label': `${t('llm.row', i + 1)} — ${t('llm.model')}`, placeholder: t('llm.model'), value: r.model, onChange: e => setRow(i, { model: e.target.value }) }),
-        h('input', { className: 'ms-input', 'aria-label': `${t('llm.row', i + 1)} — ${t('llm.baseUrl')}`, placeholder: t('llm.baseUrl'), value: r.base_url, onChange: e => setRow(i, { base_url: e.target.value }) }),
+        h(Input, { 'aria-label': `${t('llm.row', i + 1)} — ${t('llm.provider')}`, placeholder: t('llm.provider'), value: r.provider, onChange: e => setRow(i, { provider: e.target.value }) }),
+        h(Input, { 'aria-label': `${t('llm.row', i + 1)} — ${t('llm.model')}`, placeholder: t('llm.model'), value: r.model, onChange: e => setRow(i, { model: e.target.value }) }),
+        h(Input, { 'aria-label': `${t('llm.row', i + 1)} — ${t('llm.baseUrl')}`, placeholder: t('llm.baseUrl'), value: r.base_url, onChange: e => setRow(i, { base_url: e.target.value }) }),
         h('span', { className: 'ms-row' },
           h(Button, { type: 'button', variant: 'ghost', size: 'xs', disabled: i === 0, onClick: () => move(i, -1), 'aria-label': `${t('llm.up')} — ${t('llm.row', i + 1)}` }, h(Codicon, { name: 'arrow-up', size: '0.75rem' })),
           h(Button, { type: 'button', variant: 'ghost', size: 'xs', disabled: i === form.chain.length - 1, onClick: () => move(i, 1), 'aria-label': `${t('llm.down')} — ${t('llm.row', i + 1)}` }, h(Codicon, { name: 'arrow-down', size: '0.75rem' })),
@@ -1361,20 +1380,6 @@ export function MeetingsPage() {
     }
   }, [scope])
 
-  const onTabKey = event => {
-    const i = TABS.indexOf(tab)
-    let next = null
-    if (event.key === 'ArrowRight') next = TABS[(i + 1) % TABS.length]
-    else if (event.key === 'ArrowLeft') next = TABS[(i + TABS.length - 1) % TABS.length]
-    else if (event.key === 'Home') next = TABS[0]
-    else if (event.key === 'End') next = TABS[TABS.length - 1]
-    if (next) {
-      event.preventDefault()
-      $tab.set(next)
-      document.getElementById(`ms-tab-${next}`)?.focus()
-    }
-  }
-
   let panel
   if (tab === 'library') panel = selected ? h(DetailView, { id: selected }) : h(LibraryView, null)
   else if (tab === 'status') panel = h(StatusView, null)
@@ -1385,13 +1390,14 @@ export function MeetingsPage() {
       h('div', null,
         h('h1', { className: 'ms-h1' }, t('title')),
         h('p', { className: 'ms-muted ms-small' }, t('subtitle'))),
-      h('div', { className: 'ms-tabs', role: 'tablist', 'aria-label': t('title'), onKeyDown: onTabKey },
-        TABS.map(k => h('button', {
-          key: k, id: `ms-tab-${k}`, type: 'button', role: 'tab', 'aria-selected': tab === k,
-          'aria-controls': 'ms-panel', tabIndex: tab === k ? 0 : -1, className: 'ms-tab',
-          onClick: () => { if (k === 'library' && tab === 'library') $selected.set(null); $tab.set(k) }
-        }, t(`tabs.${k}`))))),
-    h('main', { className: 'ms-panel', id: 'ms-panel', role: 'tabpanel', 'aria-labelledby': `ms-tab-${tab}`, tabIndex: -1 }, panel))
+      // The host's own segmented control: native look and contrast in every theme.
+      h('nav', { 'aria-label': t('title') },
+        h(SegmentedControl, {
+          value: tab,
+          options: TABS.map(k => ({ id: k, label: t(`tabs.${k}`) })),
+          onChange: k => { if (k === 'library' && tab === 'library') $selected.set(null); $tab.set(k) }
+        }))),
+    h('main', { className: 'ms-panel', id: 'ms-panel', 'aria-label': t(`tabs.${tab}`), tabIndex: -1 }, panel))
 }
 
 // Only host CSS variables: the page follows the active theme; no Tailwind class is assumed to exist.
@@ -1401,10 +1407,7 @@ export const CSS = `
 .ms-h1{font-size:18px;font-weight:600;margin:0}
 .ms-h2{font-size:14px;font-weight:600;margin:0}
 .ms-h3{font-size:12px;font-weight:600;margin:8px 0 4px;color:var(--ui-text-secondary)}
-.ms-tabs{display:inline-flex;gap:2px;padding:2px;border-radius:6px;background:var(--ui-bg-tertiary)}
-.ms-tab{padding:4px 12px;border-radius:4px;font-size:12px;font-weight:500;color:var(--ui-text-secondary);background:transparent;border:0;cursor:pointer}
-.ms-tab[aria-selected=true]{background:var(--ui-base,var(--background));color:var(--ui-text-primary);box-shadow:0 1px 2px rgba(0,0,0,.12)}
-.ms-tab:focus-visible,.ms-rowbtn:focus-visible,.ms-chip:focus-visible,.ms-link:focus-visible,.ms-input:focus-visible,.ms-panel:focus-visible{outline:2px solid var(--ui-accent);outline-offset:1px}
+.ms-rowbtn:focus-visible,.ms-chip:focus-visible,.ms-link:focus-visible,.ms-panel:focus-visible{outline:2px solid var(--ui-accent);outline-offset:1px}
 .ms-panel{outline:none}
 .ms-stack{display:flex;flex-direction:column;gap:16px}
 .ms-stack-sm{display:flex;flex-direction:column;gap:6px}
@@ -1427,9 +1430,8 @@ export const CSS = `
 .ms-search{flex:1 1 260px;min-width:200px}
 .ms-filter{display:flex;flex-direction:column;gap:2px}
 .ms-label{font-size:11px;font-weight:600;color:var(--ui-text-secondary)}
-.ms-input{min-height:28px;padding:4px 8px;border-radius:5px;border:1px solid var(--ui-stroke-secondary);background:var(--ui-bg-quinary,transparent);color:var(--ui-text-primary);font:inherit;font-size:12px;width:100%;box-sizing:border-box}
-.ms-filter .ms-input{width:auto;min-width:140px}
-.ms-input[aria-invalid=true]{border-color:var(--ui-red,#d33)}
+.ms-select{min-width:150px}
+.ms-date{min-width:140px;color-scheme:light dark}
 .ms-textarea{resize:vertical;font-family:var(--font-mono,ui-monospace,monospace)}
 .ms-list,.ms-plain,.ms-tasks,.ms-transcript{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .ms-rowbtn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 10px;border-radius:6px;border:0;background:transparent;color:inherit;cursor:pointer}
