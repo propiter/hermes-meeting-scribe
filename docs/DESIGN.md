@@ -722,9 +722,20 @@ does not have guild info attached") and nobody else saw it.
     from the saved pointers without duplicates; if nothing new was posted yet and the channel went
     away (or a button refresh runs meanwhile), the move is rolled back to the DM pointers.
   - The transcript keeps its intent: the `{"skipped": "legacy"}` marker is not in the DM (it has no
-    channel) and stays; the new summary keeps the old `attach` flag, so a meeting that was not meant
-    to attach its transcript never does after the move. A transcript that was attached in the DM is
-    attached again in the channel before the DM copy is deleted.
+    channel) and stays; the new summary keeps the old intent, so a meeting that was not meant to
+    attach its transcript never does after the move. The intent is `attach` when the summary pointer
+    has it; pointers written before that key decide from the transcript pointer (delivered = `done`
+    with messages → attach; the legacy marker or nothing → no). Rejected: `bool(ptr.get("attach"))`
+    — it read "key absent" as "no", deleted a genuinely delivered DM transcript and never re-posted
+    it. A resumed `dm_move` re-derives the intent from the DM pointers it holds.
+  - Delete only what is replaced: `_finish_move` deletes a DM message only when the new pointer of
+    the same kind (notes, transcript, `task:<id>`, index) exists outside the DM with messages (the
+    transcript also `done` and not `skipped`); a task that no longer exists needs no replacement.
+    Anything else stays, recorded in a `dm_leftover` pointer and explained in
+    `discord.dm_notes.<id>` (`status`, `doctor`); the next DELIVER retries the cleanup.
+  - During a move that carries a DM transcript, a failed upload (exception or unfinished pointer)
+    raises: the delivery fails, the DM is untouched and the job retries. Outside a move the
+    attachment still never fails a delivery (§17.3).
   - Until moved, a DM meeting works where it is (buttons, 📋 My tasks, edits in place).
 - **Tasks**: with a project → the project channel (routing of §16, candidates from the server chosen
   above, so Meet tasks route too); without → `delivery_fallback_channel` (id or name; anchor +

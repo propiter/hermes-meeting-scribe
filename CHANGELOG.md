@@ -67,6 +67,16 @@ All notable changes to this project are documented here. The format follows
   interrupted move resumes without duplicates. A meeting that was not meant to attach its transcript
   (or predates attachments) does not attach it when moving. Without a configured channel the notes
   stay in the DM and `status`, `doctor` and the reprocess reply say what to set.
+- **Moving a DM meeting no longer deletes its transcript without re-posting it**: a summary pointer
+  written before the `attach` key existed was treated as "never attach", so the transcript that had
+  really been delivered in the DM was deleted and not re-posted. The intent is now the explicit
+  `attach` when present, else whether a transcript was actually delivered (the legacy marker, or an
+  explicit refusal, still means no). The DM copy of each part (summary, transcript, tasks, index) is
+  deleted only once its replacement is confirmed; anything unconfirmed stays in the DM, with the
+  reason in `status`/`doctor`, and a later `reprocess --from deliver` cleans it once replaced. A
+  failed transcript upload during a move fails the delivery (the DM is untouched and the job
+  retries) instead of being logged and skipped. A move saved by the faulty build re-derives the
+  intent from the DM pointers it holds.
 - Notes are never posted in another server: a Discord meeting whose server is not loaded, or a
   `delivery_discord_guild` that does not match, now waits instead of looking a channel name up in
   every server; configured channel ids of another server or a DM are ignored and reported.
