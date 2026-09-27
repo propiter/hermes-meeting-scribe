@@ -151,3 +151,34 @@ def test_claim_job_is_exclusive(repo, meeting):
     assert repo.claim_job(job.id, now=NOW) is True
     assert repo.claim_job(job.id, now=NOW) is False
     assert repo.get_job(meeting.id).state == "running"
+
+
+def test_v1_database_migrates_to_leases_and_per_sink_status(tmp_path):
+    """Review findings 1/2/6: schema v2 upgrades a v1 file in place and back-fills delivered items."""
+    import sqlite3
+
+    from meeting_scribe.storage import repo as repo_mod
+
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(repo_mod._V1 + "PRAGMA user_version=1;")
+    conn.execute("INSERT INTO deliveries (meeting_id, sink, key, external_id, url, created_at)"
+                 " VALUES ('m1','kanban','mtg:m1:a1','t_1',NULL,1.0)")
+    conn.commit()
+    conn.close()
+    r = Repository(path)
+    assert r.user_version() == repo_mod.SCHEMA_VERSION
+    assert r.item_sink_status("m1", "a1", "kanban") == "delivered"
+    assert r.item_sink_status("m1", "a1", "linear") is None
+    assert r.get_delivery("kanban", "mtg:m1:a1")["external_id"] == "t_1"
+    r.close()
+
+
+def test_stale_requeue_only_takes_expired_leases(repo, meeting):
+    repo.save_meeting(meeting)
+    repo.enqueue_job(meeting.id, Stage.TRANSCRIBE, now=NOW)
+    job = repo.get_job(meeting.id)
+    assert repo.claim_job(job.id, now=NOW, owner="a")
+    assert repo.requeue_stale(stale_before=NOW.timestamp() - 60) == []
+    assert repo.heartbeat_job(job.id, "b", now=NOW.timestamp()) is False  # not b's lease
+    assert repo.requeue_stale(stale_before=NOW.timestamp() + 1) == [meeting.id]

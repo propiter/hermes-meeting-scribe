@@ -70,7 +70,9 @@ class MeetingService:
     def begin_recording(self, meeting: Meeting) -> Meeting:
         if meeting.state is not MeetingState.RECORDING:
             raise ValueError("begin_recording expects a meeting in state 'recording'")
-        return self.runner.stages.persist(meeting)
+        meeting = self.runner.stages.persist(meeting)
+        self.repo.set_capture_owner(meeting.id, self.runner.owner)  # only we may close it as an orphan
+        return meeting
 
     def track_path(self, meeting: Meeting, user_id: str) -> Path:
         path = Layout.track_path(self.folder(meeting), user_id)

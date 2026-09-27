@@ -5,6 +5,12 @@ the next ready job from SQLite and runs its remaining stages in order. Failures 
 to the failed stage's input state and requeue with backoff; after ``max_attempts`` the meeting is
 ``failed`` and waits for a manual ``reprocess``. Transcription is CPU-heavy, so one meeting at a
 time is intentional.
+
+Multi-process safety (DESIGN §15, review finding 2): a claimed job carries a LEASE (owner id +
+heartbeat refreshed by a helper thread while it runs). ``recover`` only requeues jobs whose lease
+expired and never rewinds a meeting whose job is still leased. Orphan recordings are closed only
+when ``owns_capture`` (the Discord-connected gateway) and the row's ``capture_owner`` is not a
+live process.
 """
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ from ..domain.models import (
     STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
 )
 from ..domain.ports import Clock
+from ..storage.owner import owner_alive, process_owner_id
 from ..storage.repo import Repository
 from .stages import Stages
 
@@ -39,10 +46,14 @@ def _thread_spawner(target: Callable[[], None], *, name: str, daemon: bool = Tru
 
 class PipelineRunner:
     THREAD_NAME = "meeting-scribe-pipeline"
+    LEASE_SECONDS = 180.0
+    HEARTBEAT_SECONDS = 30.0
 
     def __init__(self, repo: Repository, stages: Stages, *, clock: Clock, spawner: Spawner = _thread_spawner,
-                 max_attempts: int = 3, backoff: Sequence[float] = (60, 300, 900)) -> None:
+                 max_attempts: int = 3, backoff: Sequence[float] = (60, 300, 900),
+                 owner: Optional[str] = None) -> None:
         self.repo = repo
+        self.owner = owner or process_owner_id()
         self.stages = stages
         self.clock = clock
         self.spawner = spawner
@@ -86,16 +97,21 @@ class PipelineRunner:
         self.stages.persist(meeting.with_state(rewind_target(stage), rewind=True))
         self.enqueue(meeting_id, stage)
 
-    def recover(self, live_meeting_ids: Iterable[str]) -> dict[str, int]:
-        """Resume after a restart: requeue running jobs, close orphan recordings, enqueue stragglers."""
+    def recover(self, live_meeting_ids: Iterable[str], *, owns_capture: bool = False) -> dict[str, int]:
+        """Resume after a restart: requeue STALE jobs, close orphan recordings, enqueue stragglers."""
         live = set(live_meeting_ids)
-        report = {"requeued": self.repo.requeue_running(), "orphans": 0, "resumed": 0}
-        active = {j.meeting_id for j in self.repo.list_jobs(("queued", "running"))}
+        stale_before = self.clock.now().timestamp() - self.LEASE_SECONDS
+        report = {"requeued": len(self.repo.requeue_stale(stale_before=stale_before)), "orphans": 0, "resumed": 0}
+        jobs = self.repo.list_jobs(("queued", "running"))
+        active = {j.meeting_id for j in jobs}
+        leased = {j.meeting_id for j in jobs if j.state == "running"}
         pending = [s for s in MeetingState if not s.terminal]
         for meeting in self.repo.list_meetings(limit=10_000, states=pending):
+            if meeting.id in leased:
+                continue  # another worker is processing it right now (live lease)
             if meeting.state is MeetingState.RECORDING:
-                if meeting.id in live:
-                    continue
+                if meeting.id in live or not owns_capture or owner_alive(self.repo.capture_owner(meeting.id)):
+                    continue  # still being captured (here or by another live process), or not ours to judge
                 ended = meeting.ended_at or self.clock.now()
                 meeting = self.stages.persist(replace(meeting, state=MeetingState.CAPTURED, partial=True,
                                                       ended_at=ended))
@@ -121,14 +137,30 @@ class PipelineRunner:
         job = self.repo.next_job(now=self.clock.now())
         if job is None:
             return False
-        if not self.repo.claim_job(job.id, now=self.clock.now()):
+        if not self.repo.claim_job(job.id, now=self.clock.now(), owner=self.owner):
             return True  # another process took it; look again
         self._busy.set()
+        beat_stop = threading.Event()
+        beat = threading.Thread(target=self._heartbeat, args=(job.id, beat_stop), name=f"{self.THREAD_NAME}-lease",
+                                daemon=True)
+        beat.start()
         try:
             self._run_job(job.id, job.meeting_id, job.stage, job.attempts)
         finally:
+            beat_stop.set()
+            beat.join(timeout=5)
             self._busy.clear()
         return True
+
+    def _heartbeat(self, job_id: int, stop: threading.Event) -> None:
+        """Keep our lease fresh while a (possibly hours-long) stage runs."""
+        while not stop.wait(self.HEARTBEAT_SECONDS):
+            try:
+                if not self.repo.heartbeat_job(job_id, self.owner, now=self.clock.now().timestamp()):
+                    log.warning("meeting-scribe: lost the lease on job %s", job_id)
+                    return
+            except Exception:  # a locked/closed DB must not kill the worker; the next beat retries
+                log.exception("meeting-scribe: job %s heartbeat failed", job_id)
 
     def _run_job(self, job_id: int, meeting_id: str, first: Stage, attempts: int) -> None:
         meeting = self._meeting(meeting_id)
@@ -166,10 +198,10 @@ class PipelineRunner:
         self._emit(meeting_id, "retry", {"stage": stage.value, "error": error, "delay": delay})
 
     # -- background thread --------------------------------------------------------------------
-    def start(self, live_meeting_ids: Iterable[str] = ()) -> None:
+    def start(self, live_meeting_ids: Iterable[str] = (), *, owns_capture: bool = False) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
-        self.recover(live_meeting_ids)
+        self.recover(live_meeting_ids, owns_capture=owns_capture)
         self._stop.clear()
         self._thread = self.spawner(self._loop, name=self.THREAD_NAME, daemon=True)
         self._thread.start()

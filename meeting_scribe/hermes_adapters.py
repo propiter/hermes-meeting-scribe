@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 from pathlib import Path
@@ -14,6 +15,16 @@ from .domain.models import Candidate, Meeting
 log = logging.getLogger(__name__)
 AUX_TASK = "meeting_scribe"
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+def is_gateway_process() -> bool:
+    """True inside ``hermes gateway`` (``gateway/run.py`` sets ``_HERMES_GATEWAY=1`` at import).
+
+    Only the gateway runs the pipeline worker and recovery; CLI/TUI processes must not
+    (review finding 2). Children the gateway spawns inherit the marker, but they do not load
+    plugins with a Discord adapter, and job leases keep even that case safe.
+    """
+    return os.environ.get("_HERMES_GATEWAY") == "1"
 
 
 def parse_json_text(text: str) -> Any:

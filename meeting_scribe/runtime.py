@@ -54,6 +54,7 @@ class Host:
     kanban: KanbanGateway
     project_sources: Callable[[], list[CallableCatalog]]
     llm_ready: Callable[[], tuple[bool, str]]
+    is_gateway: Callable[[], bool] = lambda: True
 
 
 class Runtime:
@@ -146,8 +147,8 @@ class Runtime:
                                                       item_sinks=self.item_sinks, catalogs=self.catalogs)
             return self._services[path]
 
-    def start_pipeline(self, live_meeting_ids: Iterable[str] = ()) -> None:
-        self.service().runner.start(live_meeting_ids)
+    def start_pipeline(self, live_meeting_ids: Iterable[str] = (), *, owns_capture: bool = False) -> None:
+        self.service().runner.start(live_meeting_ids, owns_capture=owns_capture)
 
     def stop_pipeline(self) -> None:
         with self._lock:
@@ -175,10 +176,16 @@ class Runtime:
         return self
 
     def ensure_pipeline(self) -> None:
-        """Start the worker lazily in the gateway (commands call this); Phase B starts it on connect."""
-        if not self.pipeline_running():
-            live = self.capture.live_meeting_ids() if self.capture is not None else set()
-            self.start_pipeline(live)
+        """Start the worker lazily IN THE GATEWAY (commands call this); Phase B starts it on connect.
+
+        A CLI/TUI ``hermes chat`` process must not start a second worker nor run ``recover``
+        (review finding 2): its commands only read/enqueue, and the gateway's worker picks work up.
+        Recording rows are never closed from here (``owns_capture`` stays False).
+        """
+        if not self.host.is_gateway() or self.pipeline_running():
+            return
+        live = self.capture.live_meeting_ids() if self.capture is not None else set()
+        self.start_pipeline(live)
 
     def capture_status(self) -> tuple[bool, str]:
         if self.capture is None:

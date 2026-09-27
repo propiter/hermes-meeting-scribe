@@ -138,7 +138,8 @@ def test_recover_resumes_interrupted_work(prepo, layout, settings, clock, meetin
     prepo.save_meeting(orphan)
     analyzed = replace(meeting, id="analyz01", state=MeetingState.ANALYZED)
     prepo.save_meeting(analyzed)
-    report = runner.recover(live_meeting_ids=set())
+    clock.advance(runner.LEASE_SECONDS + 1)  # the crashed worker's lease expired
+    report = runner.recover(live_meeting_ids=set(), owns_capture=True)
     assert report == {"requeued": 1, "orphans": 1, "resumed": 2}
     o = prepo.get_meeting("orphan01")
     assert o.state is MeetingState.CAPTURED and o.partial is True
@@ -175,3 +176,85 @@ def test_archive_runs_last(prepo, layout, settings, clock, meeting):
     runner.enqueue(m.id)
     drain(runner)
     assert order == ["deliver", "archive"]
+
+
+# -- review finding 2: a second process must not hijack the gateway's work ----------------------
+def test_recover_keeps_a_live_lease_and_its_meeting(prepo, layout, settings, clock, meeting):
+    gateway, *_ = build(prepo, layout, settings, clock)
+    m, _ = captured(prepo, layout, meeting)
+    prepo.enqueue_job(m.id, Stage.TRANSCRIBE, now=clock.now())
+    assert prepo.claim_job(prepo.get_job(m.id).id, now=clock.now(), owner=gateway.owner)
+    prepo.save_meeting(replace(prepo.get_meeting(m.id), state=MeetingState.TRANSCRIBING))
+    cli, *_ = build(prepo, layout, settings, clock)
+    cli.owner = "otherhost:1:cli"
+    clock.advance(30)
+    report = cli.recover(live_meeting_ids=())
+    assert report["requeued"] == 0
+    job = prepo.get_job(m.id)
+    assert job.state == "running" and job.owner == gateway.owner
+    assert prepo.get_meeting(m.id).state is MeetingState.TRANSCRIBING  # not rewound under the worker
+
+
+def test_recover_without_capture_ownership_never_closes_recordings(prepo, layout, settings, clock, meeting):
+    runner, *_ = build(prepo, layout, settings, clock)
+    prepo.save_meeting(replace(meeting, state=MeetingState.RECORDING))
+    report = runner.recover(live_meeting_ids=())  # e.g. a CLI process
+    assert report["orphans"] == 0 and prepo.get_meeting(meeting.id).state is MeetingState.RECORDING
+
+
+def test_recover_spares_recordings_owned_by_another_live_process(prepo, layout, settings, clock, meeting):
+    import os
+    import socket
+
+    runner, *_ = build(prepo, layout, settings, clock)
+    prepo.save_meeting(replace(meeting, state=MeetingState.RECORDING))
+    prepo.set_capture_owner(meeting.id, f"{socket.gethostname()}:{os.getppid()}:parent")  # alive
+    assert runner.recover(live_meeting_ids=(), owns_capture=True)["orphans"] == 0
+    prepo.set_capture_owner(meeting.id, f"{socket.gethostname()}:999999999:gone")  # dead pid
+    assert runner.recover(live_meeting_ids=(), owns_capture=True)["orphans"] == 1
+
+
+def test_running_job_keeps_its_lease_fresh(prepo, layout, settings, clock, meeting, monkeypatch):
+    import threading as th
+
+    gate = th.Event()
+
+    class Slow:
+        calls = 0
+
+        def transcribe(self, meeting, folder, progress=None):
+            gate.wait(5)
+            return []
+
+    runner, *_ = build(prepo, layout, settings, clock, transcriber=Slow())
+    runner.HEARTBEAT_SECONDS = 0.02
+    m, _ = captured(prepo, layout, meeting)
+    runner.enqueue(m.id)
+    worker = th.Thread(target=runner.run_once)
+    worker.start()
+    try:
+        first = None
+        for _ in range(100):
+            job = prepo.get_job(m.id)
+            if job.state == "running" and job.heartbeat is not None:
+                first = first or job.heartbeat
+                clock.advance(10)
+                if job.heartbeat > first:
+                    break
+            gate.wait(0.02)
+        assert job.owner == runner.owner and job.heartbeat > first
+    finally:
+        gate.set()
+        worker.join(5)
+
+
+def test_ensure_pipeline_is_a_noop_outside_the_gateway(tmp_path):
+    from meeting_scribe.runtime import Runtime
+    from tests.unit.test_runtime import host
+
+    h, _ = host(tmp_path)
+    h.is_gateway = lambda: False
+    rt = Runtime(h)
+    rt.ensure_pipeline()
+    assert not rt.pipeline_running()
+    rt.close()

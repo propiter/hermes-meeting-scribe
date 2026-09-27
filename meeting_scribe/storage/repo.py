@@ -12,12 +12,14 @@ import re
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
-from ..domain.models import ActionItem, ActionStatus, Meeting, MeetingState, Speaker, Stage, Utterance
+from ..domain.models import ActionItem, ActionStatus, Meeting, MeetingState, Speaker, Utterance
+from .deliveries import Claim, DeliveriesMixin
+from .jobs import Job, JobsMixin
+
+__all__ = ["Claim", "Job", "Repository", "SCHEMA_VERSION"]
 
 _V1 = """
 CREATE TABLE meetings (
@@ -49,28 +51,27 @@ CREATE TABLE links (
 CREATE TABLE channel_projects (
   channel_id TEXT PRIMARY KEY, project_key TEXT NOT NULL, project_name TEXT NOT NULL, updated_at REAL NOT NULL);
 """
-_MIGRATIONS: tuple[str, ...] = (_V1,)
+# v2 (review findings 1, 2, 6): job leases, recording ownership, delivery claims, per-sink decisions.
+_V2 = """
+ALTER TABLE jobs ADD COLUMN owner TEXT;
+ALTER TABLE jobs ADD COLUMN heartbeat REAL;
+ALTER TABLE meetings ADD COLUMN capture_owner TEXT;
+ALTER TABLE deliveries ADD COLUMN state TEXT NOT NULL DEFAULT 'done';
+ALTER TABLE deliveries ADD COLUMN claim TEXT;
+ALTER TABLE deliveries ADD COLUMN claimed_at REAL;
+CREATE TABLE item_sinks (
+  meeting_id TEXT NOT NULL, item_id TEXT NOT NULL, sink TEXT NOT NULL, status TEXT NOT NULL,
+  updated_at REAL NOT NULL, PRIMARY KEY (meeting_id, item_id, sink));
+INSERT OR IGNORE INTO item_sinks (meeting_id, item_id, sink, status, updated_at)
+  SELECT meeting_id, substr(key, length('mtg:' || meeting_id || ':') + 1), sink, 'delivered', created_at
+  FROM deliveries WHERE key LIKE 'mtg:%' AND sink IN ('kanban', 'linear');
+"""
+_MIGRATIONS: tuple[str, ...] = (_V1, _V2)
 SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
-@dataclass(frozen=True)
-class Job:
-    id: int
-    meeting_id: str
-    stage: Stage
-    state: str  # queued | running | failed | done
-    attempts: int
-    failed_stage: Optional[Stage]
-    error: Optional[str]
-    next_retry_at: Optional[float]
-
-
-def _ts(value: Optional[datetime]) -> Optional[float]:
-    return value.timestamp() if value is not None else None
-
-
-class Repository:
+class Repository(JobsMixin, DeliveriesMixin):
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -153,6 +154,15 @@ class Repository:
                        (*(wanted or ()), int(limit))).fetchall()
         return [Meeting.from_dict(json.loads(r["data"])) for r in rows]
 
+    def set_capture_owner(self, meeting_id: str, owner: Optional[str]) -> None:
+        """The process whose capture writes this recording (only it — or a successor after it died —
+        may close the row as an orphan; review finding 2)."""
+        self._x("UPDATE meetings SET capture_owner=? WHERE id=?", (owner, meeting_id))
+
+    def capture_owner(self, meeting_id: str) -> Optional[str]:
+        row = self._x("SELECT capture_owner FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+        return row["capture_owner"] if row else None
+
     def upsert_speakers(self, meeting_id: str, speakers: Sequence[Speaker]) -> None:
         self._tx([("INSERT INTO speakers (meeting_id, user_id, name, is_bot) VALUES (?,?,?,?)"
                    " ON CONFLICT(meeting_id, user_id) DO UPDATE SET name=excluded.name",
@@ -191,89 +201,6 @@ class Repository:
 
     def utterance_count(self, meeting_id: str) -> int:
         return int(self._x("SELECT COUNT(*) FROM utterances WHERE meeting_id=?", (meeting_id,)).fetchone()[0])
-
-    # -- jobs -----------------------------------------------------------------------------------
-    @staticmethod
-    def _job(row: sqlite3.Row) -> Job:
-        return Job(id=row["id"], meeting_id=row["meeting_id"], stage=Stage(row["stage"]), state=row["state"],
-                   attempts=row["attempts"],
-                   failed_stage=Stage(row["failed_stage"]) if row["failed_stage"] else None,
-                   error=row["error"], next_retry_at=row["next_retry_at"])
-
-    def enqueue_job(self, meeting_id: str, stage: Stage, *, now: datetime, reset_attempts: bool = False) -> None:
-        """One job row per meeting (the pipeline is sequential per meeting); re-enqueue updates it."""
-        ts = _ts(now)
-        reset = ", attempts=0, error=NULL, failed_stage=NULL" if reset_attempts else ""
-        self._x("INSERT INTO jobs (meeting_id, stage, state, next_retry_at, created_at, updated_at)"
-                " VALUES (?,?, 'queued', ?, ?, ?) ON CONFLICT(meeting_id) DO UPDATE SET stage=excluded.stage,"
-                f" state='queued', next_retry_at=excluded.next_retry_at, updated_at=excluded.updated_at{reset}",
-                (meeting_id, stage.value, ts, ts, ts))
-
-    def next_job(self, *, now: datetime) -> Optional[Job]:
-        row = self._x("SELECT * FROM jobs WHERE state='queued' AND (next_retry_at IS NULL OR next_retry_at <= ?)"
-                      " ORDER BY next_retry_at, id LIMIT 1", (_ts(now),)).fetchone()
-        return self._job(row) if row else None
-
-    def get_job(self, meeting_id: str) -> Optional[Job]:
-        row = self._x("SELECT * FROM jobs WHERE meeting_id=?", (meeting_id,)).fetchone()
-        return self._job(row) if row else None
-
-    def list_jobs(self, states: Sequence[str] = ("queued", "running", "failed")) -> list[Job]:
-        rows = self._x(f"SELECT * FROM jobs WHERE state IN ({','.join('?' * len(states))}) ORDER BY id",
-                       tuple(states)).fetchall()
-        return [self._job(r) for r in rows]
-
-    def claim_job(self, job_id: int, *, now: datetime) -> bool:
-        """Atomically move ``queued -> running``; False when another worker got it first."""
-        cur = self._x("UPDATE jobs SET state='running', updated_at=? WHERE id=? AND state='queued'",
-                      (_ts(now), job_id))
-        return cur.rowcount == 1
-
-    def mark_job_running(self, job_id: int, *, now: datetime) -> None:
-        self._x("UPDATE jobs SET state='running', updated_at=? WHERE id=?", (_ts(now), job_id))
-
-    def advance_job(self, job_id: int, stage: Stage) -> None:
-        self._x("UPDATE jobs SET stage=?, updated_at=? WHERE id=?", (stage.value, time.time(), job_id))
-
-    def complete_job(self, job_id: int) -> None:
-        self._x("UPDATE jobs SET state='done', error=NULL, next_retry_at=NULL, updated_at=? WHERE id=?",
-                (time.time(), job_id))
-
-    def fail_job(self, job_id: int, stage: Stage, error: str, *, retry_at: Optional[datetime]) -> None:
-        """Record a failure; ``retry_at`` re-queues (backoff), ``None`` parks it as failed."""
-        state = "queued" if retry_at is not None else "failed"
-        self._x("UPDATE jobs SET state=?, attempts=attempts+1, failed_stage=?, error=?, next_retry_at=?,"
-                " stage=?, updated_at=? WHERE id=?",
-                (state, stage.value, error[:2000], _ts(retry_at), stage.value, time.time(), job_id))
-
-    def requeue_running(self) -> int:
-        """Jobs left ``running`` by a crash/restart go back to the queue (resume on start)."""
-        return self._x("UPDATE jobs SET state='queued', next_retry_at=NULL WHERE state='running'").rowcount
-
-    def pending_job_count(self) -> int:
-        return int(self._x("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0])
-
-    # -- deliveries -----------------------------------------------------------------------------
-    def get_delivery(self, sink: str, key: str) -> Optional[dict[str, Any]]:
-        row = self._x("SELECT * FROM deliveries WHERE sink=? AND key=?", (sink, key)).fetchone()
-        return dict(row) if row else None
-
-    def record_delivery(self, meeting_id: str, sink: str, key: str, *, external_id: Optional[str],
-                        url: Optional[str]) -> None:
-        """First write wins: a delivery that already happened is never overwritten."""
-        self._x("INSERT OR IGNORE INTO deliveries (meeting_id, sink, key, external_id, url, created_at)"
-                " VALUES (?,?,?,?,?,?)", (meeting_id, sink, key, external_id, url, time.time()))
-
-    def upsert_delivery(self, meeting_id: str, sink: str, key: str, *, external_id: Optional[str],
-                        url: Optional[str]) -> None:
-        """Mutable pointer (e.g. the Discord notes message that later reprocesses edit in place)."""
-        self._x("INSERT INTO deliveries (meeting_id, sink, key, external_id, url, created_at) VALUES (?,?,?,?,?,?)"
-                " ON CONFLICT(sink, key) DO UPDATE SET external_id=excluded.external_id, url=excluded.url",
-                (meeting_id, sink, key, external_id, url, time.time()))
-
-    def list_deliveries(self, meeting_id: str) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._x("SELECT * FROM deliveries WHERE meeting_id=? ORDER BY id",
-                                         (meeting_id,)).fetchall()]
 
     # -- action items ---------------------------------------------------------------------------
     def sync_action_items(self, meeting_id: str, items: Sequence[ActionItem]) -> None:

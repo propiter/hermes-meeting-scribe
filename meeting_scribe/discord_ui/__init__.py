@@ -111,7 +111,9 @@ def _factory(state: UiState) -> Callable[[Any, Any], None]:
         if capture is not None and hasattr(capture, "attach"):
             capture.attach(bot, adapter)
         try:
-            runtime.start_pipeline(capture.live_meeting_ids() if capture is not None else ())
+            # The Discord-connected gateway owns capture: only it may close orphan recordings.
+            runtime.start_pipeline(capture.live_meeting_ids() if capture is not None else (),
+                                   owns_capture=capture is not None)
         except Exception:  # storage problems: commands and doctor report them
             log.exception("meeting-scribe: pipeline start on connect failed")
     seq = next(_INSTALLS)
