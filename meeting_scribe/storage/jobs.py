@@ -99,6 +99,11 @@ class JobsMixin:
         self._x("UPDATE jobs SET state='done', owner=NULL, error=NULL, next_retry_at=NULL, updated_at=? WHERE id=?",
                 (time.time(), job_id))
 
+    def defer_job(self, job_id: int, stage: Stage, reason: str, *, retry_at: datetime) -> None:
+        """Re-queue without counting an attempt (the stage only waits for something to be ready)."""
+        self._x("UPDATE jobs SET state='queued', owner=NULL, heartbeat=NULL, error=?, next_retry_at=?, stage=?,"
+                " updated_at=? WHERE id=?", (reason[:2000], _ts(retry_at), stage.value, time.time(), job_id))
+
     def fail_job(self, job_id: int, stage: Stage, error: str, *, retry_at: Optional[datetime]) -> None:
         """Record a failure; ``retry_at`` re-queues (backoff), ``None`` parks it as failed."""
         state = "queued" if retry_at is not None else "failed"

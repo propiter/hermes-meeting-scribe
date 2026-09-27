@@ -339,3 +339,4 @@ class SinkResult:
     skipped: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     detail: str = ""
+    deferred: bool = False  # not delivered only because the target is not ready yet (Discord connecting)

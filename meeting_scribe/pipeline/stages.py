@@ -32,6 +32,11 @@ class StageError(RuntimeError):
     """A stage finished with recoverable errors (e.g. one sink failed); the job is retried."""
 
 
+class StageDeferred(StageError):
+    """Only waiting for a target to become ready (Discord still connecting): retried later without
+    using up an attempt."""
+
+
 def make_archiver(settings: Callable[[], Settings], ffmpeg: Callable[[], Ffmpeg]) -> Archiver:
     """Production archiver: package ``tracks/`` per ``audio.retention`` (DESIGN §5)."""
 
@@ -124,6 +129,8 @@ class Stages:
         self.last_results[meeting.id] = results
         errors = [f"{r.sink}: {e}" for r in results for e in r.errors]
         if errors:
+            if all(r.deferred for r in results if r.errors):
+                raise StageDeferred("; ".join(errors))
             raise StageError("; ".join(errors))
         return meeting
 

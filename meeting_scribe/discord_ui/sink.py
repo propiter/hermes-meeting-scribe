@@ -55,7 +55,7 @@ class DiscordNotesSink:
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
         adapter, loop = self._adapter(), self._loop()
         if adapter is None or loop is None or loop.is_closed():
-            return SinkResult(SINK, False, errors=("discord not connected yet; will retry",))
+            return SinkResult(SINK, False, errors=("discord not connected yet; will retry",), deferred=True)
         if not self._targets(meeting):  # e.g. a Meet import with no channel configured: skip, don't loop
             log.info("meeting-scribe: no Discord channel for meeting %s; Discord delivery skipped", meeting.id)
             return SinkResult(SINK, True, skipped=("no Discord notes channel configured",))

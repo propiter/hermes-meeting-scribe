@@ -27,7 +27,7 @@ from ..domain.models import (
 from ..domain.ports import Clock
 from ..storage.owner import owner_alive, owner_dead, process_owner_id
 from ..storage.repo import Repository
-from .stages import Stages
+from .stages import StageDeferred, Stages
 
 log = logging.getLogger(__name__)
 Spawner = Callable[..., threading.Thread]
@@ -59,6 +59,9 @@ def _in_progress_rewind(meeting: Meeting) -> Meeting:
     return meeting.with_state(rewind_target(stage), rewind=True)
 
 
+_DEFER_KV = "pipeline.deferred_since."  # meeting id -> first deferral (epoch seconds)
+
+
 def _thread_spawner(target: Callable[[], None], *, name: str, daemon: bool = True) -> threading.Thread:
     return threading.Thread(target=target, name=name, daemon=daemon)
 
@@ -68,7 +71,9 @@ class PipelineRunner:
     LEASE_SECONDS = 180.0
     HEARTBEAT_SECONDS = 30.0
     RECLAIM_SECONDS = 60.0  # how often the worker loop re-checks for expired/orphaned leases
-    STRAGGLER_AGE_SECONDS = 600.0  # a resumable row without a job, untouched this long, is re-queued
+    STRAGGLER_AGE_SECONDS = 600.0
+    DEFER_SECONDS = 60.0  # retry delay for a stage that only waits for a target (not an attempt)
+    DEFER_MAX_SECONDS = 6 * 3600.0  # after this long waiting, deferrals count as normal failures  # a resumable row without a job, untouched this long, is re-queued
 
     def __init__(self, repo: Repository, stages: Stages, *, clock: Clock, spawner: Spawner = _thread_spawner,
                  max_attempts: int = 3, backoff: Sequence[float] = (60, 300, 900),
@@ -249,17 +254,41 @@ class PipelineRunner:
                 meeting = self.stages.run(stage, meeting)
                 output = _OUTPUT[stage]
                 meeting = self.stages.persist(meeting.with_state(output) if output else meeting)
+        except StageDeferred as exc:  # e.g. Discord still connecting after a gateway start: no attempt used
+            if self._defer(job_id, meeting_id, stage, exc):
+                return
+            self._fail(job_id, meeting_id, stage, attempts, exc)  # waited too long: a normal failure
+            return
         except Exception as exc:  # every stage failure is recorded, retried or parked
             self._fail(job_id, meeting_id, stage, attempts, exc)
             return
+        self.repo.kv_set(_DEFER_KV + meeting_id, None)
         self.repo.complete_job(job_id)
         self._emit(meeting_id, "done", self.stages.last_results.pop(meeting_id, []))
+
+    def _defer(self, job_id: int, meeting_id: str, stage: Stage, exc: Exception) -> bool:
+        """Re-queue without using an attempt; ``False`` once the wait exceeded ``DEFER_MAX_SECONDS``."""
+        now = self.clock.now().timestamp()
+        raw = self.repo.kv_get(_DEFER_KV + meeting_id)
+        try:
+            since = float(raw) if raw else now
+        except ValueError:
+            since = now
+        if now - since > self.DEFER_MAX_SECONDS:
+            return False  # the marker stays: further deferrals keep counting as attempts until the job ends
+        if raw is None:
+            self.repo.kv_set(_DEFER_KV + meeting_id, str(now))
+        self.repo.defer_job(job_id, stage, str(exc), retry_at=self.clock.now() + timedelta(seconds=self.DEFER_SECONDS))
+        self.stages.persist(self._meeting(meeting_id).with_state(rewind_target(stage), rewind=True))
+        self._emit(meeting_id, "deferred", {"stage": stage.value, "reason": str(exc)})
+        return True
 
     def _fail(self, job_id: int, meeting_id: str, stage: Stage, attempts: int, exc: Exception) -> None:
         error = f"{type(exc).__name__}: {exc}"
         log.warning("meeting-scribe %s failed at %s (attempt %d): %s", meeting_id, stage.value, attempts + 1, error)
         meeting = self._meeting(meeting_id)
         if attempts + 1 >= self.max_attempts:
+            self.repo.kv_set(_DEFER_KV + meeting_id, None)
             self.repo.fail_job(job_id, stage, error, retry_at=None)
             self.stages.persist(meeting.with_state(MeetingState.FAILED))
             self._emit(meeting_id, "failed", {"stage": stage.value, "error": error})
