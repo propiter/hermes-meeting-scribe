@@ -578,9 +578,14 @@ the delivery.
 
 ### 17.4 Risks / needs a live check
 
-- Real Google behaviour: time between `ENDED` and `FILE_GENERATED`, whether `participants.list`
+- Real Google behaviour: whether `participants.list`
   includes everyone who spoke, pagination sizes, and error bodies for admin-blocked tenants.
-- Meetings owned by another organisation: the API may return 403/404 or omit them.
+- Visibility: `conferenceRecords.list` returns only conferences ORGANISED by the connected user
+  (documented: "filtered to the conference organizer"). Meetings the user merely attended are never
+  listed; each organiser has to connect their own account. A record that still answers 403/404 on
+  its sub-resources is isolated (per-record errors, given up after 5 permanent failures).
+- Verified live: a transcript goes from `ENDED` to `FILE_GENERATED` about 5 minutes after the
+  meeting ends.
 - The transcript attachment makes transcripts visible to everyone in the notes channel; it is on by
   default by design (documented in README and the catalog disclosure).
 - Discord's per-file limit can be lower on some servers than the 8 MB we assume only if Discord

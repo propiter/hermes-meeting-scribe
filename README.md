@@ -326,8 +326,9 @@ Kanban/Linear, Discord threads). No audio is downloaded and no bot joins the cal
   Enterprise, Education Plus, Workspace Individual). Your admin must allow transcripts.
 - Transcription must be **on** in the meeting (Activities → Transcripts), or turned on
   automatically from the Calendar event.
-- The connected account must be the owner of, or a participant in, the meetings. Meetings organised
-  by other organisations are not guaranteed to be readable.
+- Only meetings **organised by the connected account** are imported: the Meet API lists conference
+  records filtered to the organizer. Meetings you only attended (organised by a colleague or another
+  organisation) are not visible; whoever organises them has to connect their own account.
 - Google deletes transcript entries **30 days** after the meeting ends; import before that.
 
 ### Create your own OAuth app (once)

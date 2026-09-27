@@ -336,8 +336,10 @@ Kanban/Linear, hilos de Discord). No se descarga audio y ningún bot entra a la 
   Enterprise, Education Plus, Workspace Individual). El administrador debe permitir transcripciones.
 - La transcripción debe estar **activada** en la reunión (Actividades → Transcripciones) o activarse
   automáticamente desde el evento de Calendar.
-- La cuenta conectada debe ser propietaria o participante de las reuniones. No se garantiza poder
-  leer reuniones organizadas por otras organizaciones.
+- Solo se importan las reuniones **que organiza la cuenta conectada**: la API de Meet lista los
+  registros de conferencia filtrados por organizador. Las reuniones a las que solo asististe
+  (organizadas por un compañero u otra organización) no son visibles; quien las organiza debe
+  conectar su propia cuenta.
 - Google borra las entradas de la transcripción **30 días** después de terminar la reunión;
   importa antes.
 
