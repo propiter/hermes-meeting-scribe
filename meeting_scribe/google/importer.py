@@ -64,7 +64,7 @@ class MeetImporter:
         self._clock = clock
 
     # -- status (kv) ------------------------------------------------------------------------------
-    def _set(self, **values: Any) -> None:
+    def set_status(self, **values: Any) -> None:
         repo = self._service().repo
         for k, v in values.items():
             repo.kv_set(KV + k, None if v is None else str(v))
@@ -108,10 +108,10 @@ class MeetImporter:
             report.errors.append(_describe(exc))
         if record_status and not dry_run:
             now = self._clock().isoformat()
-            self._set(last_poll_at=now, last_poll_ok="0" if report.errors else "1",
+            self.set_status(last_poll_at=now, last_poll_ok="0" if report.errors else "1",
                       last_error=report.errors[0] if report.errors else None)
             if report.imported:
-                self._set(last_import_at=now, last_import_meeting=report.imported[-1])
+                self.set_status(last_import_at=now, last_import_meeting=report.imported[-1])
         return report
 
     def _one(self, client: MeetClient, rec: dict, report: SyncReport, dry_run: bool) -> None:

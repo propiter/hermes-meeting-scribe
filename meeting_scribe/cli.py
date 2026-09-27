@@ -1,4 +1,4 @@
-"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|export|config`` (DESIGN §10).
+"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|export|config|google`` (DESIGN §10, §17).
 
 ``setup_parser`` / ``dispatch`` are pure (the runtime is injected) so they are unit-tested
 without Hermes; ``register()`` binds them to the plugin runtime. Exit codes: 0 ok, 1 failure /
@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
-from . import doctor
+from . import cli_google, doctor
 from .config import LEGACY_KEYS, SPEC, Settings, canonical_key, validate_value
 from .domain.models import Stage
 from .i18n import t
@@ -75,6 +75,11 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     se = cf_sub.add_parser("set")
     se.add_argument("key", choices=[*SPEC, *LEGACY_KEYS.values()], metavar="KEY")
     se.add_argument("value")
+    s.add_argument("--google-meet", dest="google_meet", action="store_true", default=None,
+                   help="Enable Google Meet import (then run `google connect`)")
+    s.add_argument("--no-google-meet", dest="google_meet", action="store_false")
+    s.add_argument("--google-meet-channel", help="Discord channel id for Google Meet notes")
+    cli_google.add_parser(sub)
     parser.set_defaults(_ms_parser=parser)
 
 
@@ -95,7 +100,9 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
         "delivery_discord_channel": args.notes_channel, "owners": args.owners, "autojoin_enabled": args.autojoin,
         "audio_retention": args.retention, "kanban_mode": args.kanban_mode, "linear_mode": args.linear_mode,
         "linear_default_team": args.linear_team, "obsidian_vault_path": args.obsidian_vault}
-    answers = {k: v for k, v in flags.items() if v is not None}
+    google = {"google_meet_enabled": getattr(args, "google_meet", None),
+              "google_meet_discord_channel": getattr(args, "google_meet_channel", None)}
+    answers = {k: v for k, v in {**flags, **google}.items() if v is not None}
     if not args.non_interactive:
         _print(t("cli.setup_intro", lang))
         _print(t("cli.setup_language_hint", lang))
@@ -110,6 +117,14 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
             raw = input(f"{key} [{default}]: ").strip()
             if raw:
                 answers[key] = raw
+        if "google_meet_enabled" not in answers:  # optional, off by default (DESIGN §17)
+            raw = input(t("cli.setup_google", lang)).strip().lower()
+            if raw in ("y", "yes", "s", "si", "sí"):
+                answers["google_meet_enabled"] = True
+                if "google_meet_discord_channel" not in answers:
+                    raw = input(f"google_meet_discord_channel [{current.google_meet_discord_channel}]: ").strip()
+                    if raw:
+                        answers["google_meet_discord_channel"] = raw
     if "transcribe_language" in answers and str(answers["transcribe_language"]) != "auto":
         code = str(answers["transcribe_language"])
         answers.setdefault("analysis_language", code)
@@ -245,7 +260,7 @@ def _config(args: argparse.Namespace, rt: CliRuntime) -> int:
 
 _COMMANDS: dict[str, Callable[[argparse.Namespace, CliRuntime], int]] = {
     "setup": _setup, "doctor": _doctor, "status": _status, "list": _list, "show": _show,
-    "reprocess": _reprocess, "export": _export, "config": _config}
+    "reprocess": _reprocess, "export": _export, "config": _config, "google": cli_google.dispatch}
 
 
 def dispatch(args: argparse.Namespace, rt: CliRuntime) -> int:

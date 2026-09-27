@@ -186,10 +186,43 @@ def check_capture(env: DoctorEnv) -> Check:
     return Check.ok(detail) if ok else Check.warn(detail)
 
 
+def check_google_meet(env: Any) -> Check:
+    """DESIGN §17: client stored, token refreshable, last poll, resolved notes channel."""
+    s = env.settings()
+    if not s.google_meet_enabled:
+        return Check.ok("disabled (google_meet_enabled=false)")
+    files = getattr(env, "google_files", None)
+    if not callable(files):
+        return Check.warn("Google Meet import not available in this runtime")
+    from .google.oauth import GoogleAuthError, GoogleDisconnected
+
+    f = files()
+    if not f.client_path.exists():
+        return Check.fail("no OAuth client; run `hermes meeting-scribe google connect --client-secret <file.json>`")
+    try:
+        env.google_credentials().access_token()
+    except GoogleDisconnected as exc:
+        return Check.fail(str(exc))
+    except (GoogleAuthError, OSError) as exc:
+        return Check.warn(f"token refresh failed: {exc}")
+    channel = s.google_meet_discord_channel or s.delivery_discord_channel
+    parts = ["token OK", f"notes channel: {channel or 'home channel (if configured) / none: Discord delivery skipped'}"]
+    try:
+        st = env.meet_importer().status()
+    except Exception:  # storage issues are reported by the storage check
+        st = {}
+    if st.get("last_poll_at"):
+        parts.append(f"last poll {st['last_poll_at']} ({'ok' if st.get('last_poll_ok') == '1' else 'error'})")
+    if st.get("last_poll_ok") == "0":
+        return Check.warn("; ".join(parts + [f"error: {st.get('last_error', '?')}"]))
+    return Check.ok("; ".join(parts))
+
+
 registry = CheckRegistry()
 for _name, _fn in (("settings", check_settings), ("ffmpeg", check_ffmpeg), ("faster_whisper", check_faster_whisper),
                    ("storage", check_storage), ("disk", check_disk), ("llm", check_llm), ("kanban", check_kanban),
-                   ("linear", check_linear), ("obsidian", check_obsidian), ("capture", check_capture)):
+                   ("linear", check_linear), ("obsidian", check_obsidian), ("capture", check_capture),
+                   ("google_meet", check_google_meet)):
     registry.register_check(_name, _fn)
 
 
