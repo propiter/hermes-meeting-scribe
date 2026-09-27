@@ -45,6 +45,8 @@ Call the tools directly; they return JSON.
 - `meeting_search(query, limit)` — full-text, accent-insensitive, all words must match.
 - `meeting_get(meeting_id, part="notes|transcript|tasks|meta")`
 - `/meeting list [n]` · `/meeting show <id>` · `/meeting search <text>`
+- `/meeting start [#voice-channel]` · `/meeting stop` — record the caller's (or given) Discord voice
+  channel; users run these themselves (the bot also auto-joins when `autojoin.enabled`).
 - `/meeting reprocess <id> from=transcribe|analyze|deliver`
 - `terminal(command="hermes meeting-scribe doctor")` — dependency and integration checks.
 - `terminal(command="hermes meeting-scribe export <id> --format md")`

@@ -40,9 +40,10 @@ meeting_scribe/
   audio/       ffmpeg.py (binary resolution: PATH → ~/.hermes/tools/ffmpeg-*/bin →
                audio.ffmpeg_path; decode, probe), archive.py (final packaging per
                retention, stream extraction for reprocess)
-  capture/     (Phase B) compat.py, receiver.py (ScribeReceiver + TimedBuffer),
+  capture/     compat.py (probe), receiver.py (ScribeReceiver + TimedBuffer),
                tracks.py (live ffmpeg opus writer per speaker, timeline-aligned),
-               session.py (RecordingSession lifecycle), autojoin.py
+               session.py (RecordingSession lifecycle), controller.py
+               (CaptureManager = runtime.capture), autojoin.py, checks.py (doctor)
   transcribe/  worker.py (subprocess entry: faster-whisper, segments+words),
                client.py (launches worker, timeout scaled by duration),
                merge.py (per-speaker segments -> ordered utterances),
@@ -50,16 +51,18 @@ meeting_scribe/
   analyze/     chunking.py, prompts.py, schemas.py, extract.py (complete_structured,
                map-reduce), projects.py (candidate gathering + resolution,
                learned channel->project map)
-  sinks/       base.py, files.py, kanban.py, linear.py, obsidian.py,
-               discord_notes.py (Phase B; interface in base.DiscordNotesSink)
+  sinks/       base.py, files.py, kanban.py, linear.py, obsidian.py
+               (the Discord notes sink lives in discord_ui/sink.py)
   pipeline/    runner.py (single worker, resumable job queue), stages.py,
                service.py (MeetingService: the API capture/UI/CLI call)
   commands.py  platform-agnostic /meeting router (Caller from session env)
-  discord_ui/  commands.py (slash command router + aliases), views.py
-               (persistent DynamicItem buttons), resolve.py (guild/voice)
+  discord_ui/  __init__.py (install: platform handler factory), render.py (pure
+               notes → messages + button specs), sink.py (DiscordNotesSink),
+               actions.py (button semantics + auth), views.py (discord.py
+               DynamicItem buttons / project select)
   tools.py     agent tools: meeting_search, meeting_get
   cli.py       hermes meeting-scribe setup|doctor|status|list|show|reprocess|export|config
-  doctor.py    check registry (Phase B adds compat/intents checks)
+  doctor.py    check registry (capture.checks adds compat/voice deps/intents/permissions)
   runtime.py   composition root (adapters built from a Host of Hermes callables)
   hermes_adapters.py  lazy Hermes imports (LLM, projects, kanban, secrets, threads)
   plugin.py    register(ctx, root): wires tools/commands/CLI/skill, then Phase B install()
@@ -265,3 +268,45 @@ SMTP?". Plugin skill `meeting-scribe:meeting-scribe` explains usage.
 - Integration tests run under Hermes' interpreter via `scripts/test-integration.sh`
   (pytest in `~/.cache/meeting-scribe/hermes-test-deps`, outside the plugin root
   because `plugins validate` security-scans every file under it).
+
+## 14. Phase B as implemented (deviations and details)
+
+- **Wiring**: `capture.install` builds `CaptureManager` (`runtime.capture`), registers
+  the doctor checks and an `on_unload` hook (finalize live recordings as partial).
+  `discord_ui.install` owns the single `register_platform_handler("discord", …)`
+  factory: on each connect it stores a weak adapter ref + the gateway loop, calls
+  `capture.attach(bot, adapter)` (runs the compat probe against the adapter module
+  actually loaded), moves the `on_voice_state_update` listener to the new bot,
+  `add_dynamic_items`, and `runtime.start_pipeline(live_meeting_ids)`.
+- **Compat probe** result gates capture: incompatible → `/meeting start` answers
+  `capture.incompatible` with the problems; `doctor` reports `discord_compat: fail`.
+- **Command dispatch**: `/meeting start|stop` handlers run on Hermes' executor; the
+  controller runs the coroutine on the adapter loop with `run_coroutine_threadsafe`
+  and waits (start 60 s, stop 90 s). If ever called on the loop thread it schedules
+  the coroutine and answers "starting…/stopping…".
+- **Auto-leave** is polled by the session each drain tick (no humans for
+  `autoleave.grace_seconds`), not driven by the voice-state listener; auto-join uses
+  one watcher task per channel re-checking every second (debounce).
+  `ctx.on_unload` also cancels pending auto-join watchers.
+- **Stop reasons**: `stopped`, `empty`, `max_duration` → complete;
+  `disconnected` (lost voice / `/voice leave` / gateway `disconnect()`), `shutdown`,
+  `error` → `partial=True`.
+- **Notes layout**: header message (title, partial warning, TL;DR, decisions, open
+  questions; split at 2000 chars, mentions never cut) in the target channel; the rest
+  in a thread started from it when `delivery.discord.thread` and the channel supports
+  threads (voice text chats do not → everything stays in the channel). Items grouped
+  by owner (`<@id> (name)`, "Unassigned" last), ≤ 5 items per message (one button
+  row per item; Discord max 5 rows), then a bulk row. Plain content, no embeds.
+- **Buttons** (`custom_id` = `mscribe:<action>:<meeting>:<item>`, actions `ok`
+  Kanban, `lin` Linear, `no` dismiss, `allk`/`alll` approve all, `prj` project
+  picker; the picker is an ephemeral `psel` select of up to 25 candidates).
+  Each install builds its own DynamicItem subclasses (multi-profile safe).
+  Kanban buttons render only for owner items; `ok`/`allk` are owner-only; other
+  actions: owners or `adapter._component_check_auth` (Hermes allowlists/roles/
+  pairing). Without that helper → owners only (fail closed). After an action the
+  notes messages are re-rendered in place (status icons, spent buttons removed).
+- **Idempotency**: the sink stores a mutable pointer via the new
+  `Repository.upsert_delivery` (`sink="discord", key="mtg:<id>:notes"`,
+  `external_id` = JSON `{channel, thread, messages[]}`); reprocess edits those
+  messages, sends extra parts, deletes surplus ones, re-posts if deleted.
+  Adapter not connected yet → deliver fails softly and the job retries.

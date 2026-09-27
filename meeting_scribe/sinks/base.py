@@ -36,7 +36,7 @@ class DeliveryStore(Protocol):
 
 
 class DiscordNotesSink(Protocol):
-    """Interface the Phase B Discord sink satisfies (``sinks/discord_notes.py``).
+    """Interface the Discord notes sink satisfies (``discord_ui/sink.py``).
 
     ``deliver`` posts TL;DR/decisions/questions/action items grouped by person (with mentions)
     in a thread under ``delivery.discord.channel`` (fallback: voice text chat → home channel) and
