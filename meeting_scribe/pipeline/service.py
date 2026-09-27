@@ -115,6 +115,8 @@ class MeetingService:
         notes = read_notes(self.folder(meeting))
         if notes is None:
             raise ValueError("meeting has no notes yet")
+        # Per-sink decision (review finding 1): approving for Kanban does not approve for Linear.
+        self.repo.set_item_sink_status(meeting.id, item_id, sink_name, "approved")
         if item.status is ActionStatus.PENDING:
             self.repo.set_action_status(meeting.id, item_id, ActionStatus.APPROVED)
         return str(sink.deliver_item(meeting, notes, item, self.folder(meeting)))

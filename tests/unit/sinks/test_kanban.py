@@ -28,7 +28,10 @@ def test_approve_mode_delivers_only_approved_owner_items(tmp_path, repo, meeting
     sink = _sink(repo, settings_of(kanban__mode="approve"), gw)
     res = sink.deliver(meeting, notes, tmp_path)
     assert gw.created == [] and res.ok and res.skipped
-    repo.set_action_status(meeting.id, "a0000000001", ActionStatus.APPROVED)
+    repo.set_action_status(meeting.id, "a0000000001", ActionStatus.APPROVED)  # global status alone: not enough
+    sink.deliver(meeting, notes, tmp_path)
+    assert gw.created == []
+    repo.set_item_sink_status(meeting.id, "a0000000001", "kanban", "approved")
     sink.deliver(meeting, notes, tmp_path)
     assert [c["title"] for c in gw.created] == ["Enviar credenciales"]
     assert repo.get_action_item(meeting.id, "a0000000001").status is ActionStatus.DELIVERED

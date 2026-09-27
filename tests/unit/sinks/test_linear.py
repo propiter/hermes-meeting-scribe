@@ -134,7 +134,7 @@ def test_sink_default_team_and_approve_mode(tmp_path, repo, meeting, notes, sett
     sink = _sink(repo, settings_of(linear__mode="approve", linear__default_team="OPS"), gql(t))
     sink.deliver(meeting, notes, tmp_path)
     assert not [r for r in t.requests if "issueCreate" in r[2]["query"]]
-    repo.set_action_status(meeting.id, "a0000000002", ActionStatus.APPROVED)
+    repo.set_item_sink_status(meeting.id, "a0000000002", "linear", "approved")
     sink.deliver(meeting, notes, tmp_path)
     creates = [r[2]["variables"]["input"] for r in t.requests if "issueCreate" in r[2]["query"]]
     assert len(creates) == 1 and creates[0]["teamId"] == "team_2" and "projectId" not in creates[0]

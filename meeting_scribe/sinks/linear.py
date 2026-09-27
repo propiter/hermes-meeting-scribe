@@ -46,6 +46,8 @@ class LinearBackend(Protocol):
 
     def projects(self) -> list[dict[str, Any]]: ...
 
+    def find_issue_by_marker(self, marker: str) -> Optional[dict[str, Any]]: ...
+
     def create_issue(self, issue: Mapping[str, Any]) -> dict[str, Any]: ...
 
 
@@ -104,6 +106,14 @@ class LinearGraphQL:
         return [{"id": p["id"], "name": p["name"], "team_ids": [x["id"] for x in p["teams"]["nodes"]]}
                 for p in self._all("projects", "id name teams { nodes { id } }")]
 
+    def find_issue_by_marker(self, marker: str) -> Optional[dict[str, Any]]:
+        """The issue whose description carries our idempotency marker, if one was already created."""
+        q = ("query($filter: IssueFilter) { issues(first: 5, filter: $filter, includeArchived: true) "
+             "{ nodes { id identifier url description } } }")
+        nodes = self._q(q, {"filter": {"description": {"contains": marker}}})["issues"]["nodes"]
+        hit = next((n for n in nodes if marker in str(n.get("description") or "")), None)
+        return {k: hit[k] for k in ("id", "identifier", "url") if k in hit} if hit else None
+
     def create_issue(self, issue: Mapping[str, Any]) -> dict[str, Any]:
         q = ("mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success "
              "issue { id identifier url } } }")
@@ -141,7 +151,8 @@ class LinearMcp:
     CANDIDATES = {"create": ("create_issue", "save_issue", "linear_create_issue"),
                   "teams": ("list_teams", "get_teams", "linear_list_teams"),
                   "users": ("list_users", "get_users", "linear_list_users"),
-                  "projects": ("list_projects", "get_projects", "linear_list_projects")}
+                  "projects": ("list_projects", "get_projects", "linear_list_projects"),
+                  "search": ("list_issues", "search_issues", "linear_search_issues")}
 
     def __init__(self, call: McpCaller, server: str = "linear") -> None:
         self._call = call
@@ -169,6 +180,18 @@ class LinearMcp:
 
     def projects(self) -> list[dict[str, Any]]:
         return _nodes(self._invoke("projects", {}), "projects")
+
+    def find_issue_by_marker(self, marker: str) -> Optional[dict[str, Any]]:
+        """Best effort over the MCP's search/list tool; ``None`` when the server has none."""
+        try:
+            payload = self._invoke("search", {"query": marker})
+        except LinearError as exc:
+            log.debug("meeting-scribe: Linear MCP issue search unavailable: %s", exc)
+            return None
+        for node in _nodes(payload, "issues"):
+            if marker in str(node.get("description") or ""):
+                return {k: node[k] for k in ("id", "identifier", "url") if k in node}
+        return None
 
     def create_issue(self, issue: Mapping[str, Any]) -> dict[str, Any]:
         args = {"title": issue["title"], "team": issue["teamId"], "teamId": issue["teamId"],
@@ -247,6 +270,15 @@ class LinearSink(ItemSink):
                                       str(team.get("name")).lower()):
                     return str(team["id"])
         raise LinearError("no Linear team: resolve a Linear project or set linear.default_team")
+
+    def _reconcile(self, meeting: Meeting, key: str) -> Optional[tuple[str, Optional[str]]]:
+        """Linear has no server-side idempotency key: find an issue a crashed attempt created by the
+        `` `mtg:…` `` marker in its description (review finding 6)."""
+        backend = self._backend()
+        if backend is None:
+            raise LinearError("Linear is not connected")
+        found = backend.find_issue_by_marker(f"`{key}`")
+        return (str(found["id"]), found.get("url")) if found else None
 
     def _create(self, meeting: Meeting, notes: Notes, item: ActionItem, folder: Path,
                 key: str) -> tuple[str, Optional[str]]:
