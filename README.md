@@ -112,6 +112,10 @@ hermes meeting-scribe doctor     # checks ffmpeg/libopus, whisper, storage, LLM,
 hermes gateway restart           # load the plugin into the running gateway
 ```
 
+Hermes asks for consent before it installs the Python dependency (`faster-whisper`). If you install
+from a non-interactive shell and the plugin is left disabled, run
+`hermes plugins enable meeting-scribe`, which installs the dependency and enables the plugin.
+
 `setup` can also run without prompts, for example:
 
 ```bash
