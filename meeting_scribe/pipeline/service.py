@@ -10,6 +10,7 @@ Phase B buttons call ``approve_item`` / ``dismiss_item`` / ``approve_all`` / ``s
 """
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
@@ -17,10 +18,10 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from ..analyze.projects import find_candidate, gather_candidates
 from ..config import Settings
 from ..domain.models import (
-    ActionItem, ActionStatus, Candidate, Meeting, MeetingState, SinkResult, Speaker, Stage,
+    ActionItem, ActionStatus, Candidate, Meeting, MeetingState, SinkResult, Speaker, Stage, Utterance,
 )
 from ..domain.ports import Clock, ProjectCatalog
-from ..storage.artifacts import read_notes, write_notes
+from ..storage.artifacts import read_notes, write_meta, write_notes, write_transcript, write_transcript_md
 from ..storage.layout import Layout
 from ..storage.repo import Repository
 from .runner import PipelineRunner
@@ -90,6 +91,31 @@ class MeetingService:
                           partial=meeting.partial or partial).with_state(MeetingState.CAPTURED)
         meeting = self.runner.stages.persist(meeting)
         self.runner.enqueue(meeting.id, Stage.TRANSCRIBE)
+        return meeting
+
+    # -- imported transcripts (DESIGN §17) -------------------------------------------------------
+    def import_transcript(self, meeting: Meeting, utterances: Sequence[Utterance]) -> Optional[Meeting]:
+        """Enter an already-transcribed meeting (Google Meet) at ``transcribed`` and queue ANALYZE.
+
+        Transcript files are written first (the folder name carries a fresh id, so nothing can
+        collide); then the row + utterances are inserted in ONE transaction guarded by the
+        ``(source, external_id)`` unique index. ``None`` = somebody already imported it (the
+        files just written are removed). A crash before the enqueue is healed by ``recover``.
+        """
+        if meeting.state is not MeetingState.TRANSCRIBED or not meeting.external_id:
+            raise ValueError("import_transcript expects a 'transcribed' meeting with an external_id")
+        if self.repo.find_by_external(meeting.source, meeting.external_id) is not None:
+            return None
+        folder = self.layout.meeting_folder(meeting)
+        folder.mkdir(parents=True, exist_ok=True)
+        meeting = replace(meeting, folder=self.layout.relative(folder))
+        write_transcript(folder, utterances)
+        write_transcript_md(folder, meeting, utterances, meeting.language or self.settings().ui_language)
+        if not self.repo.create_imported_meeting(meeting, utterances):
+            shutil.rmtree(folder, ignore_errors=True)
+            return None
+        write_meta(folder, meeting)
+        self.runner.enqueue(meeting.id, Stage.ANALYZE)
         return meeting
 
     # -- processing control -------------------------------------------------------------------

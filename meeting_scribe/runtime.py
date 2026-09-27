@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Sequence
 
 from .analyze.extract import LlmAnalyzer
 from .analyze.projects import CallableCatalog, LearnedCatalog
@@ -32,6 +32,10 @@ from .sinks.obsidian import ObsidianSink
 from .storage.layout import Layout
 from .storage.repo import Repository
 from .transcribe.client import SubprocessTranscriber
+
+if TYPE_CHECKING:
+    from .google.importer import MeetImporter, MeetPoller
+    from .google.oauth import GoogleCredentials, GoogleFiles
 
 
 class SystemClock:
@@ -68,6 +72,8 @@ class Runtime:
         self._repos: dict[Path, Repository] = {}
         self._services: dict[Path, MeetingService] = {}
         self._repo_path: Optional[Path] = None
+        self._meet_poller: Optional["MeetPoller"] = None
+        self.google_transport: Any = None  # tests inject a fake HTTP transport here (never the network)
 
     # -- settings & simple adapters -------------------------------------------------------------
     def settings(self) -> Settings:
@@ -168,11 +174,54 @@ class Runtime:
 
     def start_pipeline(self, live_meeting_ids: Iterable[str] = (), *, owns_capture: bool = False) -> None:
         self.service().runner.start(live_meeting_ids, owns_capture=owns_capture)
+        self.start_meet_poller()
 
     def stop_pipeline(self) -> None:
         with self._lock:
+            poller, self._meet_poller = self._meet_poller, None
             for svc in self._services.values():
                 svc.runner.stop()
+        if poller is not None:
+            poller.stop()
+
+    # -- Google Meet import (DESIGN §17) ----------------------------------------------------------
+    def google_files(self) -> "GoogleFiles":
+        from .google.oauth import GoogleFiles
+
+        return GoogleFiles(self.host.data_dir)
+
+    def google_credentials(self) -> "GoogleCredentials":
+        from .google.oauth import GoogleCredentials
+
+        return GoogleCredentials(self.google_files(), transport=self.google_transport)
+
+    def google_connected_at(self) -> Optional[float]:
+        token = self.google_files().read_token() or {}
+        value = token.get("connected_at")
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def meet_importer(self) -> "MeetImporter":
+        from .google.importer import MeetImporter
+        from .google.meet_api import MeetClient
+
+        return MeetImporter(service=self.service, client=lambda: MeetClient(self.google_credentials()),
+                            clock=self.clock.now)
+
+    def start_meet_poller(self) -> None:
+        """Gateway only (callers already are): one polling thread; it syncs only with the lease."""
+        from .google.importer import MeetPoller
+
+        with self._lock:
+            if self._meet_poller is not None and self._meet_poller.running:
+                return
+            self._meet_poller = MeetPoller(importer=self.meet_importer, repo=self.repo, settings=self.settings,
+                                           connected_at=self.google_connected_at,
+                                           owner=self.service().runner.owner, spawner=self.host.spawner)
+            self._meet_poller.start()
+
+    @property
+    def meet_poller_running(self) -> bool:
+        return self._meet_poller is not None and self._meet_poller.running
 
     def pipeline_running(self) -> bool:
         svc = self._service
