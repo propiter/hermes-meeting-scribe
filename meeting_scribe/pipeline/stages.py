@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
 from ..analyze.projects import ProjectResolver, gather_candidates
+from ..analyze.reconcile import reconcile_ids
 from ..audio.archive import build_archive
 from ..audio.ffmpeg import Ffmpeg
 from ..config import Settings
@@ -92,6 +93,9 @@ class Stages:
         utterances = read_transcript(folder)
         candidates, _errors = gather_candidates(self.catalogs(), meeting)
         notes = self.analyzer.analyze(meeting, utterances, candidates)
+        # Rephrased titles must keep their ids, or a reprocess duplicates Kanban/Linear items.
+        notes = replace(notes, action_items=tuple(reconcile_ids(self.repo.list_action_items(meeting.id),
+                                                                notes.action_items)))
         resolver = ProjectResolver(self.settings().projects_min_confidence, self.repo)
         res = resolver.resolve(meeting, candidates, notes.project, notes.project_confidence)
         project = res.candidate.name if res.candidate else None

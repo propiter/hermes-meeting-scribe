@@ -258,3 +258,29 @@ def test_ensure_pipeline_is_a_noop_outside_the_gateway(tmp_path):
     rt.ensure_pipeline()
     assert not rt.pipeline_running()
     rt.close()
+
+
+def test_reanalysis_that_rephrases_a_title_keeps_the_item_id(prepo, layout, settings, clock, meeting):
+    """E2E finding: a reprocess from=analyze changed a title slightly and Kanban got a duplicate."""
+    from meeting_scribe.domain.ids import action_item_id
+    from meeting_scribe.domain.models import ActionItem, Notes
+
+    class Rephrasing(FakeAnalyzer):
+        def analyze(self, meeting, utterances, candidates):
+            self.calls += 1
+            title = "Enviar el informe semanal" if self.calls == 1 else "Enviar informe semanal"
+            return Notes(meeting_title="Informe", tldr="t", summary="s", language="es", action_items=(
+                ActionItem(id=action_item_id(title, "11"), title=title, owner_speaker_id="11", quote="yo envío"),))
+
+    runner, _tr, _an, _ = build(prepo, layout, settings, clock)
+    runner.stages.analyzer = Rephrasing()
+    m, _ = captured(prepo, layout, meeting)
+    runner.enqueue(m.id)
+    drain(runner)
+    first = [a.id for a in prepo.list_action_items(m.id)]
+    runner.reprocess(m.id, Stage.ANALYZE)
+    drain(runner)
+    assert [a.id for a in prepo.list_action_items(m.id)] == first
+    folder = layout.meeting_folder(prepo.get_meeting(m.id))
+    notes = read_notes(folder)
+    assert [a.id for a in notes.action_items] == first and notes.action_items[0].title == "Enviar informe semanal"
