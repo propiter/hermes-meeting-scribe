@@ -191,6 +191,7 @@ hermes meeting-scribe reprocess <id> [--from transcribe|analyze|deliver] [--now]
 hermes meeting-scribe export <id> [--format md|json] [--out ARCHIVO]
 hermes meeting-scribe config get [CLAVE]
 hermes meeting-scribe config set CLAVE VALOR
+hermes meeting-scribe google connect|status|sync|disconnect   # ver "Google Meet"
 ```
 
 Por defecto, `reprocess` deja el trabajo en la cola para el worker del gateway. Con `--now` se
@@ -323,6 +324,82 @@ por qué.
 
 Reprocesar una reunión edita estos mensajes en su sitio en vez de publicar mensajes nuevos.
 
+## Google Meet
+
+meeting-scribe también puede importar **transcripciones que Google Meet ya generó** y pasarlas por
+el mismo análisis y entrega que las reuniones de Discord (resumen, decisiones, tareas por proyecto,
+Kanban/Linear, hilos de Discord). No se descarga audio y ningún bot entra a la llamada.
+
+### Requisitos
+
+- Una edición de Google Workspace con transcripción en Meet (por ejemplo Business Standard/Plus,
+  Enterprise, Education Plus, Workspace Individual). El administrador debe permitir transcripciones.
+- La transcripción debe estar **activada** en la reunión (Actividades → Transcripciones) o activarse
+  automáticamente desde el evento de Calendar.
+- La cuenta conectada debe ser propietaria o participante de las reuniones. No se garantiza poder
+  leer reuniones organizadas por otras organizaciones.
+- Google borra las entradas de la transcripción **30 días** después de terminar la reunión;
+  importa antes.
+
+### Crea tu propia app OAuth (una vez)
+
+Cada instalación usa **su propio** cliente OAuth de Google Cloud; el plugin no trae ninguno.
+
+1. Abre <https://console.cloud.google.com/> y crea (o elige) un proyecto.
+2. **APIs y servicios → Biblioteca**: habilita **Google Meet REST API**.
+3. **Google Auth Platform → Marca / Público** (pantalla de consentimiento): tipo de usuario
+   **Interno** (solo Workspace; no requiere revisión de Google). Completa nombre y correo de soporte.
+4. **Acceso a datos**: añade el scope `https://www.googleapis.com/auth/meetings.space.readonly`.
+5. **Clientes → Crear cliente**: tipo de aplicación **App de escritorio**. Descarga el JSON.
+
+### Conectar y usar
+
+```text
+hermes meeting-scribe google connect --client-secret ~/Descargas/client_secret_XXXX.json [--no-browser]
+hermes meeting-scribe config set google_meet_enabled true
+hermes meeting-scribe config set google_meet_discord_channel <id del canal de texto>   # opcional
+# reinicia el gateway para que arranque su sondeo
+hermes meeting-scribe google status [--json]
+hermes meeting-scribe google sync [--since 2026-09-01T00:00:00Z | --days N] [--dry-run] [--json]
+hermes meeting-scribe google disconnect
+```
+
+- `connect` copia el JSON del cliente a `<HERMES_HOME>/plugin-data/meeting-scribe/google/client.json`
+  y guarda el token en `token.json` al lado (ambos con permisos 0600). Abre el navegador y escucha
+  una sola vez en `http://127.0.0.1:<puerto libre>`. En una máquina remota/SSH usa `--no-browser`:
+  abre la URL impresa en cualquier equipo, acepta y pega la URL completa a la que te redirigió (la
+  página puede no cargar; es normal) o solo el código.
+- El gateway sondea cada `google_meet_poll_minutes` (5 por defecto). Solo un proceso sondea (un
+  lease en el SQLite del plugin). Solo se importan automáticamente las conferencias que **terminan
+  después de conectar**; usa `google sync --days N` para importar historia de forma explícita
+  (máximo 30 días).
+- Una conferencia se importa una sola vez (única por el nombre de su registro en Meet), aunque haya
+  reinicios o dos procesos. Si la transcripción aún se está generando (`ENDED`) se reintenta en el
+  siguiente sondeo.
+- Las notas van a `google_meet_discord_channel`; si está vacío, a `delivery_discord_channel`; si no,
+  al canal home del gateway. Sin ninguno, la reunión se procesa igual (CLI, herramientas del agente,
+  archivos, Kanban) y la entrega en Discord se omite.
+- Los participantes de Meet no son usuarios de Discord: las tareas muestran su nombre, sin menciones
+  ni DMs.
+- `invalid_grant` (acceso revocado o caducado) aparece como "desconectado" en `google status` y
+  `doctor`; vuelve a ejecutar `connect`.
+
+**Qué sale de tu máquina:** el plugin solo llama a `meet.googleapis.com` (scope de solo lectura
+`meetings.space.readonly`: registros de conferencia, participantes, transcripciones y entradas) y a
+`oauth2.googleapis.com` (tokens, revocación). Sin acceso a Drive ni al perfil del usuario. Después,
+el texto de la transcripción sigue el camino normal: tu proveedor LLM de Hermes y Discord (ver el
+adjunto de transcripción abajo).
+
+## Transcripción completa en Discord
+
+Con `delivery_discord_transcript` (**activado** por defecto) cada reunión — de Discord o de Google
+Meet — recibe su transcripción completa adjunta como `transcript-<fecha>-<slug>.md`
+(`[mm:ss] Nombre: texto`) justo después del resumen en el chat de la reunión. Se adjunta una vez:
+reintentos, refrescos y botones nunca la vuelven a adjuntar; un reprocesado que cambia la
+transcripción la reemplaza. Los archivos de más de 8 MB se dividen en partes numeradas. Sin el
+permiso **Adjuntar archivos** se publica un aviso de una línea y la entrega continúa. Desactívalo con
+`hermes meeting-scribe config set delivery_discord_transcript false`.
+
 ## Integraciones
 
 ### Kanban de Hermes
@@ -408,6 +485,10 @@ El plugin te ayuda a hacerlo:
 - `consent_nickname_prefix` muestra `[REC] ` en el apodo del bot mientras graba.
 - El audio se queda en tu disco. El **texto** de la transcripción se envía al proveedor de LLM que
   configuraste en Hermes, así que elige uno cuya política de datos encaje con tus reuniones.
+- La importación de Google Meet (opcional) lee transcripciones con tu propio cliente OAuth y el scope
+  de solo lectura `meetings.space.readonly`; ver [Google Meet](#google-meet).
+- La transcripción completa se adjunta a las notas en Discord por defecto
+  (`delivery_discord_transcript`); quien pueda leer el canal de notas puede leerla.
 - Para borrar una reunión, elimina su carpeta. `audio_retention: none` borra el audio cuando termina
   el procesamiento.
 
@@ -425,6 +506,9 @@ El plugin te ayuda a hacerlo:
 
 ## Limitaciones
 
+- La importación de Google Meet requiere la transcripción propia de Meet (Workspace) y solo ve las
+  reuniones que la cuenta conectada organizó o a las que asistió; aún no se ha probado contra la API
+  real de Google.
 - La captura en vivo funciona solo en Discord. El procesamiento, la búsqueda y las herramientas del
   agente funcionan en cualquier superficie de Hermes.
 - Cada servidor de Discord puede tener una grabación a la vez. Varios servidores pueden grabar al

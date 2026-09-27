@@ -1,4 +1,4 @@
-"""Full transcript as a Discord attachment (DESIGN §17.6), for every meeting source.
+"""Full transcript as a Discord attachment (DESIGN §17.3), for every meeting source.
 
 Posted once per meeting, as its own message(s) right after the summary in the meeting chat:
 ``📎 Full transcript`` + ``transcript-<date>-<slug>.md`` (the same Markdown as ``transcript.md``).

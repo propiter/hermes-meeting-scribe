@@ -50,6 +50,8 @@ Call the tools directly; they return JSON.
 - `/meeting reprocess <id> from=transcribe|analyze|deliver`
 - `terminal(command="hermes meeting-scribe doctor")` — dependency and integration checks.
 - `terminal(command="hermes meeting-scribe export <id> --format md")`
+- `terminal(command="hermes meeting-scribe google status")` · `google sync [--days N] [--dry-run]` —
+  Google Meet import (opt-in). `google connect` needs a browser/consent: tell the user to run it.
 
 ## Procedure
 
@@ -68,6 +70,8 @@ Call the tools directly; they return JSON.
 - A meeting marked `partial` was interrupted; say so when answering from it.
 - Search needs every word to match; retry with fewer words before concluding nothing was said.
 - Meetings still `recording`/`transcribing` have no notes; report the state instead.
+- Meetings imported from Google Meet (`meta.source == "google_meet"`) have speakers `gmeet:<id>`: they
+  are not Discord users; name them, never format them as mentions.
 - Each action item has its OWN `project` (a meeting can cover several); do not report the meeting's
   project for every task. In Discord, tasks live in their project channel's thread, and a user sees
   their own with 📋 My tasks.

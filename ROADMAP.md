@@ -2,6 +2,13 @@
 
 This document records planned work, not implemented capabilities or release promises.
 
+## Google Meet transcript import
+
+**Status:** implemented on `feat/google-meet-import` (see DESIGN §17, CHANGELOG [Unreleased]);
+**pending a real test** against a Workspace account with Meet transcription. Remaining gates: one
+live `google connect` (browser and `--no-browser`), one imported meeting delivered to Discord with
+its transcript attachment, and a check of `ENDED` → `FILE_GENERATED` timing.
+
 ## Future release — Native Hermes Desktop meeting library
 
 **Status:** researched and deferred by the maintainer. No implementation or production deployment authorized by this roadmap. Version number to be chosen when scheduled.

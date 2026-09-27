@@ -121,7 +121,7 @@ class ViewKit:
         return {"allowed_mentions": discord.AllowedMentions(users=True, roles=False, everyone=False)}
 
     def file(self, name: str, data: bytes) -> discord.File:
-        """An attachment built from memory (the transcript, DESIGN §17.6)."""
+        """An attachment built from memory (the transcript, DESIGN §17.3)."""
         import io
 
         return discord.File(io.BytesIO(data), filename=name)

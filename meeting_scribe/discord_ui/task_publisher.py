@@ -245,7 +245,7 @@ class TaskPublisher:
         ptrs = Pointers(self.repo, meeting.id)
         chat, notes_ptr = await self.header(meeting, notes, ptrs)
         if self.settings.delivery_discord_transcript and self._transcript_text is not None:
-            try:  # never fails the delivery (DESIGN §17.6)
+            try:  # never fails the delivery (DESIGN §17.3)
                 await publish_transcript(self.msgs, ptrs, chat, meeting, self._transcript_text,
                                          getattr(self.views, "file", None), self.o.lang)
             except Exception as exc:

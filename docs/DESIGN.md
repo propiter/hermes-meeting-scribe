@@ -490,3 +490,91 @@ so nothing below depends on any server's channel names.
 ### Needs a live check
 Components v2 in ephemeral follow-ups and DMs, thread creation from an anchor message in channels with
 slow mode or restricted thread permissions, and DM delivery rate on large meetings.
+
+## 17. Google Meet import and transcript attachment (unreleased)
+
+Implemented; **not yet exercised against the live Google API** (no credentials in CI). Every field,
+filter and state below was checked against the official reference
+(<https://developers.google.com/workspace/meet/api/reference/rest/v2>, the *Work with artifacts*
+guide and <https://developers.google.com/identity/protocols/oauth2/native-app>).
+
+### 17.1 Architecture
+
+```
+google/http.py       stdlib urllib transport seam (HTTP errors returned, never raised; https only)
+google/oauth.py      client JSON import, PKCE + loopback receiver, exchange/refresh/revoke, 0600 files
+google/meet_api.py   conferenceRecords / transcripts / entries / participants / spaces, pagination
+google/convert.py    entries → Utterance, participants → Speaker, language, title (pure)
+google/importer.py   MeetImporter.sync (one pass) + MeetPoller (thread + SQLite lease)
+cli_google.py        google connect | status | sync | disconnect
+discord_ui/transcript_file.py   full transcript attachment (all sources)
+```
+
+`Runtime.start_pipeline` (gateway only: Discord connect or `ensure_pipeline`) starts the poller next
+to the worker; `stop_pipeline`/`close` (unload, reload, profile switch) stops and joins it and
+releases the lease. The poller never runs on the Discord asyncio loop.
+
+### 17.2 Decisions
+
+- **One scope**, `meetings.space.readonly` (sensitive, not restricted). No Drive (restricted), no
+  userinfo — so `status` can only say "connected". Each user brings their own "Desktop app" client;
+  consent screen *Internal* avoids Google verification in Workspace.
+- **No new dependency**: urllib, http.server, secrets, hashlib, base64, json.
+- **Files**: `<plugin data>/google/{client,token}.json`, created 0600 atomically (dir 0700), under
+  `plugin_data_dir` of the active profile (never a hard-coded home). `connected_at` lives in the
+  token. `invalid_grant`/`invalid_client` mark the token `disconnected` (no refresh storm; the
+  poller backs off to hourly) until `connect` runs again.
+- **Errors**: 401 → forced refresh + one retry; 403 → "forbidden" status (API disabled, scope, admin
+  policy); 429/5xx/network → "temporary", next cycle. Messages carry Google's error *status* and
+  message, never tokens.
+- **Readiness**: only transcripts in `FILE_GENERATED`. `ENDED` means the file is not generated yet
+  and entries may be incomplete; the record is simply retried on the next poll. A record with no
+  transcript (transcription off) or no entries is counted and skipped, never an error.
+- **Idempotency**: schema v4 adds `meetings.source` / `meetings.external_id` with a UNIQUE index;
+  `Repository.create_imported_meeting` inserts row + speakers + utterances in one `BEGIN IMMEDIATE`
+  transaction and returns False on conflict. Two pollers, a manual `google sync` and a restart can
+  race freely: exactly one insert wins, losers delete the files they wrote.
+- **Single poller**: `leases` table (`google-meet-poll`, owner = the runner's process owner id,
+  TTL = 3 × interval), renewed every tick; released on stop.
+- **Window**: automatic polls import only conferences whose `end_time >= connected_at` (never floods
+  Discord with history); `google sync --since/--days` backfills explicitly; always clamped to the
+  30-day retention.
+- **Entry into the pipeline**: `MeetingService.import_transcript` writes `transcript.jsonl/.md` with
+  the existing writers, persists the meeting in `transcribed` and enqueues ANALYZE. TRANSCRIBE is
+  never run; ARCHIVE finds no `tracks/` and returns None (unchanged `make_archiver`).
+- **Meeting fields**: `guild_id=""`, `channel_id="gmeet:<space id>"` (keeps learned
+  channel→project rows separate per Meet space), `channel_name` = meeting code or "Google Meet",
+  title `Google Meet · <UTC date time> · <meeting code>` (the LLM title replaces it after analysis;
+  Meet has no event title without Calendar scope). `language` = majority `languageCode`, shortened
+  to ISO 639-1.
+- **Utterances**: one per entry (no merging: the pipeline's only merge utility works on whisper
+  segments); `t0/t1` relative to the conference `startTime`; `speaker_id = gmeet:<participant id>`;
+  `speaker` = signed-in/anonymous/phone `displayName` (else "Participant N"); `confidence = 1.0`.
+- **Imported speakers in Discord**: `is_discord_user_id` (digits only) guards mentions, DMs and the
+  "belongs to" message; imported names are shown in bold instead. Owners are Discord ids, so Meet
+  tasks are never owner tasks (no Kanban auto-approve for them).
+- **Notes channel**: Meet meetings use `google_meet_discord_channel` → `delivery_discord_channel` →
+  home channel; non-numeric ids are ignored. With none, the Discord sink returns *ok + skipped*
+  (the job does not loop). The guild for project channels is taken from the notes channel.
+
+### 17.3 Transcript attachment (all sources)
+
+`delivery_discord_transcript` (default true): after the summary, in the meeting chat (not the
+thread: it is part of the notes, and voice-chat channels often cannot host threads). One file
+`transcript-<YYYY-MM-DD>-<slug>.md`, rendered from `transcript.jsonl` with the current title.
+Pointer `transcript` in `deliveries` stores sha256 + message ids: same hash → nothing is posted;
+different hash (reprocess) → old messages deleted and the new file posted. Above 8 MB (conservative
+Discord limit) the text is split at line ends into `…-partNofM.md` (UTF-8 safe); more than 20 parts
+→ a notice pointing to `export`. Missing Attach Files (403/50013/50001) → one notice, remembered.
+Transient failures keep already-posted parts and retry on the next publish. None of this can fail
+the delivery.
+
+### 17.4 Risks / needs a live check
+
+- Real Google behaviour: time between `ENDED` and `FILE_GENERATED`, whether `participants.list`
+  includes everyone who spoke, pagination sizes, and error bodies for admin-blocked tenants.
+- Meetings owned by another organisation: the API may return 403/404 or omit them.
+- The transcript attachment makes transcripts visible to everyone in the notes channel; it is on by
+  default by design (documented in README and the catalog disclosure).
+- Discord's per-file limit can be lower on some servers than the 8 MB we assume only if Discord
+  changes it again; the split size is a single constant (`transcript_file.MAX_BYTES`).

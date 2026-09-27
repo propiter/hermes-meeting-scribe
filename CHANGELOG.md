@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Google Meet import** (opt-in, `google_meet_enabled`): transcripts that Meet already generated are
+  imported and processed like Discord meetings (analysis, tasks per project, Kanban/Linear, Discord).
+  Each user connects their own Google OAuth client with `hermes meeting-scribe google connect`
+  (PKCE, loopback or `--no-browser` paste, read-only scope `meetings.space.readonly`, tokens 0600).
+  New `google status|sync|disconnect` commands, an optional `setup` step and a `google_meet` doctor
+  check. A leased poller (`google_meet_poll_minutes`) runs in the gateway only; conferences are
+  imported once ever and only those ending after `connect` unless you backfill with `sync --days`.
+  Notes go to `google_meet_discord_channel` (then `delivery_discord_channel`, then home).
+- **Full transcript in Discord** (`delivery_discord_transcript`, default on): every meeting's
+  transcript is attached as `transcript-<date>-<slug>.md` after the summary, once, split into parts
+  above 8 MB, with a notice when the bot cannot attach files.
+- Schema v4: meeting `source`/`external_id` (unique), a key/value status table and named leases.
+
+### Changed
+
+- Speakers that are not Discord users (imported from Meet) are never mentioned or DMed; their name
+  is shown instead.
+
 ## [0.2.0] - 2026-09-27
 
 ### Changed

@@ -1,4 +1,4 @@
-"""Full-transcript attachment in Discord (DESIGN §17.6): once, split when large, soft on permissions."""
+"""Full-transcript attachment in Discord (DESIGN §17.3): once, split when large, soft on permissions."""
 from __future__ import annotations
 
 import asyncio

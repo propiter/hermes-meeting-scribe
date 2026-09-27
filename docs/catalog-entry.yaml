@@ -16,8 +16,12 @@ description: >-
   chosen Whisper model from Hugging Face. Transcript text goes to your configured Hermes model.
   Posts notes to Discord, creates threads in project channels, DMs task assignees by default,
   writes approved owner tasks to the Hermes Kanban board and, only with LINEAR_API_KEY or an
-  allowlisted linear MCP server, creates Linear issues. Optional Obsidian export. Needs ffmpeg
-  with libopus.
+  allowlisted linear MCP server, creates Linear issues. By default attaches the full transcript
+  as a Markdown file to the Discord notes (delivery_discord_transcript). Optional, off by default:
+  imports Google Meet transcripts with the user's own OAuth client and the read-only scope
+  meetings.space.readonly (token stored 0600 in the plugin data dir; calls only
+  meet.googleapis.com and oauth2.googleapis.com). Optional Obsidian export. Needs ffmpeg with
+  libopus.
 maintainer: propiter
 tier: community
 category: voice
