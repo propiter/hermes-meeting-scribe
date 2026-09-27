@@ -25,7 +25,7 @@ from ..domain.models import (
     STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
 )
 from ..domain.ports import Clock
-from ..storage.owner import owner_alive, process_owner_id
+from ..storage.owner import owner_alive, owner_dead, process_owner_id
 from ..storage.repo import Repository
 from .stages import Stages
 
@@ -48,6 +48,7 @@ class PipelineRunner:
     THREAD_NAME = "meeting-scribe-pipeline"
     LEASE_SECONDS = 180.0
     HEARTBEAT_SECONDS = 30.0
+    RECLAIM_SECONDS = 60.0  # how often the worker loop re-checks for expired/orphaned leases
 
     def __init__(self, repo: Repository, stages: Stages, *, clock: Clock, spawner: Spawner = _thread_spawner,
                  max_attempts: int = 3, backoff: Sequence[float] = (60, 300, 900),
@@ -63,6 +64,7 @@ class PipelineRunner:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._busy = threading.Event()
+        self._last_reclaim: Optional[float] = None  # set by recover(); gates periodic lease reclaim
         self._thread: Optional[threading.Thread] = None
 
     # -- observers ----------------------------------------------------------------------------
@@ -101,7 +103,9 @@ class PipelineRunner:
         """Resume after a restart: requeue STALE jobs, close orphan recordings, enqueue stragglers."""
         live = set(live_meeting_ids)
         stale_before = self.clock.now().timestamp() - self.LEASE_SECONDS
-        report = {"requeued": len(self.repo.requeue_stale(stale_before=stale_before)), "orphans": 0, "resumed": 0}
+        report = {"requeued": len(self.repo.requeue_stale(stale_before=stale_before, owner_dead=owner_dead)),
+                  "orphans": 0, "resumed": 0}
+        self._last_reclaim = self.clock.now().timestamp()
         jobs = self.repo.list_jobs(("queued", "running"))
         active = {j.meeting_id for j in jobs}
         leased = {j.meeting_id for j in jobs if j.state == "running"}
@@ -134,6 +138,7 @@ class PipelineRunner:
 
     def run_once(self) -> bool:
         """Run one ready job to completion or failure; False when nothing is ready."""
+        self._maybe_reclaim()
         job = self.repo.next_job(now=self.clock.now())
         if job is None:
             return False
@@ -151,6 +156,25 @@ class PipelineRunner:
             beat.join(timeout=5)
             self._busy.clear()
         return True
+
+    def _maybe_reclaim(self) -> None:
+        """Periodically take back jobs whose worker died after we started (lease expired or dead pid).
+
+        ``recover`` runs once at start-up; without this, a job abandoned later — or one whose lease
+        was still fresh at our start-up — would stay 'running' forever.
+        """
+        last = self._last_reclaim
+        if last is None:
+            return  # recover() has not run: not our call to judge leases (CLI / tests)
+        now = self.clock.now().timestamp()
+        if now - last < self.RECLAIM_SECONDS:
+            return
+        self._last_reclaim = now
+        for meeting_id in self.repo.requeue_stale(stale_before=now - self.LEASE_SECONDS, owner_dead=owner_dead):
+            meeting = self.repo.get_meeting(meeting_id)
+            if meeting is not None and meeting.state in _IN_PROGRESS:
+                self.stages.persist(meeting.with_state(rewind_target(_IN_PROGRESS[meeting.state]), rewind=True))
+            log.warning("meeting-scribe: took back abandoned job for meeting %s", meeting_id)
 
     def _heartbeat(self, job_id: int, stop: threading.Event) -> None:
         """Keep our lease fresh while a (possibly hours-long) stage runs."""

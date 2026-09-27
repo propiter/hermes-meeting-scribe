@@ -195,6 +195,42 @@ def test_recover_keeps_a_live_lease_and_its_meeting(prepo, layout, settings, clo
     assert prepo.get_meeting(m.id).state is MeetingState.TRANSCRIBING  # not rewound under the worker
 
 
+def _dead_owner():
+    import socket
+    return f"{socket.gethostname()}:999999999:gone"
+
+
+def test_recover_takes_back_a_dead_workers_job_before_its_lease_expires(prepo, layout, settings, clock, meeting):
+    """Live finding: a gateway restart left the job 'running' under the dead pid for 3 minutes, and
+    the new gateway never looked again — the meeting sat in 'analyzing' forever."""
+    m, _ = captured(prepo, layout, meeting)
+    prepo.enqueue_job(m.id, Stage.ANALYZE, now=clock.now())
+    assert prepo.claim_job(prepo.get_job(m.id).id, now=clock.now(), owner=_dead_owner())
+    prepo.save_meeting(replace(prepo.get_meeting(m.id), state=MeetingState.ANALYZING))
+    fresh, *_ = build(prepo, layout, settings, clock)
+    clock.advance(10)  # lease (180 s) still valid, but its owner no longer exists
+    report = fresh.recover(live_meeting_ids=())
+    assert report["requeued"] == 1
+    assert prepo.get_job(m.id).state == "queued"
+    assert prepo.get_meeting(m.id).state is not MeetingState.ANALYZING
+
+
+def test_worker_loop_reclaims_expired_leases_while_running(prepo, layout, settings, clock, meeting):
+    """The worker must keep reclaiming stale jobs, not only once at start-up."""
+    runner, *_ = build(prepo, layout, settings, clock)
+    runner.recover(live_meeting_ids=())
+    m, _ = captured(prepo, layout, meeting)
+    prepo.enqueue_job(m.id, Stage.TRANSCRIBE, now=clock.now())
+    # Owner on another host (liveness unknown): only the lease expiry can free it.
+    assert prepo.claim_job(prepo.get_job(m.id).id, now=clock.now(), owner="otherhost:1:x")
+    prepo.save_meeting(replace(prepo.get_meeting(m.id), state=MeetingState.TRANSCRIBING))
+    assert runner.run_once() is False  # lease still valid: nothing to do
+    assert prepo.get_job(m.id).owner == "otherhost:1:x"
+    clock.advance(runner.LEASE_SECONDS + runner.RECLAIM_SECONDS + 1)
+    drain(runner)
+    assert prepo.get_meeting(m.id).state is MeetingState.DONE
+
+
 def test_recover_without_capture_ownership_never_closes_recordings(prepo, layout, settings, clock, meeting):
     runner, *_ = build(prepo, layout, settings, clock)
     prepo.save_meeting(replace(meeting, state=MeetingState.RECORDING))

@@ -50,3 +50,25 @@ def owner_alive(owner: Optional[str]) -> bool:
     except OSError:
         return False
     return True
+
+
+def owner_dead(owner: Optional[str]) -> bool:
+    """True only when ``owner`` is PROVABLY gone: this host, a different process id that no longer
+    exists, or a previous incarnation of our own pid. Unknown hosts or malformed ids are not dead —
+    only their lease expiry may free their work."""
+    if not owner or owner == process_owner_id():
+        return False
+    host, _, rest = owner.partition(":")
+    pid_text = rest.partition(":")[0]
+    if host != socket.gethostname() or not pid_text.isdigit():
+        return False
+    pid = int(pid_text)
+    if pid == os.getpid():
+        return True  # same pid, different nonce: an earlier incarnation of this process
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False

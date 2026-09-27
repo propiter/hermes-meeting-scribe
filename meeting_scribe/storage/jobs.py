@@ -11,7 +11,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from ..domain.models import Stage
 
@@ -106,15 +106,28 @@ class JobsMixin:
                 " error=?, next_retry_at=?, stage=?, updated_at=? WHERE id=?",
                 (state, stage.value, error[:2000], _ts(retry_at), stage.value, time.time(), job_id))
 
-    def requeue_stale(self, *, stale_before: float) -> list[str]:
+    def requeue_stale(self, *, stale_before: float,
+                      owner_dead: Optional[Callable[[Optional[str]], bool]] = None) -> list[str]:
         """Running jobs whose lease expired (crashed/stopped worker) go back to the queue.
 
-        Rows without a heartbeat predate leases (schema v1) and are treated as stale.
+        Rows without a heartbeat predate leases (schema v1) and are treated as stale. With
+        ``owner_dead``, a job whose lease is still fresh but whose owner is provably gone (same host,
+        pid no longer exists — e.g. the gateway was just restarted) is taken back as well, instead of
+        waiting for the lease to run out.
         """
         rows = self._x("UPDATE jobs SET state='queued', owner=NULL, heartbeat=NULL, next_retry_at=NULL"
                        " WHERE state='running' AND (heartbeat IS NULL OR heartbeat < ?) RETURNING meeting_id",
                        (stale_before,)).fetchall()
-        return [r["meeting_id"] for r in rows]
+        taken = [r["meeting_id"] for r in rows]
+        if owner_dead is not None:
+            for row in self._x("SELECT id, owner FROM jobs WHERE state='running'").fetchall():
+                if owner_dead(row["owner"]):
+                    back = self._x("UPDATE jobs SET state='queued', owner=NULL, heartbeat=NULL, next_retry_at=NULL"
+                                   " WHERE id=? AND state='running' AND owner IS ? RETURNING meeting_id",
+                                   (row["id"], row["owner"])).fetchone()
+                    if back is not None:
+                        taken.append(back["meeting_id"])
+        return taken
 
     def requeue_running(self) -> int:
         """Unconditional requeue — only for single-process tools/tests; production uses leases."""

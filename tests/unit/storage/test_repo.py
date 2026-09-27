@@ -182,3 +182,17 @@ def test_stale_requeue_only_takes_expired_leases(repo, meeting):
     assert repo.requeue_stale(stale_before=NOW.timestamp() - 60) == []
     assert repo.heartbeat_job(job.id, "b", now=NOW.timestamp()) is False  # not b's lease
     assert repo.requeue_stale(stale_before=NOW.timestamp() + 1) == [meeting.id]
+
+
+def test_owner_dead_is_strict():
+    import os
+    import socket
+    from meeting_scribe.storage.owner import owner_dead, process_owner_id
+
+    host = socket.gethostname()
+    assert owner_dead(f"{host}:999999999:gone") is True
+    assert owner_dead(f"{host}:{os.getpid()}:older-nonce") is True  # earlier incarnation of this pid
+    assert owner_dead(f"{host}:{os.getppid()}:parent") is False  # alive
+    assert owner_dead(process_owner_id()) is False  # ourselves
+    assert owner_dead("some-other-host:1:x") is False  # unknown: only lease expiry frees it
+    assert owner_dead("garbage") is False and owner_dead(None) is False
