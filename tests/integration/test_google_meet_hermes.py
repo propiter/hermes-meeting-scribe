@@ -4,7 +4,7 @@ A throwaway HERMES_HOME; the plugin is loaded by Hermes' PluginManager; the Meet
 Google token endpoint are answered by an injected in-process transport; the Discord side is the
 unit-suite fake adapter behind the real sink + real ViewKit (discord.py). A deterministic analyzer
 replaces the LLM. Checks: import → TRANSCRIBED → ANALYZE → DELIVER → DONE, notes and the full
-transcript attachment land in ``google_meet_discord_channel``, and a second sync imports nothing.
+transcript attachment land in ``google_meet_discord_channel`` (given by name), and a second sync imports nothing.
 """
 from __future__ import annotations
 
@@ -46,7 +46,8 @@ def manager(tmp_path, monkeypatch):
     home = tmp_path / "hermes-home"
     (home / "plugins").mkdir(parents=True)
     shutil.copytree(REPO, home / "plugins" / "meeting-scribe", ignore=IGNORE)
-    settings = {"google_meet_enabled": True, "google_meet_discord_channel": "777", "kanban_mode": "off",
+    # by NAME (DESIGN §19): resolved at delivery time against the fake server below
+    settings = {"google_meet_enabled": True, "google_meet_discord_channel": "#meet-notes", "kanban_mode": "off",
                 "linear_mode": "off", "audio_retention": "none"}
     (home / "config.yaml").write_text(yaml.safe_dump({"plugins": {"enabled": ["meeting-scribe"], "entries": {
         "meeting-scribe": {"settings": settings}}}}), encoding="utf-8")

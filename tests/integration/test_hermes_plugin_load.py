@@ -118,3 +118,42 @@ def test_legacy_nested_settings_are_still_honoured(manager, hermes_home):
 
     rt = next(iter(plugin.RUNTIMES.values()))
     assert rt.settings().linear_mode == "off"
+
+
+# -- DESIGN §18: models and fallbacks live in Hermes' own auxiliary.meeting_scribe block --------------
+def test_llm_chain_round_trips_through_hermes_config_and_its_router_sees_it(manager, hermes_home):
+    from agent.auxiliary_client import _get_auxiliary_task_config
+
+    from meeting_scribe import llm_config as lc
+
+    assert manager._aux_tasks["meeting_scribe"]["defaults"]["provider"] == "auto"
+    store = lc.HermesAuxStore()
+    assert lc.view(store).fallback_chain == ()
+    lc.set_primary(store, provider="openrouter", model="vendor/model-a")
+    lc.fallback_add(store, lc.parse_link("anthropic:model-b"))
+    lc.fallback_add(store, lc.parse_link("openai-codex:model-c"))
+    raw = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    assert raw["plugins"]["enabled"] == ["meeting-scribe"]  # sibling sections preserved
+    task = raw["auxiliary"]["meeting_scribe"]
+    assert task["provider"] == "openrouter" and [e["provider"] for e in task["fallback_chain"]] == [
+        "anthropic", "openai-codex"]
+    seen = _get_auxiliary_task_config("meeting_scribe")  # what Hermes' router reads at call time
+    assert seen["model"] == "vendor/model-a" and seen["fallback_chain"][1]["model"] == "model-c"
+    assert seen["timeout"] == 600  # plugin default layered under the user's block
+    lc.fallback_remove(store, "anthropic")
+    assert [e["provider"] for e in _get_auxiliary_task_config("meeting_scribe")["fallback_chain"]] == ["openai-codex"]
+
+
+def test_cli_llm_show_and_config_schema_in_real_hermes(manager, capsys):
+    import meeting_scribe.plugin as plugin
+    from meeting_scribe import cli
+
+    rt = next(iter(plugin.RUNTIMES.values()))
+    parser = argparse.ArgumentParser()
+    cli.setup_parser(parser)
+    assert cli.dispatch(parser.parse_args(["llm", "show", "--json"]), rt) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["config_path"] == "auxiliary.meeting_scribe" and shown["provider"] == "auto"
+    assert cli.dispatch(parser.parse_args(["config", "schema", "--json"]), rt) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["version"] == 1 and {g["key"] for g in doc["groups"]} >= {"delivery", "llm"}
