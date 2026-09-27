@@ -320,3 +320,27 @@ def test_reanalysis_that_rephrases_a_title_keeps_the_item_id(prepo, layout, sett
     folder = layout.meeting_folder(prepo.get_meeting(m.id))
     notes = read_notes(folder)
     assert [a.id for a in notes.action_items] == first and notes.action_items[0].title == "Enviar informe semanal"
+
+
+def test_capture_ownership_arriving_after_start_runs_the_orphan_recovery(prepo, layout, settings, clock, meeting):
+    """The gateway starts the worker at register (no Discord yet); Discord connecting later must
+    still close orphan recordings of a dead process (finding 15)."""
+    runner, *_ = build(prepo, layout, settings, clock)
+    runner.spawner = lambda target, *, name, daemon=True: _Alive()
+    prepo.save_meeting(replace(meeting, id="orphan01", state=MeetingState.RECORDING))
+    runner.start(())
+    assert prepo.get_meeting("orphan01").state is MeetingState.RECORDING
+    runner.start((), owns_capture=True)
+    assert prepo.get_meeting("orphan01").state is not MeetingState.RECORDING
+    runner.start((), owns_capture=True)  # once only
+
+
+class _Alive:
+    def start(self):
+        pass
+
+    def is_alive(self):
+        return True
+
+    def join(self, timeout=None):
+        pass

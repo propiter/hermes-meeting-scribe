@@ -84,6 +84,7 @@ class PipelineRunner:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._busy = threading.Event()
+        self._owns_capture = False  # recover() already ran with capture ownership
         self._last_reclaim: Optional[float] = None  # set by recover(); gates periodic lease reclaim
         self._thread: Optional[threading.Thread] = None
 
@@ -271,7 +272,13 @@ class PipelineRunner:
     # -- background thread --------------------------------------------------------------------
     def start(self, live_meeting_ids: Iterable[str] = (), *, owns_capture: bool = False) -> None:
         if self._thread is not None and self._thread.is_alive():
+            if owns_capture and not self._owns_capture:
+                # Started earlier without capture (gateway register); Discord just connected: only now
+                # may orphan recordings of a dead process be closed. recover skips leased meetings.
+                self._owns_capture = True
+                self.recover(live_meeting_ids, owns_capture=True)
             return
+        self._owns_capture = owns_capture
         self.recover(live_meeting_ids, owns_capture=owns_capture)
         self._stop.clear()
         self._thread = self.spawner(self._loop, name=self.THREAD_NAME, daemon=True)

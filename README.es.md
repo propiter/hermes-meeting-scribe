@@ -371,8 +371,8 @@ hermes meeting-scribe google disconnect
   una sola vez en `http://127.0.0.1:<puerto libre>`. En una máquina remota/SSH usa `--no-browser`:
   abre la URL impresa en cualquier equipo, acepta y pega la URL completa a la que te redirigió (la
   página puede no cargar; es normal) o solo el código.
-- El gateway sondea cada `google_meet_poll_minutes` (5 por defecto). Solo un proceso sondea (un
-  lease en el SQLite del plugin). Solo se importan automáticamente las conferencias que **terminan
+- El gateway sondea cada `google_meet_poll_minutes` (5 por defecto) desde que carga el plugin (no
+  hace falta que Discord esté conectado). Solo un proceso sondea (un lease en el SQLite del plugin). Solo se importan automáticamente las conferencias que **terminan
   después de conectar**; usa `google sync --days N` para importar historia de forma explícita
   (máximo 30 días). Volver a ejecutar `connect` (tras una revocación o con un cliente nuevo)
   conserva la hora de la primera conexión, así que las reuniones que terminaron mientras el acceso

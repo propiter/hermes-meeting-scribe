@@ -128,4 +128,19 @@ def register(ctx: Any, plugin_root: Path) -> Runtime:
     ctx.register_skill(PLUGIN_ID, plugin_root / "skills" / PLUGIN_ID / "SKILL.md",
                        description="Search and use recorded meeting notes")
     _install_phase_b(ctx, runtime)
+    _start_in_gateway(runtime)
     return runtime
+
+
+def _start_in_gateway(runtime: Runtime) -> None:
+    """In the gateway, start the worker and the Google Meet poller right away.
+
+    Without this they only started when Discord connected or a /meeting command ran, so a gateway
+    without Discord (or before its first connect) never imported Meet transcripts. CLI/TUI
+    processes start nothing (``ensure_pipeline`` checks ``is_gateway``); Discord connecting later
+    adds capture ownership to the running worker instead of starting a second one.
+    """
+    try:
+        runtime.ensure_pipeline()
+    except Exception:  # storage problems: commands and doctor report them
+        log.exception("meeting-scribe: pipeline start at register failed")

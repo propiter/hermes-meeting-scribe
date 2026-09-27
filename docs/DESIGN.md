@@ -510,8 +510,10 @@ cli_google.py        google connect | status | sync | disconnect
 discord_ui/transcript_file.py   full transcript attachment (all sources)
 ```
 
-`Runtime.start_pipeline` (gateway only: Discord connect or `ensure_pipeline`) starts the poller next
-to the worker; `stop_pipeline`/`close` (unload, reload, profile switch) stops and joins it and
+`Runtime.start_pipeline` (gateway only) starts the poller next to the worker. `register` calls
+`ensure_pipeline` itself in the gateway, so neither depends on Discord connecting or a /meeting
+command; the Discord connect later only adds capture ownership to the running worker (one extra
+`recover(owns_capture=True)` to close orphan recordings), never a second thread; `stop_pipeline`/`close` (unload, reload, profile switch) stops and joins it and
 releases the lease. The poller never runs on the Discord asyncio loop.
 
 ### 17.2 Decisions

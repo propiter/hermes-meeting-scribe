@@ -359,8 +359,8 @@ hermes meeting-scribe google disconnect
   once on `http://127.0.0.1:<free port>`. On a remote/SSH machine use `--no-browser`: open the
   printed URL anywhere, consent, and paste back the full URL you were redirected to (the page may
   fail to load; that is expected) or just the code.
-- The gateway polls every `google_meet_poll_minutes` (default 5). Only one process polls (a lease in
-  the plugin's SQLite). Only conferences that **end after you connected** are imported
+- The gateway polls every `google_meet_poll_minutes` (default 5), starting when the plugin loads
+  (Discord does not need to be connected). Only one process polls (a lease in the plugin's SQLite). Only conferences that **end after you connected** are imported
   automatically; use `google sync --days N` for an explicit backfill (max 30 days). Running
   `connect` again (after a revocation, or with a new client) keeps the original connection time,
   so meetings that ended while access was broken are still picked up (within Meet's 30 days);
