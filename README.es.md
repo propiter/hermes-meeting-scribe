@@ -220,50 +220,106 @@ Los ajustes se vuelven a leer en cada operación, así que los cambios no requie
 `commands_aliases`). Un valor inválido vuelve a su valor por defecto, y `doctor` lo muestra como
 advertencia.
 
+<!-- config-table:start -->
+#### Captura
+
 | Clave | Tipo | Por defecto | Descripción |
 |---|---|---|---|
-| `commands_aliases` | list | `[meet, rec]` | Nombres extra de comandos slash que llevan a /meeting (se leen al arrancar el gateway). |
-| `autojoin_enabled` | bool | `true` | Entrar automáticamente a un canal de voz cuando se reúne gente. |
-| `autojoin_min_humans` | int | `2` | Humanos necesarios en un canal de voz para entrar solo. |
-| `autojoin_grace_seconds` | int | `20` | Segundos que el canal debe seguir con gente antes de entrar. |
-| `autojoin_channels` | list | `[]` | Ids/nombres de canales de voz permitidos para auto-join (vacío = todos). |
-| `autojoin_ignore_channels` | list | `[]` | Ids/nombres de canales de voz donde nunca se entra solo. |
-| `autoleave_grace_seconds` | int | `60` | Segundos sin humanos antes de detener la grabación. |
-| `limits_max_duration_minutes` | int | `240` | Límite máximo de una grabación. |
-| `audio_retention` | str | `multitrack` | Audio que se conserva tras procesar: `multitrack` / `mixed` / `none`. |
+| `autojoin_enabled` | bool | `true` | Entrar solo a un canal de voz cuando se reúne gente. |
+| `autojoin_min_humans` | int | `2` | Personas necesarias en un canal de voz para entrar automáticamente. |
+| `autojoin_grace_seconds` | int | `20` | Segundos que el canal debe seguir ocupado antes de entrar. |
+| `autojoin_channels` | list | `[]` | Ids/nombres de canales de voz permitidos (vacío = todos). |
+| `autojoin_ignore_channels` | list | `[]` | Ids/nombres de canales de voz a los que nunca se entra solo. |
+| `autoleave_grace_seconds` | int | `60` | Segundos sin personas antes de detener la grabación. |
+| `limits_max_duration_minutes` | int | `240` | Límite duro de una grabación. |
 | `audio_bitrate_kbps` | int | `48` | Bitrate Opus por pista de hablante. |
-| `audio_ffmpeg_path` | str | `""` | Binario de ffmpeg que se usa si no se encuentra ninguno en `PATH` ni en `~/.hermes/tools`. |
-| `transcribe_model` | str | `medium` | Modelo de faster-whisper (tiny/base/small/medium/large-v3...). |
-| `transcribe_device` | str | `auto` | Dispositivo de inferencia: `auto` / `cpu` / `cuda`. |
-| `transcribe_compute_type` | str | `auto` | Tipo de cómputo de CTranslate2: `auto` / `int8` / `int8_float16` / `float16` / `float32`. |
+| `audio_ffmpeg_path` | str | `""` | Binario de ffmpeg explícito (vacío = detectar). |
+
+#### Transcripción
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `transcribe_model` | str | `medium` | Modelo de faster-whisper (tiny/base/small/medium/large-v3/turbo). |
+| `transcribe_device` | str | `auto` | Dónde corre whisper. (`auto` / `cpu` / `cuda`) |
+| `transcribe_compute_type` | str | `auto` | Tipo de cómputo de CTranslate2. (`auto` / `int8` / `int8_float16` / `float16` / `float32`) |
 | `transcribe_cpu_threads` | int | `0` | Hilos de CPU para whisper (0 = núcleos menos 2). |
-| `transcribe_language` | str | `auto` | Código del idioma hablado (`auto` = detectar; fíjalo si puedes). |
+| `transcribe_language` | str | `auto` | Código de idioma (auto = detectar; mejor fijarlo). |
 | `transcribe_beam_size` | int | `5` | Tamaño del beam al decodificar. |
-| `analysis_language` | str | `auto` | Idioma de las notas (`auto` = idioma de la transcripción). |
-| `analysis_chunk_chars` | int | `12000` | Tamaño de fragmento para el análisis map-reduce. |
-| `projects_min_confidence` | float | `0.6` | Confianza mínima para asignar un proyecto automáticamente. |
-| `delivery_discord_enabled` | bool | `true` | Publicar las notas en Discord. |
-| `delivery_discord_channel` | str | `""` | Id del canal de notas (vacío = chat de texto del canal de voz y, si no, el canal home de Hermes). |
-| `delivery_discord_thread` | bool | `true` | Publicar las notas en un hilo cuando sea posible. |
+
+#### Análisis
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `analysis_language` | str | `auto` | Idioma de las notas (auto = el de la transcripción). |
+| `analysis_chunk_chars` | int | `12000` | Tamaño de fragmento para analizar reuniones largas por partes. |
+| `analysis_timeout_seconds` | int | `600` | Límite real por llamada; si no vuelve, el intento falla y se reintenta con espera. |
+| `analysis_max_tokens` | int | `8192` | Tokens de salida pedidos por llamada, para que el proveedor no reserve toda la ventana (causa típica de errores de crédito insuficiente). |
+
+#### Dónde se publica
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `delivery_discord_enabled` | bool | `true` | Publicar las notas de la reunión en Discord. |
+| `delivery_discord_guild` | str | `""` | Servidor (id o nombre) para reuniones sin servidor propio, p. ej. Google Meet (vacío = el único servidor del bot). |
+| `delivery_discord_channel` | str | `""` | Id, <#id> o nombre del canal de notas (vacío = chat de voz y luego automático). |
+| `delivery_auto_channel_names` | list | `[general, meetings, meeting-notes, notes, reuniones, notas]` | Si no hay canal: el canal de sistema del servidor, si no el primero de estos nombres donde el bot pueda escribir. |
+| `delivery_fallback_channel` | str | `""` | Id o nombre del canal para tareas sin canal de proyecto (vacío = el canal de notas). |
+| `delivery_discord_thread` | bool | `true` | Publicar las tareas sin proyecto en un hilo bajo el resumen cuando se pueda. |
 | `delivery_project_threads` | bool | `true` | Publicar cada tarea en un hilo del canal de su proyecto. |
-| `delivery_dm_assignees` | bool | `true` | Enviar por DM a cada responsable sus tareas con botones. |
-| `delivery_discord_transcript` | bool | `true` | Adjuntar la transcripción completa (`transcript-<fecha>-<slug>.md`) a las notas en Discord. |
-| `google_meet_enabled` | bool | `false` | Importar transcripciones de Google Meet (requiere `hermes meeting-scribe google connect`). |
-| `google_meet_poll_minutes` | int | `5` | Minutos entre sondeos de Google Meet (2–1440). |
-| `google_meet_discord_channel` | str | `""` | Id del canal de texto de Discord para las notas de Meet (vacío = `delivery_discord_channel` y, si no, home). |
-| `project_channels` | list | `[]` | Mapa explícito proyecto → canal, entradas como `Nombre del proyecto=id_canal`. |
-| `project_match_min_score` | float | `0.8` | Puntuación difusa mínima para enviar una tarea a un canal por nombre. |
-| `channel_name_ignore_prefixes` | list | `[]` | Palabras decorativas iniciales que se ignoran en los nombres de canal. |
-| `owners` | list | `[]` | Ids de Discord cuyas tareas pueden ir a Kanban (vacío = primera entrada de `DISCORD_ALLOWED_USERS`). |
-| `kanban_mode` | str | `approve` | Envío a Kanban de las tareas de los owners: `approve` / `auto` / `off`. |
-| `kanban_board` | str | `""` | Slug del tablero Kanban (vacío = tablero por defecto). |
-| `linear_mode` | str | `approve` | Creación de issues en Linear: `approve` / `auto` / `off`. |
-| `linear_default_team` | str | `""` | Clave/id del equipo de Linear si no se resuelve un proyecto. |
-| `obsidian_vault_path` | str | `""` | Ruta de la bóveda de Obsidian (vacío = desactivado). |
+| `delivery_dm_assignees` | bool | `true` | Enviar a cada responsable sus tareas por DM tras publicar. |
+| `delivery_discord_transcript` | bool | `true` | Adjuntar la transcripción completa (archivo Markdown) a las notas. |
+| `delivery_transcript_max_mb` | int | `8` | Tamaño máximo por archivo; si es mayor se divide. Súbelo si tu servidor permite archivos más grandes. |
+
+#### Proyectos
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `projects_min_confidence` | float | `0.6` | Confianza mínima para asignar un proyecto automáticamente. |
+| `project_channels` | list | `[]` | Entradas explícitas tipo 'Nombre del proyecto=id de canal'. |
+| `project_match_min_score` | float | `0.8` | Puntuación mínima para enviar una tarea a un canal por su nombre. |
+| `channel_name_ignore_prefixes` | list | `[]` | Palabras decorativas iniciales ignoradas en nombres de canal. |
+
+#### Google Meet
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `google_meet_enabled` | bool | `false` | Importar transcripciones de Google Meet (requiere `google connect`). |
+| `google_meet_poll_minutes` | int | `5` | Minutos entre consultas a Google Meet. |
+| `google_meet_discord_channel` | str | `""` | Id, <#id> o nombre del canal para notas de Meet (vacío = canal de notas y luego automático). |
+
+#### Integraciones
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `owners` | list | `[]` | Ids de usuarios de Discord cuyas tareas pueden ir a Kanban (vacío = primer usuario permitido). |
+| `kanban_mode` | str | `approve` | Envío a Kanban de las tareas de los dueños. (`approve` / `auto` / `off`) |
+| `kanban_board` | str | `""` | Slug del tablero (vacío = el predeterminado). |
+| `linear_mode` | str | `approve` | Creación de issues en Linear. (`approve` / `auto` / `off`) |
+| `linear_default_team` | str | `""` | Clave/id de equipo si no se resuelve un proyecto. |
+| `obsidian_vault_path` | str | `""` | Ruta de la bóveda (vacío = desactivado). |
 | `obsidian_folder` | str | `Meetings` | Carpeta dentro de la bóveda para las notas. |
-| `ui_language` | str | `en` | Idioma de los mensajes del bot: `en` / `es`. |
+
+#### Privacidad
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `audio_retention` | str | `multitrack` | Audio que se guarda tras procesar. (`multitrack` / `mixed` / `none`) |
 | `consent_announce` | bool | `true` | Anunciar la grabación en el chat del canal. |
-| `consent_nickname_prefix` | str | `"[REC] "` | Prefijo del apodo mientras graba (vacío = desactivado). |
+| `consent_nickname_prefix` | str | `"[REC] "` | Prefijo del apodo del bot mientras graba (vacío = no). |
+
+#### Procesamiento
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `pipeline_max_attempts` | int | `3` | Intentos fallidos antes de marcar la reunión como fallida (esperar destino nunca cuenta). |
+
+#### Interfaz
+
+| Clave | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `ui_language` | str | `en` | Idioma de los mensajes del bot. (`en` / `es`) |
+| `commands_aliases` | list | `[meet, rec]` | Nombres extra de comando que van a /meeting. |
+<!-- config-table:end -->
 
 **Usar otro modelo para el análisis.** El análisis de reuniones corre como la tarea auxiliar de
 Hermes `meeting_scribe`. Para enviarlo a un modelo distinto del que usas en el chat, configura

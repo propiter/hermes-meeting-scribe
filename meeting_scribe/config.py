@@ -18,18 +18,29 @@ Getter = Callable[..., Any]
 PRIMARY_COMMAND = "meeting"
 MODES = ("approve", "auto", "off")
 _ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-_SNOWFLAKE_WRAP_RE = re.compile(r"^<[#@][!&]?(\d+)>$")
+_CHANNEL_MENTION_RE = re.compile(r"^<#(\d+)>$")
+_NAME_MAX = 100  # Discord caps channel and server names at 100 characters
+
+
+GROUPS: tuple[str, ...] = ("capture", "transcription", "analysis", "llm", "delivery", "projects", "google_meet",
+                           "integrations", "privacy", "pipeline", "ui")
+"""Form sections, in display order. ``llm`` is virtual: its values live in Hermes' own config
+(``auxiliary.meeting_scribe``), see :mod:`meeting_scribe.llm_config`."""
+FORMATS = ("", "discord_channel", "discord_guild")
+SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
 class Opt:
     kind: str  # str | int | float | bool | list
     default: Any
-    description: str
+    group: str
     choices: tuple[str, ...] = ()
     minimum: Optional[float] = None
     maximum: Optional[float] = None
-    snowflake: bool = False  # a Discord id: empty or digits (``<#id>`` / ``<@id>`` are unwrapped)
+    # ``discord_channel``: a text channel id, ``<#id>`` (unwrapped) or a channel NAME resolved at runtime
+    # against the server; ``discord_guild``: a server id or name.
+    format: str = ""
 
     @property
     def yaml_type(self) -> str:
@@ -39,60 +50,80 @@ class Opt:
     def yaml_default(self) -> Any:
         return list(self.default) if isinstance(self.default, tuple) else self.default
 
+    def label(self, key: str, lang: str = "en") -> str:
+        from .i18n import t
+        return t(f"cfg.{key}.label", lang)
 
+    def help(self, key: str, lang: str = "en") -> str:
+        from .i18n import t
+        return t(f"cfg.{key}.help", lang)
+
+
+_CH = "discord_channel"
+AUTO_CHANNEL_NAMES = ("general", "meetings", "meeting-notes", "notes", "reuniones", "notas")
 SPEC: dict[str, Opt] = {
-    "commands_aliases": Opt("list", ("meet", "rec"), "Extra slash-command names routed to /meeting."),
-    "autojoin_enabled": Opt("bool", True, "Join a voice channel automatically when people gather."),
-    "autojoin_min_humans": Opt("int", 2, "Humans required in a voice channel to auto-join.", minimum=1),
-    "autojoin_grace_seconds": Opt("int", 20, "Seconds the channel must stay populated before joining.",
-                                  minimum=0),
-    "autojoin_channels": Opt("list", (), "Voice channel ids/names allowed for auto-join (empty = all)."),
-    "autojoin_ignore_channels": Opt("list", (), "Voice channel ids/names never auto-joined."),
-    "autoleave_grace_seconds": Opt("int", 60, "Seconds with no humans before the recording stops.",
-                                   minimum=0),
-    "limits_max_duration_minutes": Opt("int", 240, "Hard cap on a single recording.", minimum=1),
-    "audio_retention": Opt("str", "multitrack", "Audio kept after processing.",
-                           choices=("multitrack", "mixed", "none")),
-    "audio_bitrate_kbps": Opt("int", 48, "Opus bitrate per speaker track.", minimum=8, maximum=256),
-    "audio_ffmpeg_path": Opt("str", "", "Explicit ffmpeg binary (empty = auto-detect)."),
-    "transcribe_model": Opt("str", "medium", "faster-whisper model (tiny/base/small/medium/large-v3...)."),
-    "transcribe_device": Opt("str", "auto", "Inference device.", choices=("auto", "cpu", "cuda")),
-    "transcribe_compute_type": Opt("str", "auto", "CTranslate2 compute type.",
+    # capture
+    "autojoin_enabled": Opt("bool", True, "capture"),
+    "autojoin_min_humans": Opt("int", 2, "capture", minimum=1),
+    "autojoin_grace_seconds": Opt("int", 20, "capture", minimum=0),
+    "autojoin_channels": Opt("list", (), "capture"),
+    "autojoin_ignore_channels": Opt("list", (), "capture"),
+    "autoleave_grace_seconds": Opt("int", 60, "capture", minimum=0),
+    "limits_max_duration_minutes": Opt("int", 240, "capture", minimum=1),
+    "audio_bitrate_kbps": Opt("int", 48, "capture", minimum=8, maximum=256),
+    "audio_ffmpeg_path": Opt("str", "", "capture"),
+    # transcription
+    "transcribe_model": Opt("str", "medium", "transcription"),
+    "transcribe_device": Opt("str", "auto", "transcription", choices=("auto", "cpu", "cuda")),
+    "transcribe_compute_type": Opt("str", "auto", "transcription",
                                    choices=("auto", "int8", "int8_float16", "float16", "float32")),
-    "transcribe_cpu_threads": Opt("int", 0, "CPU threads for whisper (0 = cores minus 2).", minimum=0),
-    "transcribe_language": Opt("str", "auto", "Spoken language code (auto = detect; pin it if you can)."),
-    "transcribe_beam_size": Opt("int", 5, "Beam size for decoding.", minimum=1, maximum=10),
-    "analysis_language": Opt("str", "auto", "Notes language (auto = transcript language)."),
-    "analysis_chunk_chars": Opt("int", 12000, "Transcript chunk size for map-reduce analysis.",
-                                minimum=2000),
-    "projects_min_confidence": Opt("float", 0.6, "Minimum confidence to auto-assign a project.",
-                                   minimum=0.0, maximum=1.0),
-    "delivery_discord_enabled": Opt("bool", True, "Post notes to Discord."),
-    "delivery_discord_channel": Opt("str", "", "Notes channel id (empty = voice text chat, then home).",
-                                    snowflake=True),
-    "delivery_discord_thread": Opt("bool", True, "Post notes in a thread when possible."),
-    "delivery_project_threads": Opt("bool", True, "Post each task in a thread of its project's channel."),
-    "delivery_dm_assignees": Opt("bool", True, "DM each assignee their tasks with buttons after delivery."),
-    "delivery_discord_transcript": Opt("bool", True, "Attach the full transcript (Markdown file) to the notes."),
-    "google_meet_enabled": Opt("bool", False, "Import Google Meet transcripts (needs `google connect`)."),
-    "google_meet_poll_minutes": Opt("int", 5, "Minutes between Google Meet polls.", minimum=2, maximum=1440),
-    "google_meet_discord_channel": Opt("str", "", "Discord text channel id for Google Meet notes "
-                                       "(empty = delivery_discord_channel, then home).", snowflake=True),
-    "project_channels": Opt("list", (), "Explicit project to channel map, entries like 'Project name=channel_id'."),
-    "project_match_min_score": Opt("float", 0.8, "Minimum fuzzy score to route a task to a channel by name.",
-                                   minimum=0.0, maximum=1.0),
-    "channel_name_ignore_prefixes": Opt("list", (), "Decorative leading words ignored in channel names."),
-    "owners": Opt("list", (), "Discord user ids whose tasks may go to Kanban (empty = first allowed user)."),
-    "kanban_mode": Opt("str", "approve", "Kanban delivery of owner tasks.", choices=MODES),
-    "kanban_board": Opt("str", "", "Kanban board slug (empty = default board)."),
-    "linear_mode": Opt("str", "approve", "Linear issue creation.", choices=MODES),
-    "linear_default_team": Opt("str", "", "Linear team key/id used when no project resolves."),
-    "obsidian_vault_path": Opt("str", "", "Obsidian vault path (empty = disabled)."),
-    "obsidian_folder": Opt("str", "Meetings", "Folder inside the vault for notes."),
-    "ui_language": Opt("str", "en", "Language of bot messages.", choices=("en", "es")),
-    "consent_announce": Opt("bool", True, "Announce recording in the channel chat."),
-    "consent_nickname_prefix": Opt("str", "[REC] ", "Nickname prefix while recording (empty = off)."),
+    "transcribe_cpu_threads": Opt("int", 0, "transcription", minimum=0),
+    "transcribe_language": Opt("str", "auto", "transcription"),
+    "transcribe_beam_size": Opt("int", 5, "transcription", minimum=1, maximum=10),
+    # analysis
+    "analysis_language": Opt("str", "auto", "analysis"),
+    "analysis_chunk_chars": Opt("int", 12000, "analysis", minimum=2000),
+    "analysis_timeout_seconds": Opt("int", 600, "analysis", minimum=30, maximum=7200),
+    "analysis_max_tokens": Opt("int", 8192, "analysis", minimum=256, maximum=200000),
+    # delivery
+    "delivery_discord_enabled": Opt("bool", True, "delivery"),
+    "delivery_discord_guild": Opt("str", "", "delivery", format="discord_guild"),
+    "delivery_discord_channel": Opt("str", "", "delivery", format=_CH),
+    "delivery_auto_channel_names": Opt("list", AUTO_CHANNEL_NAMES, "delivery"),
+    "delivery_fallback_channel": Opt("str", "", "delivery", format=_CH),
+    "delivery_discord_thread": Opt("bool", True, "delivery"),
+    "delivery_project_threads": Opt("bool", True, "delivery"),
+    "delivery_dm_assignees": Opt("bool", True, "delivery"),
+    "delivery_discord_transcript": Opt("bool", True, "delivery"),
+    "delivery_transcript_max_mb": Opt("int", 8, "delivery", minimum=1, maximum=500),
+    # projects
+    "projects_min_confidence": Opt("float", 0.6, "projects", minimum=0.0, maximum=1.0),
+    "project_channels": Opt("list", (), "projects"),
+    "project_match_min_score": Opt("float", 0.8, "projects", minimum=0.0, maximum=1.0),
+    "channel_name_ignore_prefixes": Opt("list", (), "projects"),
+    # google meet
+    "google_meet_enabled": Opt("bool", False, "google_meet"),
+    "google_meet_poll_minutes": Opt("int", 5, "google_meet", minimum=2, maximum=1440),
+    "google_meet_discord_channel": Opt("str", "", "google_meet", format=_CH),
+    # integrations
+    "owners": Opt("list", (), "integrations"),
+    "kanban_mode": Opt("str", "approve", "integrations", choices=MODES),
+    "kanban_board": Opt("str", "", "integrations"),
+    "linear_mode": Opt("str", "approve", "integrations", choices=MODES),
+    "linear_default_team": Opt("str", "", "integrations"),
+    "obsidian_vault_path": Opt("str", "", "integrations"),
+    "obsidian_folder": Opt("str", "Meetings", "integrations"),
+    # privacy
+    "audio_retention": Opt("str", "multitrack", "privacy", choices=("multitrack", "mixed", "none")),
+    "consent_announce": Opt("bool", True, "privacy"),
+    "consent_nickname_prefix": Opt("str", "[REC] ", "privacy"),
+    # pipeline
+    "pipeline_max_attempts": Opt("int", 3, "pipeline", minimum=1, maximum=20),
+    # ui
+    "ui_language": Opt("str", "en", "ui", choices=("en", "es")),
+    "commands_aliases": Opt("list", ("meet", "rec"), "ui"),
 }
+CHANNEL_KEYS = tuple(k for k, o in SPEC.items() if o.format == _CH)
 # Pre-0.2 dotted names. ``ctx.set_config("kanban.mode")`` stored NESTED YAML while Hermes' Desktop
 # settings form reads ``settings[key]`` FLAT, so dotted keys always showed their defaults there
 # (review finding 10). Canonical keys are now flat; the old nested values are still read as a fallback
@@ -149,13 +180,44 @@ def _coerce(opt: Opt, raw: Any) -> Any:
         items = raw.split(",") if isinstance(raw, str) else raw if isinstance(raw, (list, tuple)) else [raw]
         return tuple(str(i).strip() for i in items if str(i).strip())
     value_s = "" if raw is None else str(raw)
-    if opt.snowflake:
-        value_s = _SNOWFLAKE_WRAP_RE.sub(r"\1", value_s.strip())
-        if value_s and not value_s.isdigit():
-            raise ValueError("expected a numeric Discord channel id (Developer Mode → Copy Channel ID)")
+    if opt.format == _CH:
+        value_s = _channel_value(value_s)
+    elif opt.format == "discord_guild":
+        value_s = _name_or_id(value_s, "a Discord server id or name")
     if opt.choices and value_s not in opt.choices:
         raise ValueError(f"expected one of {', '.join(opt.choices)}")
     return value_s
+
+
+def _name_or_id(raw: str, what: str) -> str:
+    value = raw.strip()
+    if len(value) > _NAME_MAX or any(c in value for c in "\r\n\t"):
+        raise ValueError(f"expected {what}")
+    return value
+
+
+def _channel_value(raw: str) -> str:
+    """``123`` / ``<#123>`` → ``123``; ``#name`` / ``name`` → ``name`` (resolved at runtime)."""
+    value = raw.strip()
+    mention = _CHANNEL_MENTION_RE.match(value)
+    if mention:
+        return mention.group(1)
+    if value.startswith("<"):
+        raise ValueError("expected a text channel (id, <#id> or name), not a user or role mention")
+    if not value or value.isdigit():
+        return value
+    name = value.lstrip("#").strip()
+    if not name:
+        raise ValueError("expected a Discord channel id, <#id> or a channel name")
+    return _name_or_id(name, "a Discord channel id, <#id> or a channel name (max 100 characters, one line)")
+
+
+def channel_ref(value: str) -> tuple[str, str]:
+    """``("id", "123")``, ``("name", "notes")`` or ``("", "")`` for a stored channel setting."""
+    value = (value or "").strip()
+    if not value:
+        return "", ""
+    return ("id", value) if value.isdigit() else ("name", value)
 
 
 def _normalize_aliases(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -188,9 +250,16 @@ class Settings:
     transcribe_beam_size: int
     analysis_language: str
     analysis_chunk_chars: int
+    analysis_timeout_seconds: int
+    analysis_max_tokens: int
     projects_min_confidence: float
     delivery_discord_enabled: bool
+    delivery_discord_guild: str
     delivery_discord_channel: str
+    delivery_auto_channel_names: tuple[str, ...]
+    delivery_fallback_channel: str
+    delivery_transcript_max_mb: int
+    pipeline_max_attempts: int
     delivery_discord_thread: bool
     delivery_project_threads: bool
     delivery_dm_assignees: bool
@@ -267,15 +336,52 @@ def effective_owners(settings: Settings, secret: Callable[[str], Optional[str]])
 
 
 def schema_for_manifest() -> dict[str, dict[str, Any]]:
-    """``config_schema`` mapping rendered from ``SPEC`` (used to regenerate plugin.yaml)."""
+    """``config_schema`` mapping rendered from ``SPEC`` (used to regenerate plugin.yaml).
+
+    Hermes reads ``type``/``default``/``description``/``choices``/``label``; ``group``, ``format``,
+    ``minimum`` and ``maximum`` are extra hints for richer forms (unknown keys are ignored)."""
     out: dict[str, dict[str, Any]] = {}
     for key, opt in SPEC.items():
         entry: dict[str, Any] = {"type": opt.yaml_type, "default": opt.yaml_default,
-                                 "description": opt.description}
+                                 "label": opt.label(key), "description": opt.help(key), "group": opt.group}
         if opt.choices:
             entry["choices"] = list(opt.choices)
+        if opt.minimum is not None:
+            entry["minimum"] = opt.minimum
+        if opt.maximum is not None:
+            entry["maximum"] = opt.maximum
+        if opt.format:
+            entry["format"] = opt.format
         out[key] = entry
     return out
+
+
+def _field(key: str, opt: Opt, lang: str) -> dict[str, Any]:
+    entry: dict[str, Any] = {"key": key, "type": opt.kind, "group": opt.group, "label": opt.label(key, lang),
+                             "help": opt.help(key, lang), "default": opt.yaml_default, "storage": "plugin",
+                             "path": f"plugins.entries.meeting-scribe.settings.{key}"}
+    for name in ("choices", "minimum", "maximum", "format"):
+        value = getattr(opt, name)
+        if value not in ((), None, ""):
+            entry[name] = list(value) if isinstance(value, tuple) else value
+    return entry
+
+
+def config_schema(lang: str = "en") -> dict[str, Any]:
+    """Stable, versioned description of every setting (``config schema --json``).
+
+    A UI draws the whole form from it: groups in order, then fields with kind, bounds, choices,
+    localized label/help, default and where the value is stored (``storage``/``path``). The ``llm``
+    group is virtual: its fields live in Hermes' config under ``auxiliary.meeting_scribe``.
+    Bump ``SCHEMA_VERSION`` only for incompatible shape changes (adding fields is compatible)."""
+    from .i18n import normalize_language, t
+    from .llm_config import schema_fields as llm_fields
+
+    lang = normalize_language(lang)
+    fields_: list[dict[str, Any]] = [_field(k, o, lang) for k, o in SPEC.items()]
+    fields_ += llm_fields(lang)
+    return {"version": SCHEMA_VERSION, "plugin": "meeting-scribe", "language": lang,
+            "groups": [{"key": g, "label": t(f"cfg.group.{g}", lang)} for g in GROUPS], "fields": fields_}
 
 
 def settings_from_mapping(values: Mapping[str, Any]) -> Settings:

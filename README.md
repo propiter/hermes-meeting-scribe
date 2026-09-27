@@ -213,50 +213,106 @@ can change them in three ways:
 Settings are re-read on every operation, so changes need no restart (except `commands_aliases`). An
 invalid value falls back to its default, and `doctor` reports it as a warning.
 
+<!-- config-table:start -->
+#### Capture
+
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `commands_aliases` | list | `[meet, rec]` | Extra slash-command names routed to /meeting (read when the gateway starts). |
 | `autojoin_enabled` | bool | `true` | Join a voice channel automatically when people gather. |
-| `autojoin_min_humans` | int | `2` | Humans required in a voice channel to auto-join. |
+| `autojoin_min_humans` | int | `2` | Humans required in a voice channel before auto-joining. |
 | `autojoin_grace_seconds` | int | `20` | Seconds the channel must stay populated before joining. |
 | `autojoin_channels` | list | `[]` | Voice channel ids/names allowed for auto-join (empty = all). |
 | `autojoin_ignore_channels` | list | `[]` | Voice channel ids/names never auto-joined. |
 | `autoleave_grace_seconds` | int | `60` | Seconds with no humans before the recording stops. |
 | `limits_max_duration_minutes` | int | `240` | Hard cap on a single recording. |
-| `audio_retention` | str | `multitrack` | Audio kept after processing: `multitrack` / `mixed` / `none`. |
 | `audio_bitrate_kbps` | int | `48` | Opus bitrate per speaker track. |
-| `audio_ffmpeg_path` | str | `""` | ffmpeg binary used when none is found on `PATH` or in `~/.hermes/tools`. |
-| `transcribe_model` | str | `medium` | faster-whisper model (tiny/base/small/medium/large-v3...). |
-| `transcribe_device` | str | `auto` | Inference device: `auto` / `cpu` / `cuda`. |
-| `transcribe_compute_type` | str | `auto` | CTranslate2 compute type: `auto` / `int8` / `int8_float16` / `float16` / `float32`. |
+| `audio_ffmpeg_path` | str | `""` | Explicit ffmpeg binary (empty = auto-detect). |
+
+#### Transcription
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `transcribe_model` | str | `medium` | faster-whisper model (tiny/base/small/medium/large-v3/turbo). |
+| `transcribe_device` | str | `auto` | Where whisper runs. (`auto` / `cpu` / `cuda`) |
+| `transcribe_compute_type` | str | `auto` | CTranslate2 compute type. (`auto` / `int8` / `int8_float16` / `float16` / `float32`) |
 | `transcribe_cpu_threads` | int | `0` | CPU threads for whisper (0 = cores minus 2). |
-| `transcribe_language` | str | `auto` | Spoken language code (`auto` = detect; pin it if you can). |
+| `transcribe_language` | str | `auto` | Language code (auto = detect; pin it if you can). |
 | `transcribe_beam_size` | int | `5` | Beam size for decoding. |
-| `analysis_language` | str | `auto` | Notes language (`auto` = transcript language). |
-| `analysis_chunk_chars` | int | `12000` | Transcript chunk size for map-reduce analysis. |
-| `projects_min_confidence` | float | `0.6` | Minimum confidence to auto-assign a project. |
-| `delivery_discord_enabled` | bool | `true` | Post notes to Discord. |
-| `delivery_discord_channel` | str | `""` | Notes channel id (empty = voice text chat, then the Hermes home channel). |
-| `delivery_discord_thread` | bool | `true` | Post notes in a thread when possible. |
+
+#### Analysis
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `analysis_language` | str | `auto` | Language of the notes (auto = transcript language). |
+| `analysis_chunk_chars` | int | `12000` | Transcript chunk size for map-reduce analysis of long meetings. |
+| `analysis_timeout_seconds` | int | `600` | Wall-clock limit for one LLM call; a call that does not return fails the attempt and is retried with backoff. |
+| `analysis_max_tokens` | int | `8192` | Output tokens requested per LLM call, so the provider does not reserve the whole context window (a common cause of 'insufficient credit' errors). |
+
+#### Where notes are posted
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `delivery_discord_enabled` | bool | `true` | Post meeting notes to Discord. |
+| `delivery_discord_guild` | str | `""` | Server (id or name) used when a meeting has no server of its own, e.g. Google Meet (empty = the bot's only server). |
+| `delivery_discord_channel` | str | `""` | Channel id, <#id> or name for notes (empty = voice chat, then automatic). |
+| `delivery_auto_channel_names` | list | `[general, meetings, meeting-notes, notes, reuniones, notas]` | When no channel is set: the server's system channel, else the first of these channel names the bot can post in. |
+| `delivery_fallback_channel` | str | `""` | Channel id or name for tasks that match no project channel (empty = the notes channel). |
+| `delivery_discord_thread` | bool | `true` | Post tasks without project in a thread under the summary when possible. |
 | `delivery_project_threads` | bool | `true` | Post each task in a thread of its project's channel. |
-| `delivery_dm_assignees` | bool | `true` | DM each assignee their tasks with buttons after delivery. |
-| `delivery_discord_transcript` | bool | `true` | Attach the full transcript (`transcript-<date>-<slug>.md`) to the Discord notes. |
-| `google_meet_enabled` | bool | `false` | Import Google Meet transcripts (needs `hermes meeting-scribe google connect`). |
-| `google_meet_poll_minutes` | int | `5` | Minutes between Google Meet polls (2–1440). |
-| `google_meet_discord_channel` | str | `""` | Discord text channel id for Google Meet notes (empty = `delivery_discord_channel`, then home). |
-| `project_channels` | list | `[]` | Explicit project → channel map, entries like `Project name=channel_id`. |
-| `project_match_min_score` | float | `0.8` | Minimum fuzzy score to route a task to a channel by name. |
+| `delivery_dm_assignees` | bool | `true` | Send each assignee their tasks by DM after delivery. |
+| `delivery_discord_transcript` | bool | `true` | Attach the full transcript (Markdown file) to the notes. |
+| `delivery_transcript_max_mb` | int | `8` | Largest file uploaded; longer transcripts are split. Raise it if your server allows bigger uploads. |
+
+#### Projects
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `projects_min_confidence` | float | `0.6` | Minimum confidence to assign a project automatically. |
+| `project_channels` | list | `[]` | Explicit entries like 'Project name=channel id'. |
+| `project_match_min_score` | float | `0.8` | Minimum fuzzy score to route a task to a channel by its name. |
 | `channel_name_ignore_prefixes` | list | `[]` | Decorative leading words ignored in channel names. |
-| `owners` | list | `[]` | Discord user ids whose tasks may go to Kanban (empty = first `DISCORD_ALLOWED_USERS` entry). |
-| `kanban_mode` | str | `approve` | Kanban delivery of owner tasks: `approve` / `auto` / `off`. |
-| `kanban_board` | str | `""` | Kanban board slug (empty = default board). |
-| `linear_mode` | str | `approve` | Linear issue creation: `approve` / `auto` / `off`. |
-| `linear_default_team` | str | `""` | Linear team key/id used when no project resolves. |
-| `obsidian_vault_path` | str | `""` | Obsidian vault path (empty = disabled). |
+
+#### Google Meet
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `google_meet_enabled` | bool | `false` | Import Google Meet transcripts (needs `google connect`). |
+| `google_meet_poll_minutes` | int | `5` | Minutes between Google Meet polls. |
+| `google_meet_discord_channel` | str | `""` | Channel id, <#id> or name for Meet notes (empty = notes channel, then automatic). |
+
+#### Integrations
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `owners` | list | `[]` | Discord user ids whose tasks may go to Kanban (empty = first allowed user). |
+| `kanban_mode` | str | `approve` | Kanban delivery of owner tasks. (`approve` / `auto` / `off`) |
+| `kanban_board` | str | `""` | Board slug (empty = default board). |
+| `linear_mode` | str | `approve` | Linear issue creation. (`approve` / `auto` / `off`) |
+| `linear_default_team` | str | `""` | Team key/id used when no project resolves. |
+| `obsidian_vault_path` | str | `""` | Vault path (empty = disabled). |
 | `obsidian_folder` | str | `Meetings` | Folder inside the vault for notes. |
-| `ui_language` | str | `en` | Language of bot messages: `en` / `es`. |
+
+#### Privacy
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `audio_retention` | str | `multitrack` | Audio kept after processing. (`multitrack` / `mixed` / `none`) |
 | `consent_announce` | bool | `true` | Announce the recording in the channel chat. |
-| `consent_nickname_prefix` | str | `"[REC] "` | Nickname prefix while recording (empty = off). |
+| `consent_nickname_prefix` | str | `"[REC] "` | Bot nickname prefix while recording (empty = off). |
+
+#### Processing
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `pipeline_max_attempts` | int | `3` | Failed attempts before a meeting is marked failed (waiting for a destination never counts). |
+
+#### Interface
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `ui_language` | str | `en` | Language of bot messages. (`en` / `es`) |
+| `commands_aliases` | list | `[meet, rec]` | Extra slash-command names routed to /meeting. |
+<!-- config-table:end -->
 
 **Using a different model for analysis.** Meeting analysis runs as the Hermes auxiliary task
 `meeting_scribe`. To send it to a different model than your chat model, configure

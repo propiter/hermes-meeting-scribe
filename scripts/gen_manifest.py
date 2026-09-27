@@ -1,7 +1,7 @@
-"""Regenerate ``plugin.yaml`` from ``meeting_scribe.config.SPEC``.
+"""Regenerate ``plugin.yaml`` and the README configuration tables from ``meeting_scribe.config.SPEC``.
 
-Run after changing settings: ``.venv/bin/python scripts/gen_manifest.py``. The unit test
-``test_plugin_yaml_config_schema_in_sync_with_settings`` fails when the two drift.
+Run after changing settings: ``.venv/bin/python scripts/gen_manifest.py``. Unit tests fail when
+the manifest or the README tables (between the ``config-table`` markers) drift from ``SPEC``.
 """
 from __future__ import annotations
 
@@ -13,7 +13,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from meeting_scribe.config import schema_for_manifest  # noqa: E402
+from meeting_scribe.config import GROUPS, SPEC, schema_for_manifest  # noqa: E402
+from meeting_scribe.i18n import t  # noqa: E402
+
+START, END = "<!-- config-table:start -->", "<!-- config-table:end -->"
+READMES = {"README.md": "en", "README.es.md": "es"}
 
 HEADER = {
     "name": "meeting-scribe",
@@ -51,6 +55,43 @@ def render() -> str:
     return text
 
 
+def _default(value) -> str:
+    if isinstance(value, tuple):
+        return "`[" + ", ".join(value) + "]`"
+    if isinstance(value, bool):
+        return f"`{str(value).lower()}`"
+    if value == "" or (isinstance(value, str) and value != value.strip()):
+        return f'`"{value}"`'
+    return f"`{value}`"
+
+
+def config_tables(lang: str) -> str:
+    head = {"en": "| Key | Type | Default | Description |", "es": "| Clave | Tipo | Por defecto | Descripción |"}[lang]
+    out: list[str] = []
+    for group in GROUPS:
+        keys = [k for k, o in SPEC.items() if o.group == group]
+        if not keys:
+            continue
+        out += [f"#### {t(f'cfg.group.{group}', lang)}", "", head, "|---|---|---|---|"]
+        for key in keys:
+            opt = SPEC[key]
+            extra = f" ({' / '.join(f'`{c}`' for c in opt.choices)})" if opt.choices else ""
+            out.append(f"| `{key}` | {opt.kind} | {_default(opt.default)} | {t(f'cfg.{key}.help', lang)}{extra} |")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def render_readme(text: str, lang: str) -> str:
+    before, _, rest = text.partition(START)
+    _, _, after = rest.partition(END)
+    return f"{before}{START}\n{config_tables(lang)}{END}{after}"
+
+
 if __name__ == "__main__":
     (ROOT / "plugin.yaml").write_text(render(), encoding="utf-8")
-    print("plugin.yaml regenerated")
+    for name, lang in READMES.items():
+        path = ROOT / name
+        text = path.read_text(encoding="utf-8")
+        if START in text:
+            path.write_text(render_readme(text, lang), encoding="utf-8")
+    print("plugin.yaml and README configuration tables regenerated")

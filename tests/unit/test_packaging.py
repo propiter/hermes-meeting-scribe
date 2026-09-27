@@ -55,3 +55,15 @@ def test_readme_config_table_lists_every_setting(readme):
     text = (ROOT / readme).read_text(encoding="utf-8")
     keys = set(re.findall(r"^\| `([a-z_]+)` \| (?:str|int|bool|float|list) \|", text, re.M))
     assert keys == set(SPEC)
+
+
+@pytest.mark.parametrize("readme,lang", [("README.md", "en"), ("README.es.md", "es")])
+def test_readme_config_tables_are_generated_from_spec(readme, lang):
+    """Run ``scripts/gen_manifest.py`` after changing a setting; the tables are grouped and localized."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gen_manifest", ROOT / "scripts" / "gen_manifest.py")
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    text = (ROOT / readme).read_text(encoding="utf-8")
+    assert gen.START in text and gen.render_readme(text, lang) == text

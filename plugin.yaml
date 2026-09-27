@@ -32,64 +32,78 @@ provides_tools:
 - meeting_get
 provides_hooks: []
 config_schema:
-  commands_aliases:
-    type: list
-    default:
-    - meet
-    - rec
-    description: Extra slash-command names routed to /meeting.
   autojoin_enabled:
     type: bool
     default: true
+    label: Auto-join voice channels
     description: Join a voice channel automatically when people gather.
+    group: capture
   autojoin_min_humans:
     type: int
     default: 2
-    description: Humans required in a voice channel to auto-join.
+    label: People needed to auto-join
+    description: Humans required in a voice channel before auto-joining.
+    group: capture
+    minimum: 1
   autojoin_grace_seconds:
     type: int
     default: 20
+    label: Auto-join delay (s)
     description: Seconds the channel must stay populated before joining.
+    group: capture
+    minimum: 0
   autojoin_channels:
     type: list
     default: []
+    label: Auto-join only these channels
     description: Voice channel ids/names allowed for auto-join (empty = all).
+    group: capture
   autojoin_ignore_channels:
     type: list
     default: []
+    label: Never auto-join
     description: Voice channel ids/names never auto-joined.
+    group: capture
   autoleave_grace_seconds:
     type: int
     default: 60
+    label: Stop when empty after (s)
     description: Seconds with no humans before the recording stops.
+    group: capture
+    minimum: 0
   limits_max_duration_minutes:
     type: int
     default: 240
+    label: Maximum recording (min)
     description: Hard cap on a single recording.
-  audio_retention:
-    type: str
-    default: multitrack
-    description: Audio kept after processing.
-    choices:
-    - multitrack
-    - mixed
-    - none
+    group: capture
+    minimum: 1
   audio_bitrate_kbps:
     type: int
     default: 48
+    label: Opus bitrate (kbps)
     description: Opus bitrate per speaker track.
+    group: capture
+    minimum: 8
+    maximum: 256
   audio_ffmpeg_path:
     type: str
     default: ''
+    label: ffmpeg path
     description: Explicit ffmpeg binary (empty = auto-detect).
+    group: capture
   transcribe_model:
     type: str
     default: medium
-    description: faster-whisper model (tiny/base/small/medium/large-v3...).
+    label: Whisper model
+    description: faster-whisper model (tiny/base/small/medium/large-v3/turbo).
+    group: transcription
   transcribe_device:
     type: str
     default: auto
-    description: Inference device.
+    label: Inference device
+    description: Where whisper runs.
+    group: transcription
     choices:
     - auto
     - cpu
@@ -97,7 +111,9 @@ config_schema:
   transcribe_compute_type:
     type: str
     default: auto
+    label: Compute type
     description: CTranslate2 compute type.
+    group: transcription
     choices:
     - auto
     - int8
@@ -107,84 +123,190 @@ config_schema:
   transcribe_cpu_threads:
     type: int
     default: 0
+    label: CPU threads
     description: CPU threads for whisper (0 = cores minus 2).
+    group: transcription
+    minimum: 0
   transcribe_language:
     type: str
     default: auto
-    description: Spoken language code (auto = detect; pin it if you can).
+    label: Spoken language
+    description: Language code (auto = detect; pin it if you can).
+    group: transcription
   transcribe_beam_size:
     type: int
     default: 5
+    label: Beam size
     description: Beam size for decoding.
+    group: transcription
+    minimum: 1
+    maximum: 10
   analysis_language:
     type: str
     default: auto
-    description: Notes language (auto = transcript language).
+    label: Notes language
+    description: Language of the notes (auto = transcript language).
+    group: analysis
   analysis_chunk_chars:
     type: int
     default: 12000
-    description: Transcript chunk size for map-reduce analysis.
-  projects_min_confidence:
-    type: float
-    default: 0.6
-    description: Minimum confidence to auto-assign a project.
+    label: Chunk size (characters)
+    description: Transcript chunk size for map-reduce analysis of long meetings.
+    group: analysis
+    minimum: 2000
+  analysis_timeout_seconds:
+    type: int
+    default: 600
+    label: LLM call timeout (s)
+    description: Wall-clock limit for one LLM call; a call that does not return fails the attempt and
+      is retried with backoff.
+    group: analysis
+    minimum: 30
+    maximum: 7200
+  analysis_max_tokens:
+    type: int
+    default: 8192
+    label: Max output tokens
+    description: Output tokens requested per LLM call, so the provider does not reserve the whole context
+      window (a common cause of 'insufficient credit' errors).
+    group: analysis
+    minimum: 256
+    maximum: 200000
   delivery_discord_enabled:
     type: bool
     default: true
-    description: Post notes to Discord.
+    label: Post to Discord
+    description: Post meeting notes to Discord.
+    group: delivery
+  delivery_discord_guild:
+    type: str
+    default: ''
+    label: Discord server
+    description: Server (id or name) used when a meeting has no server of its own, e.g. Google Meet (empty
+      = the bot's only server).
+    group: delivery
+    format: discord_guild
   delivery_discord_channel:
     type: str
     default: ''
-    description: Notes channel id (empty = voice text chat, then home).
+    label: Notes channel
+    description: Channel id, <#id> or name for notes (empty = voice chat, then automatic).
+    group: delivery
+    format: discord_channel
+  delivery_auto_channel_names:
+    type: list
+    default:
+    - general
+    - meetings
+    - meeting-notes
+    - notes
+    - reuniones
+    - notas
+    label: Automatic channel names
+    description: 'When no channel is set: the server''s system channel, else the first of these channel
+      names the bot can post in.'
+    group: delivery
+  delivery_fallback_channel:
+    type: str
+    default: ''
+    label: Channel for tasks without project
+    description: Channel id or name for tasks that match no project channel (empty = the notes channel).
+    group: delivery
+    format: discord_channel
   delivery_discord_thread:
     type: bool
     default: true
-    description: Post notes in a thread when possible.
+    label: Use a notes thread
+    description: Post tasks without project in a thread under the summary when possible.
+    group: delivery
   delivery_project_threads:
     type: bool
     default: true
+    label: Project threads
     description: Post each task in a thread of its project's channel.
+    group: delivery
   delivery_dm_assignees:
     type: bool
     default: true
-    description: DM each assignee their tasks with buttons after delivery.
+    label: DM assignees
+    description: Send each assignee their tasks by DM after delivery.
+    group: delivery
   delivery_discord_transcript:
     type: bool
     default: true
+    label: Attach transcript
     description: Attach the full transcript (Markdown file) to the notes.
-  google_meet_enabled:
-    type: bool
-    default: false
-    description: Import Google Meet transcripts (needs `google connect`).
-  google_meet_poll_minutes:
+    group: delivery
+  delivery_transcript_max_mb:
     type: int
-    default: 5
-    description: Minutes between Google Meet polls.
-  google_meet_discord_channel:
-    type: str
-    default: ''
-    description: Discord text channel id for Google Meet notes (empty = delivery_discord_channel, then
-      home).
+    default: 8
+    label: Attachment size limit (MB)
+    description: Largest file uploaded; longer transcripts are split. Raise it if your server allows bigger
+      uploads.
+    group: delivery
+    minimum: 1
+    maximum: 500
+  projects_min_confidence:
+    type: float
+    default: 0.6
+    label: Project confidence
+    description: Minimum confidence to assign a project automatically.
+    group: projects
+    minimum: 0.0
+    maximum: 1.0
   project_channels:
     type: list
     default: []
-    description: Explicit project to channel map, entries like 'Project name=channel_id'.
+    label: Project → channel map
+    description: Explicit entries like 'Project name=channel id'.
+    group: projects
   project_match_min_score:
     type: float
     default: 0.8
-    description: Minimum fuzzy score to route a task to a channel by name.
+    label: Channel match score
+    description: Minimum fuzzy score to route a task to a channel by its name.
+    group: projects
+    minimum: 0.0
+    maximum: 1.0
   channel_name_ignore_prefixes:
     type: list
     default: []
+    label: Ignored channel prefixes
     description: Decorative leading words ignored in channel names.
+    group: projects
+  google_meet_enabled:
+    type: bool
+    default: false
+    label: Import Google Meet
+    description: Import Google Meet transcripts (needs `google connect`).
+    group: google_meet
+  google_meet_poll_minutes:
+    type: int
+    default: 5
+    label: Poll every (min)
+    description: Minutes between Google Meet polls.
+    group: google_meet
+    minimum: 2
+    maximum: 1440
+  google_meet_discord_channel:
+    type: str
+    default: ''
+    label: Google Meet notes channel
+    description: Channel id, <#id> or name for Meet notes (empty = notes channel, then automatic).
+    group: google_meet
+    format: discord_channel
   owners:
     type: list
     default: []
+    label: Owners
     description: Discord user ids whose tasks may go to Kanban (empty = first allowed user).
+    group: integrations
   kanban_mode:
     type: str
     default: approve
+    label: Kanban
     description: Kanban delivery of owner tasks.
+    group: integrations
     choices:
     - approve
     - auto
@@ -192,11 +314,15 @@ config_schema:
   kanban_board:
     type: str
     default: ''
-    description: Kanban board slug (empty = default board).
+    label: Kanban board
+    description: Board slug (empty = default board).
+    group: integrations
   linear_mode:
     type: str
     default: approve
+    label: Linear
     description: Linear issue creation.
+    group: integrations
     choices:
     - approve
     - auto
@@ -204,27 +330,65 @@ config_schema:
   linear_default_team:
     type: str
     default: ''
-    description: Linear team key/id used when no project resolves.
+    label: Linear team
+    description: Team key/id used when no project resolves.
+    group: integrations
   obsidian_vault_path:
     type: str
     default: ''
-    description: Obsidian vault path (empty = disabled).
+    label: Obsidian vault
+    description: Vault path (empty = disabled).
+    group: integrations
   obsidian_folder:
     type: str
     default: Meetings
+    label: Obsidian folder
     description: Folder inside the vault for notes.
-  ui_language:
+    group: integrations
+  audio_retention:
     type: str
-    default: en
-    description: Language of bot messages.
+    default: multitrack
+    label: Audio kept
+    description: Audio kept after processing.
+    group: privacy
     choices:
-    - en
-    - es
+    - multitrack
+    - mixed
+    - none
   consent_announce:
     type: bool
     default: true
-    description: Announce recording in the channel chat.
+    label: Announce recording
+    description: Announce the recording in the channel chat.
+    group: privacy
   consent_nickname_prefix:
     type: str
     default: '[REC] '
-    description: Nickname prefix while recording (empty = off).
+    label: Nickname prefix
+    description: Bot nickname prefix while recording (empty = off).
+    group: privacy
+  pipeline_max_attempts:
+    type: int
+    default: 3
+    label: Attempts per stage
+    description: Failed attempts before a meeting is marked failed (waiting for a destination never counts).
+    group: pipeline
+    minimum: 1
+    maximum: 20
+  ui_language:
+    type: str
+    default: en
+    label: Bot language
+    description: Language of bot messages.
+    group: ui
+    choices:
+    - en
+    - es
+  commands_aliases:
+    type: list
+    default:
+    - meet
+    - rec
+    label: Command aliases
+    description: Extra slash-command names routed to /meeting.
+    group: ui

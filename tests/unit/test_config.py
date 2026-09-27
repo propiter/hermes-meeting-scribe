@@ -75,6 +75,10 @@ def test_plugin_yaml_config_schema_in_sync_with_settings():
         assert schema[key]["type"] == spec.yaml_type, key
         assert schema[key]["default"] == spec.yaml_default, key
         assert schema[key].get("description"), key
+        assert schema[key]["group"] == spec.group, key
+        assert schema[key]["label"] == spec.label(key), key
+        assert schema[key].get("format", "") == spec.format, key
+        assert schema[key].get("minimum") == spec.minimum and schema[key].get("maximum") == spec.maximum, key
         if spec.choices:
             assert schema[key]["choices"] == list(spec.choices), key
 

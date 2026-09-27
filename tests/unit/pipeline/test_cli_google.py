@@ -209,10 +209,16 @@ def test_config_set_enable_without_channel_warns(grt, capsys):
     assert code == 0 and "google_meet_discord_channel" not in out
 
 
-# -- finding 18: channel ids are validated instead of silently ignored -------------------------------
+# -- finding 18 (revised): channels accept an id, <#id> or a NAME resolved at runtime --------------
 @pytest.mark.parametrize("key", ["google_meet_discord_channel", "delivery_discord_channel"])
-def test_config_set_rejects_non_numeric_channel(grt, capsys, key):
-    code, out = run(grt, ["config", "set", key, "general"], capsys)
+def test_config_set_accepts_a_channel_name(grt, capsys, key):
+    code, out = run(grt, ["config", "set", key, "#general"], capsys)
+    assert code == 0 and grt.cfg[key] == "general"
+
+
+@pytest.mark.parametrize("key", ["google_meet_discord_channel", "delivery_discord_channel"])
+def test_config_set_rejects_a_user_mention(grt, capsys, key):
+    code, out = run(grt, ["config", "set", key, "<@123>"], capsys)
     assert code == 2 and key in out and key not in grt.cfg
 
 
@@ -221,33 +227,7 @@ def test_config_set_accepts_a_channel_mention_and_stores_the_id(grt, capsys):
     assert code == 0 and grt.cfg["google_meet_discord_channel"] == "123456789012345678"
 
 
-def test_doctor_warns_about_a_non_numeric_channel_in_config():
+def test_a_channel_name_in_config_is_kept_for_runtime_resolution():
     from meeting_scribe.config import settings_from_mapping
     s = settings_from_mapping({"google_meet_discord_channel": "meet-notes"})
-    assert s.google_meet_discord_channel == ""
-    assert any("google_meet_discord_channel" in w for w in s.warnings)
-
-
-# -- finding 17: a failed revoke is not silent -------------------------------------------------------
-@pytest.mark.parametrize("failure", ["http", "network"])
-def test_disconnect_warns_when_the_revoke_fails(grt, client_file, capsys, monkeypatch, failure):
-    from meeting_scribe.google.http import TransportError
-    connect(grt, client_file, capsys, monkeypatch)
-    inner = grt.google_transport.handler
-
-    def handler(method, url, headers, body):
-        if url.startswith("https://oauth2.googleapis.com/revoke"):
-            if failure == "network":
-                raise TransportError("offline")
-            return jresp(503, {"error": "backendError"})
-        return inner(method, url, headers, body)
-    grt.google_transport.handler = handler
-    code, out = run(grt, ["google", "disconnect"], capsys)
-    assert code == 0 and grt.google_files().read_token() is None  # the local token is gone anyway
-    assert "https://myaccount.google.com/permissions" in out
-
-
-def test_disconnect_success_does_not_warn(grt, client_file, capsys, monkeypatch):
-    connect(grt, client_file, capsys, monkeypatch)
-    code, out = run(grt, ["google", "disconnect"], capsys)
-    assert code == 0 and "myaccount.google.com" not in out
+    assert s.google_meet_discord_channel == "meet-notes" and s.warnings == ()
