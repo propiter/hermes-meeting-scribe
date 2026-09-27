@@ -15,7 +15,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "pyyaml>=6,<7"]
+# discord.py is provided by Hermes at runtime; dev installs it so the discord_ui tests run.
+dev = ["pytest>=8,<10", "pyyaml>=6,<7", "discord.py[voice]>=2.7,<3"]
 
 [project.urls]
 Homepage = "https://github.com/propiter/hermes-meeting-scribe"

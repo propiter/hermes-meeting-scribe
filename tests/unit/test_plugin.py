@@ -73,9 +73,24 @@ def test_register_wires_everything(ctx):
     assert set(ctx.commands) == {"meeting", "meet", "rec"}
     assert ctx.commands["meeting"][1]  # args hint so Discord shows an argument field
     assert "meeting-scribe" in ctx.cli and set(ctx.skills) == {"meeting-scribe"}
+
+
+def test_register_installs_live_capture_when_discord_is_available(ctx):
+    pytest.importorskip("discord")
+    rt = plugin.register(ctx, ROOT)
     assert rt.capture is not None and hasattr(rt.capture, "start")  # Phase B installed
     assert len(ctx.platform_handlers["discord"]) == 1 and len(ctx.unload) == 3
     assert any(getattr(s, "name", "") == "discord" for s in rt.sinks())
+
+
+def test_register_degrades_without_discord(ctx, monkeypatch):
+    """CI/CLI hosts without discord.py: tools, commands and CLI still register; capture is off."""
+    monkeypatch.setitem(sys.modules, "discord", None)  # makes `import discord` raise ImportError
+    for mod in [m for m in sys.modules if m.startswith("meeting_scribe.discord_ui")]:
+        monkeypatch.delitem(sys.modules, mod)  # force a fresh import that hits the missing discord
+    rt = plugin.register(ctx, ROOT)
+    assert set(ctx.tools) == {"meeting_search", "meeting_get"} and "meeting-scribe" in ctx.cli
+    assert not ctx.platform_handlers.get("discord") and rt is not None
 
 
 def test_aliases_from_config(tmp_path, monkeypatch):
