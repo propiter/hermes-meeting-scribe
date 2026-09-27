@@ -340,3 +340,6 @@ class SinkResult:
     errors: tuple[str, ...] = ()
     detail: str = ""
     deferred: bool = False  # not delivered only because the target is not ready yet (Discord connecting)
+    # not delivered because no destination could be resolved (no channel configured/found): waits
+    # without a deadline until one is configured (DESIGN §19); implies ``deferred``
+    waiting: bool = False

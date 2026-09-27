@@ -88,11 +88,11 @@ class DiscordChannelCatalog:
 
     def __init__(self, *, adapter: Callable[[], Any], loop: Callable[[], Optional[asyncio.AbstractEventLoop]],
                  ignore_prefixes: Callable[[], Sequence[str]],
-                 targets: Optional[Callable[[Meeting], Sequence[str]]] = None) -> None:
+                 guild_for: Optional[Callable[[Meeting], Any]] = None) -> None:
         self._adapter = adapter
         self._loop = loop
         self._ignore = ignore_prefixes
-        self._targets = targets or (lambda m: ())
+        self._guild_for = guild_for
 
     def candidates(self, meeting: Meeting) -> list[Candidate]:
         adapter, loop = self._adapter(), self._loop()
@@ -100,7 +100,9 @@ class DiscordChannelCatalog:
             return []
 
         async def snap() -> list[ChannelInfo]:
-            guild = guild_of(adapter, meeting, self._targets(meeting))
+            # Imported meetings (Google Meet) have no guild: the one chosen for their notes (DESIGN §19),
+            # never a DM — so their tasks can still be routed to project channels.
+            guild = self._guild_for(meeting) if self._guild_for is not None else guild_of(adapter, meeting)
             return snapshot_channels(guild, need_threads=False) if guild is not None else []
         try:
             channels = asyncio.run_coroutine_threadsafe(snap(), loop).result(SNAPSHOT_TIMEOUT)

@@ -18,10 +18,11 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..config import Settings
-from ..domain.models import SOURCE_GOOGLE_MEET, Meeting, Notes, SinkResult, is_discord_user_id
+from ..domain.models import Meeting, Notes, SinkResult, is_discord_user_id
 from ..domain.names import clean_channel_name
 from ..storage.artifacts import read_notes, read_transcript, render_transcript_md
 from .board import Board, move_options
+from .destination import REPORT_KV, Destination, resolve
 from .publisher import Pointers, ViewFactory
 from .render import RenderOptions
 from .render_tasks import render_panel
@@ -30,7 +31,11 @@ from .task_publisher import TaskPublisher
 log = logging.getLogger(__name__)
 SINK = "discord"
 
-__all__ = ["DiscordNotesSink", "ViewFactory", "SINK"]
+__all__ = ["DiscordNotesSink", "ViewFactory", "SINK", "DestinationPending"]
+
+
+class DestinationPending(LookupError):
+    """No notes channel could be resolved; the delivery waits for one (DESIGN §19)."""
 
 
 class DiscordNotesSink:
@@ -56,12 +61,12 @@ class DiscordNotesSink:
         adapter, loop = self._adapter(), self._loop()
         if adapter is None or loop is None or loop.is_closed():
             return SinkResult(SINK, False, errors=("discord not connected yet; will retry",), deferred=True)
-        if not self._targets(meeting):  # e.g. a Meet import with no channel configured: skip, don't loop
-            log.info("meeting-scribe: no Discord channel for meeting %s; Discord delivery skipped", meeting.id)
-            return SinkResult(SINK, True, skipped=("no Discord notes channel configured",))
         fut = asyncio.run_coroutine_threadsafe(self.publish(meeting, notes), loop)
         try:
             url = fut.result(self._timeout)
+        except DestinationPending as exc:  # nothing to post to yet: wait, never spend attempts
+            log.warning("meeting-scribe: meeting %s %s", meeting.id, exc)
+            return SinkResult(SINK, False, errors=(str(exc),), deferred=True, waiting=True)
         except Exception as exc:  # timeout, permissions, unknown channel: reported, the job retries
             fut.cancel()
             return SinkResult(SINK, False, errors=(f"{type(exc).__name__}: {exc}",))
@@ -73,7 +78,7 @@ class DiscordNotesSink:
         if adapter is None:
             raise ConnectionError("discord not connected")
         return TaskPublisher(adapter=adapter, views=self._views, settings=self._settings(),
-                             repo=self._service().repo, options=self._options(meeting), targets=self._targets,
+                             repo=self._service().repo, options=self._options(meeting), destination=self.destination,
                              transcript_text=self._transcript_text)
 
     def _transcript_text(self, meeting: Meeting) -> Optional[str]:
@@ -84,24 +89,24 @@ class DiscordNotesSink:
             return None
         return render_transcript_md(meeting, utterances, meeting.language or self._settings().ui_language)
 
-    def _targets(self, meeting: Meeting) -> list[str]:
-        """Notes channel candidates, in order. Imported (Google Meet) meetings have no voice chat:
-        ``google_meet_discord_channel`` → ``delivery_discord_channel`` → home (DESIGN §17)."""
-        adapter = self._adapter()
-        home = getattr(getattr(getattr(adapter, "config", None), "home_channel", None), "chat_id", None)
-        s = self._settings()
-        if meeting.source == SOURCE_GOOGLE_MEET:
-            order = (s.google_meet_discord_channel, s.delivery_discord_channel, meeting.text_channel_id, home)
-        else:
-            order = (s.delivery_discord_channel, meeting.text_channel_id, meeting.channel_id, home)
-        out: list[str] = []
-        for cid in order:
-            if cid and not str(cid).isdigit():
-                log.warning("meeting-scribe: ignoring non-numeric Discord channel id %r (run doctor)", cid)
-                continue
-            if cid and str(cid) not in out:
-                out.append(str(cid))
-        return out
+    def destination(self, meeting: Meeting) -> Destination:
+        """Loop-side: notes channel candidates, the server, and the channel for tasks without project."""
+        client = getattr(self._adapter(), "_client", None)
+        return resolve(client, meeting, self._settings())
+
+    def guild_for(self, meeting: Meeting) -> object:
+        """Loop-side: the server whose channels are the meeting's project candidates."""
+        return self.destination(meeting).guild
+
+    async def _save_report(self, meeting: Meeting, dest: Destination) -> None:
+        """Last resolution per source, for ``doctor`` / ``config list`` in other processes."""
+        try:
+            import json
+
+            report = {**dest.report(), "meeting": meeting.id}
+            await asyncio.to_thread(self._service().repo.kv_set, f"{REPORT_KV}.{meeting.source}", json.dumps(report))
+        except Exception as exc:  # diagnostics only
+            log.debug("meeting-scribe: could not store the destination report: %s", exc)
 
     def _lock(self, meeting_id: str) -> asyncio.Lock:
         """One publication at a time per meeting (delivery retry, refresh, move): no racing duplicates."""
@@ -112,6 +117,11 @@ class DiscordNotesSink:
 
     async def publish(self, meeting: Meeting, notes: Notes) -> str:
         async with self._lock(meeting.id):
+            dest = self.destination(meeting)
+            await self._save_report(meeting, dest)
+            ptr = await self._publisher(meeting).msgs_pointer(meeting)
+            if not dest.targets and not ptr:  # already posted somewhere: keep editing it there
+                raise DestinationPending(dest.problem)
             # the only path that attaches the transcript: the pipeline's DELIVER stage
             return await self._publisher(meeting).publish(meeting, notes, send_dms=True, attach_transcript=True)
 

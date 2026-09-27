@@ -314,3 +314,79 @@ async def test_legacy_01_notes_messages_in_their_thread_are_removed(env):
     await deliver(env)
     assert all(r.id not in legacy.messages for r in rows) and first.id in env.chat.messages
     assert [m.content.split("\n")[0] for m in legacy.ordered()] == ["▫️ **Budget**"]  # thread reused for chat tasks
+
+
+# -- DESIGN §19: Google Meet imports route tasks in the chosen server, never in a DM ------------------
+def as_meet(env):
+    from meeting_scribe.domain.models import SOURCE_GOOGLE_MEET
+
+    m = replace(env.meeting, guild_id="", channel_id="gmeet:space9", text_channel_id=None,
+                source=SOURCE_GOOGLE_MEET, external_id="conferenceRecords/x9")
+    env.svc.repo.save_meeting(m)
+    env.meeting = m
+    return m
+
+
+async def test_meet_task_with_a_project_goes_to_that_projects_channel_thread(env):
+    as_meet(env)
+    notes_ch = env.bot.add(610, "📝-meet-notes")
+    env.cfg["google_meet_discord_channel"] = "#meet-notes"  # by NAME
+    await deliver(env)
+    assert "Migración SMTP" in notes_ch.ordered()[0].content  # summary in the Meet notes channel
+    _, thread = thread_of(env, env.orion)
+    assert "Landing page" in thread.ordered()[0].content
+    _, neb = thread_of(env, env.nebula)  # spoken hint "Nebulla" -> fuzzy match in the chosen server
+    assert "Contract review" in neb.ordered()[0].content
+
+
+async def test_meet_task_without_a_project_goes_to_the_fallback_channel(env):
+    as_meet(env)
+    env.bot.add(610, "meet-notes")
+    backlog = env.bot.add(620, "backlog")
+    env.cfg.update({"google_meet_discord_channel": "meet-notes", "delivery_fallback_channel": "#backlog"})
+    await deliver(env)
+    _, thread = thread_of(env, backlog)
+    assert any("Budget" in m.content for m in thread.ordered())
+
+
+async def test_meet_without_a_channel_uses_the_automatic_one_in_the_only_server(env):
+    as_meet(env)
+    general = env.bot.add(630, "General")
+    await deliver(env)
+    assert "Migración SMTP" in general.ordered()[0].content
+    _, thread = thread_of(env, env.orion)
+    assert "Landing page" in thread.ordered()[0].content
+
+
+async def test_discord_meeting_tasks_without_project_use_the_fallback_channel_too(env):
+    backlog = env.bot.add(620, "backlog")
+    env.cfg["delivery_fallback_channel"] = "620"
+    await deliver(env)
+    _, thread = thread_of(env, backlog)
+    assert any("Budget" in m.content for m in thread.ordered())
+    assert not any("Budget" in m.content for m in env.chat.ordered())
+
+
+async def test_meet_project_candidates_come_from_the_chosen_server(env):
+    from meeting_scribe.discord_ui.guild import DiscordChannelCatalog
+
+    as_meet(env)
+    loop = asyncio.get_running_loop()
+    env.state["loop"] = loop
+    sink = env.make()
+    cat = DiscordChannelCatalog(adapter=lambda: sink._adapter(), loop=lambda: loop, ignore_prefixes=lambda: (),
+                                guild_for=sink.guild_for)
+    names = {c.name for c in await asyncio.to_thread(cat.candidates, env.meeting)}
+    assert {"orion", "nebula"} <= names
+
+
+async def test_pending_meet_delivery_publishes_once_a_channel_is_named(env):
+    as_meet(env)
+    env.cfg.update({"delivery_auto_channel_names": []})
+    env.state["loop"] = asyncio.get_running_loop()
+    res = await asyncio.to_thread(env.make().deliver, env.meeting, env.notes, env.svc.folder(env.meeting))
+    assert res.waiting and not any(c.messages for c in env.bot.channels.values())
+    env.bot.add(640, "meet-notes")
+    env.cfg["google_meet_discord_channel"] = "meet-notes"
+    await deliver(env)
+    assert env.bot.channels[640].ordered()

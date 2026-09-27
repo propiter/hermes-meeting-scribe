@@ -25,7 +25,8 @@ from ..config import Settings
 from ..domain.models import Meeting, Notes, is_discord_user_id
 from ..i18n import t
 from .board import Board, build_board
-from .guild import guild_of, snapshot_channels
+from .destination import Destination
+from .guild import snapshot_channels
 from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
@@ -36,7 +37,7 @@ log = logging.getLogger(__name__)
 
 class TaskPublisher:
     def __init__(self, *, adapter: Any, views: ViewFactory, settings: Settings, repo: Any,
-                 options: RenderOptions, targets: Callable[[Meeting], Sequence[str]],
+                 options: RenderOptions, destination: Callable[[Meeting], Destination],
                  transcript_text: Optional[Callable[[Meeting], Optional[str]]] = None) -> None:
         self.msgs = Messages(adapter, views)
         self.views = views
@@ -45,22 +46,33 @@ class TaskPublisher:
         self.settings = settings
         self.repo = repo
         self.o = options
-        self._targets = targets
+        self._destination = destination
 
     # -- board ----------------------------------------------------------------------------------
+    async def msgs_pointer(self, meeting: Meeting) -> Optional[dict]:
+        """The stored summary pointer (the meeting was already posted), if any."""
+        return await Pointers(self.repo, meeting.id).load("notes")
+
     async def board(self, meeting: Meeting, notes: Notes) -> Board:
-        guild = guild_of(self.adapter, meeting, self._targets(meeting))
+        guild = self._destination(meeting).guild
         channels = snapshot_channels(guild, need_threads=self.settings.delivery_project_threads) if guild else []
         return await asyncio.to_thread(build_board, self.repo, self.settings, meeting, notes, channels)
 
     # -- meeting chat ---------------------------------------------------------------------------
     async def _chat_channel(self, meeting: Meeting) -> Any:
-        for cid in self._targets(meeting):
+        dest = self._destination(meeting)
+        for cid in dest.targets:
             try:
-                return await self.msgs.channel(cid)
+                channel = await self.msgs.channel(cid)
             except Exception as exc:  # deleted channel, missing access: try the next fallback
                 log.info("meeting-scribe: notes channel %s unavailable: %s", cid, exc)
-        raise LookupError("no reachable Discord channel for notes (delivery_discord_channel / voice chat / home)")
+                continue
+            if getattr(channel, "guild", None) is None:  # never a DM: nobody else would see it
+                log.warning("meeting-scribe: channel %s is not in a server; skipped", cid)
+                continue
+            return channel
+        raise LookupError("no reachable Discord channel for notes "
+                          f"({dest.problem or 'every candidate channel is unavailable'})")
 
     async def header(self, meeting: Meeting, notes: Notes, ptrs: Pointers) -> tuple[Any, dict]:
         """Post/edit the summary parts; returns the chat channel and the ``notes`` pointer."""
@@ -162,6 +174,17 @@ class TaskPublisher:
         await ptrs.save(suffix, {**ptr, "thread": thread.id})
         return thread
 
+    async def _fallback_target(self, meeting: Meeting, notes: Notes, chat: Any, count: int, ptrs: Pointers) -> Any:
+        """``delivery_fallback_channel`` for tasks without a project channel (None = the notes chat)."""
+        fallback = self._destination(meeting).fallback_channel
+        if not fallback or str(fallback) == str(chat.id):
+            return None
+        try:
+            return await self.project_target(fallback, meeting, notes, count, ptrs)
+        except Exception as exc:  # deleted / no access: the notes chat, as before
+            log.info("meeting-scribe: fallback channel %s unavailable (%s)", fallback, exc)
+            return None
+
     # -- tasks ----------------------------------------------------------------------------------
     async def place_task(self, meeting: Meeting, view: TaskView, target: Any, ptrs: Pointers) -> dict:
         suffix = f"task:{view.item.id}"
@@ -253,7 +276,8 @@ class TaskPublisher:
             return
         try:  # never fails the delivery (DESIGN §17.3)
             await publish_transcript(self.msgs, ptrs, chat, meeting, self._transcript_text,
-                                     getattr(self.views, "file", None), self.o.lang)
+                                     getattr(self.views, "file", None), self.o.lang,
+                                     max_bytes=int(self.settings.delivery_transcript_max_mb) * 1024 * 1024)
         except Exception as exc:
             if not is_missing(exc):
                 log.info("meeting-scribe: transcript attachment skipped: %s", exc)
@@ -275,6 +299,8 @@ class TaskPublisher:
                     target = await self.project_target(cid, meeting, notes, len(views), ptrs)
                 except Exception as exc:  # channel vanished since the snapshot: meeting chat
                     log.info("meeting-scribe: project channel %s unavailable (%s)", cid, exc)
+            if target is None and cid is None:
+                target = await self._fallback_target(meeting, notes, chat, len(views), ptrs)
             if target is None:
                 target = await self.chat_task_target(chat, notes_ptr, ptrs, meeting)
             threads[cid] = str(target.id)

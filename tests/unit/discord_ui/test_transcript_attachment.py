@@ -173,9 +173,11 @@ async def test_meet_meeting_uses_its_channel_and_never_mentions_or_dms_imported_
         meet.id, sink="discord", prefix=f"mtg:{meet.id}:dm:") == []
 
 
-async def test_meet_meeting_without_any_channel_is_skipped_not_retried(tenv):
+async def test_meet_meeting_without_any_channel_waits_for_one(tenv):
+    """DESIGN §19: no channel resolvable -> the delivery waits (deferred, no attempt), it is not skipped."""
     meet = replace(tenv.meeting, guild_id="", channel_id="gmeet:space1", text_channel_id=None,
                    source=SOURCE_GOOGLE_MEET, external_id="conferenceRecords/r2")
+    tenv.cfg["delivery_auto_channel_names"] = []
     tenv.state["loop"] = asyncio.get_running_loop()
     res = await asyncio.to_thread(tenv.make().deliver, meet, tenv.notes, tenv.svc.folder(meet))
-    assert res.ok and res.skipped and not res.errors
+    assert not res.ok and res.deferred and res.waiting and "google_meet_discord_channel" in res.errors[0]

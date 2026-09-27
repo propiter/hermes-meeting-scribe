@@ -99,10 +99,19 @@ async def test_thread_disabled_posts_everything_in_channel(env):
     assert len(env["notes_ch"].ordered()) > 1
 
 
-async def test_falls_back_to_home_channel(env):
+async def test_never_falls_back_to_the_home_channel_but_to_the_automatic_one(env):
+    """DESIGN §19: Hermes' home channel may be a DM; the server's meeting-notes channel is used instead."""
     env["meeting"] = replace(env["meeting"], channel_id="999")
     res = await deliver(env)
-    assert res.ok and env["home"].ordered()
+    assert res.ok and not env["home"].ordered() and env["notes_ch"].ordered()
+
+
+async def test_a_dm_is_never_used_even_when_configured_by_id(env):
+    user = env["adapter"]._client.user(42)
+    env["cfg"].update({"delivery_discord_channel": str(user.dm.id), "delivery_auto_channel_names": []})
+    env["meeting"] = replace(env["meeting"], channel_id="999")
+    res = await deliver(env)
+    assert not res.ok and user.dm.ordered() == []
 
 
 async def test_reprocess_edits_instead_of_reposting(env):
@@ -144,7 +153,7 @@ async def test_not_connected_fails_softly_for_retry(env):
 
 
 async def test_no_reachable_channel_is_an_error(env):
-    env["adapter"].config.home_channel = None
+    env["cfg"]["delivery_auto_channel_names"] = []
     env["meeting"] = replace(env["meeting"], channel_id="999")
     res = await deliver(env)
     assert not res.ok and "channel" in res.errors[0]

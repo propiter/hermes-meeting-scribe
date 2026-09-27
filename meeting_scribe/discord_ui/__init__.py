@@ -202,6 +202,6 @@ def install(ctx: Any, runtime: Any) -> UiState:
     if callable(add_catalog):  # the guild's channels become project candidates (§16)
         add_catalog(DiscordChannelCatalog(adapter=lambda: state.adapter, loop=lambda: state.loop,
                                           ignore_prefixes=lambda: runtime.settings().channel_name_ignore_prefixes,
-                                          targets=sink._targets))
+                                          guild_for=sink.guild_for))
     ctx.register_platform_handler("discord", _factory(state))
     return state

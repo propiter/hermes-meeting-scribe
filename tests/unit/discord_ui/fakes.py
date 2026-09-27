@@ -49,24 +49,36 @@ class FakeMessage:
 class FakeChannel:
     def __init__(self, cid: int, name: str, *, parent: Optional["FakeChannel"] = None, bot: Any = None,
                  threads_ok: bool = True, kind: str = "text", category_id: Optional[int] = None,
-                 position: int = 0, can_post: bool = True) -> None:
+                 position: int = 0, can_post: bool = True, guild_id: Optional[int] = None,
+                 can_attach: bool = True) -> None:
         self.id = cid
         self.name = name
         self.parent = parent
         self.bot = bot or (parent.bot if parent else None)
         self.threads_ok = threads_ok
         self.messages: dict[int, FakeMessage] = {}
-        self.guild = SimpleNamespace(id=1, me=SimpleNamespace(id=BOT_USER_ID))
+        self.guild_id = guild_id if guild_id is not None else (parent.guild_id if parent else None)
+        self._guild_stub = SimpleNamespace(id=1, me=SimpleNamespace(id=BOT_USER_ID))
+        self.is_dm = False
+        self.can_attach = can_attach
         self.type = kind
         self.category_id = category_id
         self.position = position
         self.can_post = can_post
         self.fail_sends = 0
 
+    @property
+    def guild(self) -> Any:
+        if self.is_dm:
+            return None  # a DM has no server (discord.py: DMChannel has no ``guild``)
+        if self.bot is not None:
+            return self.bot.get_guild(self.guild_id or self.bot.guild.id) or self._guild_stub
+        return self._guild_stub
+
     def permissions_for(self, member: Any) -> SimpleNamespace:
         ok = self.can_post
         return SimpleNamespace(view_channel=ok, send_messages=ok, create_public_threads=ok and self.threads_ok,
-                               send_messages_in_threads=ok)
+                               send_messages_in_threads=ok, attach_files=ok and self.can_attach)
 
     @property
     def mention(self) -> str:
@@ -109,6 +121,7 @@ class FakeUser:
         self.id = uid
         self.dms_open = dms_open
         self.dm = FakeChannel(90_000 + uid, f"dm-{uid}")
+        self.dm.is_dm = True
 
     async def send(self, content: str = "", *, view: Any = None, **kw: Any) -> FakeMessage:
         if not self.dms_open:
@@ -120,14 +133,21 @@ class FakeUser:
 
 
 class FakeGuild:
-    def __init__(self, bot: "FakeBot", gid: int = 100) -> None:
+    def __init__(self, bot: "FakeBot", gid: int = 100, name: str = "Example Team") -> None:
         self.id = gid
+        self.name = name
         self.bot = bot
         self.me = SimpleNamespace(id=1)
+        self.system_channel_id: Optional[int] = None
+
+    @property
+    def system_channel(self) -> Optional[FakeChannel]:
+        return self.bot.channels.get(self.system_channel_id) if self.system_channel_id else None
 
     @property
     def channels(self) -> list[FakeChannel]:
-        return [c for c in self.bot.channels.values() if c.parent is None and not c.name.startswith("dm-")]
+        return [c for c in self.bot.channels.values() if c.parent is None and not c.is_dm
+                and (c.guild_id or self.bot.guild.id) == self.id]
 
 
 class FakeBot:
@@ -135,6 +155,16 @@ class FakeBot:
         self.channels: dict[int, FakeChannel] = {}
         self.users: dict[int, FakeUser] = {}
         self.guild = FakeGuild(self)
+        self.extra_guilds: list[FakeGuild] = []
+
+    @property
+    def guilds(self) -> list[FakeGuild]:
+        return [self.guild, *self.extra_guilds]
+
+    def add_guild(self, gid: int, name: str) -> FakeGuild:
+        g = FakeGuild(self, gid, name)
+        self.extra_guilds.append(g)
+        return g
 
     def add(self, cid: int, name: str, **kw: Any) -> FakeChannel:
         ch = FakeChannel(cid, name, bot=self, **kw)
@@ -142,7 +172,7 @@ class FakeBot:
         return ch
 
     def get_guild(self, gid: int) -> Optional[FakeGuild]:
-        return self.guild if int(gid) == self.guild.id else None
+        return next((g for g in self.guilds if g.id == int(gid)), None)
 
     def get_channel(self, cid: int) -> Optional[FakeChannel]:
         return self.channels.get(int(cid))
