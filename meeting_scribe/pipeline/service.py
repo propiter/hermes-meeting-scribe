@@ -154,7 +154,7 @@ class MeetingService:
         if chosen is None:
             raise LookupError(project)
         self.repo.learn_channel_project(meeting.channel_id, chosen.key, chosen.name)
-        meeting = replace(meeting, project=chosen.name)
+        meeting = replace(meeting, project=chosen.name, project_key=chosen.key)
         self.repo.save_meeting(meeting)
         folder = self.folder(meeting)
         notes = read_notes(folder)

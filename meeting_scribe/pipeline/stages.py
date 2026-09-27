@@ -97,6 +97,7 @@ class Stages:
         project = res.candidate.name if res.candidate else None
         notes = replace(notes, project=project, project_confidence=res.confidence if project else 0.0)
         meeting = replace(meeting, title=notes.meeting_title or meeting.title, project=project,
+                          project_key=res.candidate.key if res.candidate else None,
                           language=notes.language or meeting.language)
         write_notes(folder, meeting, notes, notes.language or self.settings().ui_language)
         self.repo.sync_action_items(meeting.id, notes.action_items)

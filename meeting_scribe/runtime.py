@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 from .analyze.extract import LlmAnalyzer
 from .analyze.projects import CallableCatalog, LearnedCatalog
@@ -106,14 +106,26 @@ class Runtime:
         cats.append(CallableCatalog("linear", linear_projects(self.linear_backend)))
         return cats
 
-    def project_for(self, meeting: Meeting, notes: Notes, item: ActionItem) -> Optional[Candidate]:
-        """Item project, else meeting project, matched back to a candidate for sink routing."""
-        from .analyze.projects import find_candidate, gather_candidates
+    def project_for(self, meeting: Meeting, notes: Notes, item: ActionItem, *,
+                    sources: Optional[Sequence[str]] = None) -> Optional[Candidate]:
+        """Item project, else meeting project, matched back to a candidate of ``sources``.
+
+        The meeting's resolved ``project_key`` is authoritative when the item did not name a
+        different project (review finding 5)."""
+        from .analyze.projects import gather_candidates, route_candidate
+        from .domain.text import fold
 
         wanted = item.project or notes.project or meeting.project
         if not wanted:
             return None
-        return find_candidate(wanted, gather_candidates(self.catalogs(), meeting)[0])
+        same_as_meeting = not item.project or fold(item.project) == fold(meeting.project or "")
+        key = meeting.project_key if same_as_meeting else None
+        return route_candidate(wanted, key, gather_candidates(self.catalogs(), meeting)[0], sources)
+
+    def project_router(self, sources: Sequence[str]) -> Callable[[Meeting, Notes, ActionItem], Optional[Candidate]]:
+        def route(meeting: Meeting, notes: Notes, item: ActionItem) -> Optional[Candidate]:
+            return self.project_for(meeting, notes, item, sources=sources)
+        return route
 
     def add_sink(self, sink: Sink) -> None:
         """Phase B registers the Discord notes sink here."""
@@ -122,8 +134,9 @@ class Runtime:
     def item_sinks(self) -> dict[str, Any]:
         repo = self.repo()
         return {"kanban": KanbanSink(self.settings, repo, self.host.kanban, owners=self.owners,
-                                     project_for=self.project_for),
-                "linear": LinearSink(self.settings, repo, self.linear_backend, project_for=self.project_for)}
+                                     project_for=self.project_router(("hermes", "kanban"))),
+                "linear": LinearSink(self.settings, repo, self.linear_backend,
+                                     project_for=self.project_router(("linear",)))}
 
     def sinks(self) -> list[Sink]:
         items = self.item_sinks()

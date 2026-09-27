@@ -258,6 +258,7 @@ class Meeting:
     language: Optional[str] = None
     project: Optional[str] = None
     started_by: Optional[str] = None
+    project_key: Optional[str] = None  # the resolved candidate's key (sink routing, finding 5)
 
     def __post_init__(self) -> None:
         for name in ("started_at", "ended_at"):

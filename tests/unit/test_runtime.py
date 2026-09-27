@@ -166,3 +166,55 @@ def test_commands_resolve_the_service_per_call(tmp_path):
     root["p"] = tmp_path / "b"
     assert cmds.service is not first and cmds.service.repo is rt.repo()
     rt.close()
+
+
+# -- review finding 5: sink routing -------------------------------------------------------------
+def _routing_runtime(tmp_path, cands):
+    from meeting_scribe.analyze.projects import CallableCatalog
+
+    h, _ = host(tmp_path)
+    h.project_sources = lambda: [CallableCatalog("src", lambda m: list(cands))]
+    return Runtime(h)
+
+
+def test_same_named_projects_route_per_sink(tmp_path, meeting):
+    from meeting_scribe.domain.models import ActionItem, Candidate, Notes
+
+    hermes = Candidate("hermes:p", "Website", "hermes", {"project_id": "p"})
+    linear = Candidate("linear:L", "Website", "linear", {"project_id": "L", "team_ids": ["t"]})
+    rt = _routing_runtime(tmp_path, [hermes, linear])
+    item, notes = ActionItem(id="a1", title="x"), Notes("t", "t", "s", project="Website")
+    sinks = rt.item_sinks()
+    assert sinks["linear"]._project_for(meeting, notes, item) == linear
+    assert sinks["kanban"]._project_for(meeting, notes, item) == hermes
+    rt.close()
+
+
+def test_learned_candidate_enriched_by_the_real_catalog(tmp_path, meeting):
+    from dataclasses import replace as dc_replace
+
+    from meeting_scribe.domain.models import ActionItem, Candidate, Notes
+
+    linear = Candidate("linear:L", "Website", "linear", {"project_id": "L", "team_ids": ["t"]})
+    rt = _routing_runtime(tmp_path, [])
+    rt.catalogs = lambda: [__import__("meeting_scribe.analyze.projects", fromlist=["x"]).LearnedCatalog(rt.repo()),
+                           __import__("meeting_scribe.analyze.projects", fromlist=["x"]).CallableCatalog(
+                               "linear", lambda m: [linear])]
+    rt.repo().learn_channel_project(meeting.channel_id, "linear:L", "Website")
+    m = dc_replace(meeting, project="Website", project_key="linear:L")
+    got = rt.item_sinks()["linear"]._project_for(m, Notes("t", "t", "s"), ActionItem(id="a1", title="x"))
+    assert got == linear and got.ref["team_ids"] == ["t"]  # not the ref-less learned stub
+    rt.close()
+
+
+def test_resolved_key_wins_over_first_name_match(tmp_path, meeting):
+    from dataclasses import replace as dc_replace
+
+    from meeting_scribe.domain.models import ActionItem, Candidate, Notes
+
+    a = Candidate("linear:A", "Website", "linear", {"project_id": "A", "team_ids": ["ta"]})
+    b = Candidate("linear:B", "Website", "linear", {"project_id": "B", "team_ids": ["tb"]})
+    rt = _routing_runtime(tmp_path, [a, b])
+    m = dc_replace(meeting, project="Website", project_key="linear:B")
+    assert rt.item_sinks()["linear"]._project_for(m, Notes("t", "t", "s"), ActionItem(id="a1", title="x")) == b
+    rt.close()

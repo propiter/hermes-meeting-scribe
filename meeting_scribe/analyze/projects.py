@@ -52,7 +52,11 @@ def gather_candidates(catalogs: Iterable[object], meeting: Meeting) -> tuple[lis
         name = getattr(catalog, "name", type(catalog).__name__)
         try:
             for cand in catalog.candidates(meeting):  # type: ignore[attr-defined]
-                seen.setdefault(cand.key, cand)
+                prev = seen.get(cand.key)
+                # A learned entry only remembers a key: the real catalog's candidate (with its ``ref``:
+                # project id, team ids, board) must win over it whatever the catalog order (finding 5).
+                if prev is None or (prev.source == "learned" and cand.source != "learned"):
+                    seen[cand.key] = cand
         except Exception as exc:  # any backend failure degrades to "fewer candidates"
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
     return list(seen.values()), errors
@@ -65,6 +69,22 @@ def hints_for(meeting: Meeting) -> list[str]:
 def find_candidate(value: str, candidates: Sequence[Candidate]) -> Optional[Candidate]:
     wanted = _norm(value)
     return next((c for c in candidates if wanted and wanted in (_norm(c.name), _norm(c.key))), None)
+
+
+def route_candidate(name: str, key: Optional[str], candidates: Sequence[Candidate],
+                    sources: Optional[Sequence[str]] = None) -> Optional[Candidate]:
+    """The candidate a SINK should use (review finding 5).
+
+    ``sources`` limits the pool to what the sink understands (Linear needs a ``linear`` candidate
+    for projectId/teamId; Kanban takes ``hermes``/``kanban``). Within it, the resolved ``key`` wins,
+    then a name match — so a Hermes and a Linear project with the same name each route correctly.
+    """
+    pool = [c for c in candidates if sources is None or c.source in sources]
+    if key:
+        exact = next((c for c in pool if c.key == key), None)
+        if exact is not None:
+            return exact
+    return find_candidate(name, pool)
 
 
 class ProjectResolver:
