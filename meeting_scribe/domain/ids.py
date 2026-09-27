@@ -14,7 +14,7 @@ import unicodedata
 
 from .text import fold
 
-_SLUG_MAX = 40
+_SLUG_MAX = 60  # room for "google-meet-<date>-<time>-<code>" (41 chars) plus a few words
 
 
 def short_id() -> str:
@@ -23,10 +23,22 @@ def short_id() -> str:
 
 
 def slugify(text: str, max_len: int = _SLUG_MAX) -> str:
-    """ASCII, hyphenated, bounded slug; ``meeting`` when nothing survives normalisation."""
+    """ASCII, hyphenated, bounded slug; ``meeting`` when nothing survives normalisation.
+
+    Cut on WORD boundaries (a word is a whitespace/punctuation-separated token of the original
+    text, so ``gmj-bcgo-bqf`` counts as one): a meeting code is kept whole or dropped, never
+    truncated mid-token. Only a first word longer than ``max_len`` on its own is hard-cut.
+    """
     norm = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii").lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", norm).strip("-")
-    slug = slug[:max_len].rstrip("-")
+    words = [w for w in (re.sub(r"[^a-z0-9]+", "-", tok).strip("-") for tok in re.split(r"[^\w-]+", norm)) if w]
+    slug = ""
+    for word in words:
+        candidate = f"{slug}-{word}" if slug else word
+        if len(candidate) > max_len:
+            break
+        slug = candidate
+    if not slug and words:
+        slug = words[0][:max_len].rstrip("-")
     return slug or "meeting"
 
 

@@ -14,9 +14,30 @@ def test_short_id_shape_and_uniqueness():
 def test_slugify():
     assert slugify("Reunión de Diseño: ¿SMTP?") == "reunion-de-diseno-smtp"
     assert slugify("   ") == "meeting"
-    assert len(slugify("x" * 200)) <= 40
+    assert len(slugify("x" * 200)) <= 60
     assert not slugify("a" * 39 + " b").endswith("-")
 
+
+REAL_MEET_TITLE = "Google Meet · 2026-09-27 07:45 · gmj-bcgo-bqf"
+
+
+def test_slug_keeps_a_meet_code_whole():
+    """The default Meet title must not be cut in the middle of its meeting code."""
+    assert slugify(REAL_MEET_TITLE) == "google-meet-2026-09-27-07-45-gmj-bcgo-bqf"
+
+
+@pytest.mark.parametrize("max_len", range(12, 41))
+def test_slug_cuts_on_word_boundaries_only(max_len):
+    slug = slugify(REAL_MEET_TITLE, max_len)
+    assert len(slug) <= max_len
+    words = ["google", "meet", "2026-09-27", "07", "45", "gmj-bcgo-bqf"]
+    joined = ["-".join(words[:i]) for i in range(1, len(words) + 1)]
+    assert slug in joined  # a prefix made of whole words: the code is whole or absent
+
+
+def test_slug_hard_cuts_only_a_single_oversized_word():
+    assert slugify("x" * 200, 40) == "x" * 40
+    assert slugify("Planning " + "y" * 80, 40) == "planning"
 
 def test_idempotency_key_format():
     assert idempotency_key("abc12345", "a1b2") == "mtg:abc12345:a1b2"
