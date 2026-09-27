@@ -277,6 +277,11 @@ class RecordingSession:
     async def wait(self) -> None:
         await self._finished.wait()
 
+    @property
+    def finished(self) -> bool:
+        """Teardown complete: tracks closed and the row handed to the pipeline (or failed)."""
+        return self._finished.is_set()
+
     async def _finalize(self, reason: str) -> None:
         async with self._final_lock:
             task, current = self._task, asyncio.current_task()

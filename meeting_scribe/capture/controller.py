@@ -134,7 +134,9 @@ class CaptureManager:
         return self._dispatch(lambda: self._stop(caller), t("capture.stopping", self.lang), self.STOP_TIMEOUT)
 
     def live_meeting_ids(self) -> set[str]:
-        return {s.meeting.id for s in self._sessions.values() if s.meeting is not None and not s.done}
+        # Until teardown FINISHES (not merely begins): the row is still 'recording' while tracks are
+        # flushed, and recover() must not close it as an orphan meanwhile.
+        return {s.meeting.id for s in self._sessions.values() if s.meeting is not None and not s.finished}
 
     def session_for(self, guild_id: int) -> Optional[RecordingSession]:
         s = self._sessions.get(int(guild_id))

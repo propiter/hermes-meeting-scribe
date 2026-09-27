@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import sys
 import types
 from dataclasses import dataclass, field
@@ -182,3 +183,31 @@ async def test_attach_exposes_loop_and_compat(world):
     assert mgr.loop is None and mgr.compat_result is None
     mgr.attach(world["adapter"]._client, world["adapter"])
     assert mgr.loop is asyncio.get_running_loop() and mgr.compat_result.ok
+
+
+async def test_meeting_stays_live_until_teardown_finishes(world):
+    """Found while fixing finding 2: live_meeting_ids() dropped the meeting when teardown BEGAN,
+    so an owner-side recover() could close a recording whose tracks were still being flushed."""
+    mgr = world["mgr"]
+    mgr.attach(world["adapter"]._client, world["adapter"])
+    await in_thread(mgr.start, caller(), None)
+    session = mgr.session_for(100)
+    assert session is not None
+    gate = asyncio.Event()
+    real = session._close_writers
+
+    def slow_close() -> None:
+        deadline = time.monotonic() + 2
+        while not gate.is_set() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        real()
+
+    session._close_writers = slow_close
+    stopping = asyncio.ensure_future(session.stop("manual"))
+    try:
+        await asyncio.sleep(0.02)
+        assert session.done and mgr.live_meeting_ids() == {session.meeting.id}
+    finally:
+        gate.set()
+        await stopping
+    assert mgr.live_meeting_ids() == set()

@@ -325,3 +325,4 @@ def test_timeline_clock_defaults_are_monotonic():
     assert SessionDeps.__dataclass_fields__["clock"].default is time.monotonic
     assert inspect.signature(CaptureManager).parameters["clock"].default is time.monotonic
     assert receiver_mod.TimedBuffer().clock_fn is time.monotonic
+
