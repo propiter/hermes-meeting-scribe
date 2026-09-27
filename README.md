@@ -174,7 +174,7 @@ emptied.
 ### CLI
 
 ```text
-hermes meeting-scribe setup [--non-interactive] [--language CODE] [--model NAME] [--notes-channel ID]
+hermes meeting-scribe setup [--non-interactive] [--language CODE] [--model NAME] [--notes-channel ID|NAME]
                             [--owners ID,ID] [--autojoin | --no-autojoin]
                             [--retention multitrack|mixed|none] [--kanban-mode approve|auto|off]
                             [--linear-mode approve|auto|off] [--linear-team KEY] [--obsidian-vault PATH]
@@ -186,6 +186,12 @@ hermes meeting-scribe reprocess <id> [--from transcribe|analyze|deliver] [--now]
 hermes meeting-scribe export <id> [--format md|json] [--out FILE]
 hermes meeting-scribe config get [KEY]
 hermes meeting-scribe config set KEY VALUE
+hermes meeting-scribe config list [--json] [--group GROUP]   # value + origin (+ resolved channel)
+hermes meeting-scribe config schema --json [--lang en|es]    # machine-readable form description
+hermes meeting-scribe llm show [--json]                      # see "Models and fallbacks"
+hermes meeting-scribe llm set [--provider P] [--model M] [--base-url URL] [--timeout S]
+hermes meeting-scribe llm fallback add|remove|clear|set ...
+hermes meeting-scribe llm test [--json]
 hermes meeting-scribe google connect|status|sync|disconnect   # see "Google Meet"
 ```
 
@@ -314,10 +320,82 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `commands_aliases` | list | `[meet, rec]` | Extra slash-command names routed to /meeting. |
 <!-- config-table:end -->
 
-**Using a different model for analysis.** Meeting analysis runs as the Hermes auxiliary task
-`meeting_scribe`. To send it to a different model than your chat model, configure
-`auxiliary.meeting_scribe.*` in `config.yaml`, or pick a model for "Meeting Scribe" in Desktop's
-auxiliary-model settings.
+`hermes meeting-scribe config list` shows every setting with its effective value and where it comes
+from (`default` / `configured`), plus the channel a name resolved to. `config schema --json` prints
+a versioned description of every setting (group, type, bounds, choices, localized label and help)
+that a settings screen can render without plugin-specific code.
+
+### Where notes are posted
+
+Notes (summary, task index and transcript) go to the first of these that works:
+
+| Meeting | Order |
+|---|---|
+| Discord voice meeting | `delivery_discord_channel` → the voice channel's text chat → automatic → waiting |
+| Google Meet import | `google_meet_discord_channel` → `delivery_discord_channel` → automatic → waiting |
+
+- **Id or name.** Channel settings accept a channel id, `<#id>` or a name (`#meeting-notes` or
+  `meeting-notes`). Names are matched ignoring emoji, case and `-`/`_`/spaces. An ambiguous or
+  unknown name is never guessed: `doctor` and `config list` report it.
+- **Server.** Meet meetings have no server of their own. The plugin uses the server of a channel id
+  you configured, else `delivery_discord_guild` (server id or name), else the bot's only server. If
+  the bot is in several servers and none is set, it does not guess.
+- **Automatic.** The server's system channel (if the bot can post and attach files there), else the
+  first channel named like `delivery_auto_channel_names` (`general`, `meetings`, `meeting-notes`,
+  `notes`, `reuniones`, `notas`) where the bot can post.
+- **Never a DM.** The gateway's home channel is not used: it is often a DM, where nobody else sees
+  the notes and tasks cannot be routed to project channels.
+- **Waiting.** If nothing resolves, the meeting waits (no attempts are used, no time limit).
+  `status` and `doctor` show the command to run; after `config set` of a channel it is posted on
+  its own.
+- **Tasks.** A task with a project goes to a thread in that project's channel (see "Tasks in
+  Discord"), for Meet too. A task without a project goes to `delivery_fallback_channel` if set, else
+  under the notes.
+
+```bash
+hermes meeting-scribe config set google_meet_discord_channel "#meeting-notes"
+hermes meeting-scribe config set delivery_fallback_channel "#backlog"
+hermes meeting-scribe config set delivery_discord_guild "My Team"    # only if the bot is in several servers
+hermes meeting-scribe doctor
+```
+
+### Models and fallbacks
+
+Meeting analysis runs as the Hermes auxiliary task `meeting_scribe`. Its model and fallback chain
+live in Hermes' own config, under `auxiliary.meeting_scribe` — the plugin reads and writes that
+block, so Hermes Desktop's auxiliary-model settings and these commands edit the same thing. By
+default it uses Hermes' main model (`provider: auto`).
+
+```bash
+hermes meeting-scribe llm show                         # provider, model, fallbacks, timeout, origin
+hermes meeting-scribe llm set --provider <provider> --model <model>
+hermes meeting-scribe llm fallback add <provider>:<model>
+hermes meeting-scribe llm fallback add <provider>:<model> --position 1
+hermes meeting-scribe llm fallback remove 2            # by position, provider or provider:model
+hermes meeting-scribe llm fallback clear
+hermes meeting-scribe llm test                         # tiny call to every link; no secrets printed
+```
+
+This writes, for example:
+
+```yaml
+auxiliary:
+  meeting_scribe:
+    provider: <provider>
+    model: <model>
+    fallback_chain:
+      - {provider: <provider-2>, model: <model-2>}
+      - {provider: <provider-3>, model: <model-3>}
+```
+
+Hermes walks the chain on rate limits, connection errors and payment errors (402), not when a call
+hangs. For that the plugin has its own limit, `analysis_timeout_seconds` (default 600): a call that
+does not return fails the attempt, which is retried with backoff. The stuck call is abandoned in the
+background (Python cannot stop it) and may still finish and use tokens. `analysis_max_tokens`
+(default 8192) is sent with every call so the provider does not reserve the whole context window,
+which is what turns a low balance into "402 … can only afford N". A reply that is not valid JSON
+(usually cut off) is retried once right away with a stricter instruction. `doctor` shows the chain
+and warns when there is no fallback.
 
 ## Tasks in Discord
 
@@ -425,12 +503,11 @@ hermes meeting-scribe google disconnect
   https://myaccount.google.com/permissions to remove the access by hand.
 - A conference is imported once, ever (unique on its Meet record name), even across restarts or two
   processes. A transcript still being generated (`ENDED`) is retried on the next poll.
-- Notes go to `google_meet_discord_channel`, else `delivery_discord_channel`, else the gateway's
-  home channel. Falling back to the home channel is allowed but flagged: `setup`, `config set` and
-  `doctor` warn when the import is on without a notes channel, since the full transcript would be
-  posted there. Channel ids must be numeric (`<#id>` is accepted and unwrapped); other values are
-  rejected by `config set` and reported by `doctor`. With no channel at all, the meeting is still
-  processed (CLI, agent tools, files, Kanban) and the Discord delivery is skipped.
+- Notes go to `google_meet_discord_channel`, else `delivery_discord_channel`, else an automatic
+  channel of the server (never a DM); see "Where notes are posted". Channels can be given by id or
+  name. With no usable channel the meeting waits (it is still processed: CLI, agent tools, files,
+  Kanban) and is posted as soon as you set one. `setup`, `config set` and `doctor` warn when the
+  import is on without a channel, since the full transcript is posted with the notes.
 - Meet participants are not Discord users: tasks show their name, without mentions or DMs.
 - `invalid_grant` (revoked or expired access) shows as "disconnected" in `google status` and
   `doctor`; run `connect` again.

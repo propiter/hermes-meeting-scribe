@@ -15,14 +15,42 @@ All notable changes to this project are documented here. The format follows
   New `google status|sync|disconnect` commands, an optional `setup` step and a `google_meet` doctor
   check. A leased poller (`google_meet_poll_minutes`) runs in the gateway only; conferences are
   imported once ever and only those ending after `connect` unless you backfill with `sync --days`.
-  Notes go to `google_meet_discord_channel` (then `delivery_discord_channel`, then home).
+  Notes go to `google_meet_discord_channel` (then `delivery_discord_channel`, then an automatic
+  channel of the server).
 - **Full transcript in Discord** (`delivery_discord_transcript`, default on): every meeting's
   transcript is attached as `transcript-<date>-<slug>.md` after the summary, once, split into parts
   above 8 MB, with a notice when the bot cannot attach files.
 - Schema v4: meeting `source`/`external_id` (unique), a key/value status table and named leases.
+- **Where notes are posted**: channel settings accept an id, `<#id>` or a name (`#meeting-notes`),
+  resolved in the server at delivery time; ambiguous or unknown names are reported, never guessed.
+  Without a channel, notes go to the server's system channel or the first channel named like
+  `delivery_auto_channel_names` (`general`, `meetings`, `meeting-notes`, `notes`, `reuniones`,
+  `notas`). New `delivery_discord_guild` picks the server for Meet meetings when the bot is in
+  several. With nothing usable the meeting waits (no attempts used, no time limit), `status` and
+  `doctor` show the command to run, and `config set` of a channel posts it.
+- **Tasks without a project** go to `delivery_fallback_channel` (id or name) when set, for Discord
+  and Meet meetings; Meet tasks with a project are routed to that project's channel in the chosen
+  server.
+- **Models and fallbacks from the plugin**: `hermes meeting-scribe llm show|set|fallback
+  add|remove|clear|set|test` read and write Hermes' `auxiliary.meeting_scribe` block (the one its
+  auxiliary router uses); `doctor` shows the chain and warns without a fallback. The auxiliary task
+  is registered with neutral defaults (Hermes' main model).
+- **Analysis robustness**: `analysis_timeout_seconds` (default 600) is a wall clock of the plugin's
+  own — a call that never returns fails the attempt into the normal backoff; `analysis_max_tokens`
+  (default 8192) is always sent; a non-JSON reply is retried once with a stricter instruction.
+- **Configuration schema for UIs**: settings have a group and localized label/help (en/es);
+  `config list` shows value, origin and the channel a name resolved to; `config schema --json` is a
+  versioned form description including the LLM settings. New settings `delivery_transcript_max_mb`
+  and `pipeline_max_attempts`. `plugin.yaml` and the README tables are generated from the settings.
 
 ### Changed
 
+- **Notes are never posted to Hermes' home channel any more**: it is often a DM with the owner, where
+  nobody else sees them and tasks cannot be routed. A channel given by id that turns out to be a DM
+  is skipped too.
+- Channel settings no longer reject names (they are resolved at runtime); user and role mentions
+  are still rejected.
+- A Meet meeting without a channel now waits for one instead of being skipped in Discord.
 - Speakers that are not Discord users (imported from Meet) are never mentioned or DMed; their name
   is shown instead.
 - The worker and the Meet poller start when the gateway loads the plugin, not only when Discord
@@ -32,6 +60,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Folder and transcript file names are cut on word boundaries, so a Meet code is kept whole or left
+  out (never `…-gmj-bcgo-bq`); the slug limit went from 40 to 60 characters.
 - Meet import: one failing conference (403/404/5xx, malformed data) no longer blocks the others; it
   is given up after 5 permanent failures (shown by `doctor`). No exception escapes a sync, so the
   status is always updated and `google sync` never prints a traceback. Conferences without a
@@ -50,8 +80,7 @@ All notable changes to this project are documented here. The format follows
 - Meet display names are escaped in Discord (no mentions, no Markdown injection).
 - Import crash leftovers are cleaned up and rows without a job are re-queued while running; the
   poller stops promptly and releases its lease from its own thread.
-- Discord channel ids are validated (`config set` rejects non-numeric ids, `doctor` reports them),
-  and `setup`, `config set` and `doctor` warn when the Meet import has no notes channel.
+- `setup`, `config set` and `doctor` warn when the Meet import has no notes channel.
 - Docs: the Meet API only lists conferences organised by the connected account.
 
 ## [0.2.0] - 2026-09-27

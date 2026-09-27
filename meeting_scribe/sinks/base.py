@@ -54,7 +54,7 @@ class DiscordNotesSink(Protocol):
     """Interface the Discord notes sink satisfies (``discord_ui/sink.py``).
 
     ``deliver`` posts TL;DR/decisions/questions/action items grouped by person (with mentions)
-    in a thread under ``delivery_discord_channel`` (fallback: voice text chat → home channel) and
+    in a thread under ``delivery_discord_channel`` (fallback: voice text chat → automatic channel, DESIGN §19) and
     records ``(sink="discord", key="mtg:<id>:notes")`` with the message/thread URL so reprocess
     edits instead of re-posting. It must run the coroutine on the gateway loop and return a
     ``SinkResult`` synchronously (the pipeline thread is not an event loop).

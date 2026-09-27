@@ -179,7 +179,7 @@ que se haya vaciado.
 ### CLI
 
 ```text
-hermes meeting-scribe setup [--non-interactive] [--language CODIGO] [--model NOMBRE] [--notes-channel ID]
+hermes meeting-scribe setup [--non-interactive] [--language CODIGO] [--model NOMBRE] [--notes-channel ID|NOMBRE]
                             [--owners ID,ID] [--autojoin | --no-autojoin]
                             [--retention multitrack|mixed|none] [--kanban-mode approve|auto|off]
                             [--linear-mode approve|auto|off] [--linear-team CLAVE] [--obsidian-vault RUTA]
@@ -191,6 +191,12 @@ hermes meeting-scribe reprocess <id> [--from transcribe|analyze|deliver] [--now]
 hermes meeting-scribe export <id> [--format md|json] [--out ARCHIVO]
 hermes meeting-scribe config get [CLAVE]
 hermes meeting-scribe config set CLAVE VALOR
+hermes meeting-scribe config list [--json] [--group GRUPO]   # valor + origen (+ canal resuelto)
+hermes meeting-scribe config schema --json [--lang en|es]    # descripción del formulario para UIs
+hermes meeting-scribe llm show [--json]                      # ver "Modelos y respaldos"
+hermes meeting-scribe llm set [--provider P] [--model M] [--base-url URL] [--timeout S]
+hermes meeting-scribe llm fallback add|remove|clear|set ...
+hermes meeting-scribe llm test [--json]
 hermes meeting-scribe google connect|status|sync|disconnect   # ver "Google Meet"
 ```
 
@@ -321,10 +327,81 @@ advertencia.
 | `commands_aliases` | list | `[meet, rec]` | Nombres extra de comando que van a /meeting. |
 <!-- config-table:end -->
 
-**Usar otro modelo para el análisis.** El análisis de reuniones corre como la tarea auxiliar de
-Hermes `meeting_scribe`. Para enviarlo a un modelo distinto del que usas en el chat, configura
-`auxiliary.meeting_scribe.*` en `config.yaml`, o elige un modelo para "Meeting Scribe" en los ajustes
-de modelos auxiliares de Desktop.
+`hermes meeting-scribe config list` muestra cada ajuste con su valor efectivo y de dónde sale
+(`default` / `configured`), y el canal al que se resolvió un nombre. `config schema --json` imprime
+una descripción versionada de todos los ajustes (grupo, tipo, límites, opciones, etiqueta y ayuda
+traducidas) que una pantalla de ajustes puede dibujar sin código específico del plugin.
+
+### Dónde se publica
+
+Las notas (resumen, índice de tareas y transcripción) van al primero de estos que funcione:
+
+| Reunión | Orden |
+|---|---|
+| Reunión de voz de Discord | `delivery_discord_channel` → chat de texto del canal de voz → automático → en espera |
+| Importada de Google Meet | `google_meet_discord_channel` → `delivery_discord_channel` → automático → en espera |
+
+- **Id o nombre.** Los ajustes de canal aceptan un id, `<#id>` o un nombre (`#notas-reunion` o
+  `notas-reunion`). El nombre se compara sin emojis, mayúsculas ni `-`/`_`/espacios. Un nombre ambiguo
+  o que no existe nunca se adivina: `doctor` y `config list` lo avisan.
+- **Servidor.** Las reuniones de Meet no tienen servidor propio. Se usa el servidor de un id de canal
+  configurado, si no `delivery_discord_guild` (id o nombre del servidor), si no el único servidor del
+  bot. Si el bot está en varios y no hay nada configurado, no adivina.
+- **Automático.** El canal de sistema del servidor (si el bot puede escribir y adjuntar archivos
+  allí); si no, el primer canal llamado como `delivery_auto_channel_names` (`general`, `meetings`,
+  `meeting-notes`, `notes`, `reuniones`, `notas`) donde el bot pueda escribir.
+- **Nunca un DM.** No se usa el canal home del gateway: suele ser un DM, donde nadie más ve las notas
+  y las tareas no se pueden enviar a los canales de proyecto.
+- **En espera.** Si nada se resuelve, la reunión espera (sin gastar intentos ni límite de tiempo).
+  `status` y `doctor` muestran el comando a ejecutar; tras `config set` de un canal se publica sola.
+- **Tareas.** Una tarea con proyecto va a un hilo del canal de ese proyecto (ver "Tareas en
+  Discord"), también en Meet. Una tarea sin proyecto va a `delivery_fallback_channel` si está
+  definido; si no, bajo las notas.
+
+```bash
+hermes meeting-scribe config set google_meet_discord_channel "#notas-reunion"
+hermes meeting-scribe config set delivery_fallback_channel "#pendientes"
+hermes meeting-scribe config set delivery_discord_guild "Mi Equipo"   # solo si el bot está en varios servidores
+hermes meeting-scribe doctor
+```
+
+### Modelos y respaldos
+
+El análisis de reuniones corre como la tarea auxiliar de Hermes `meeting_scribe`. Su modelo y su
+cadena de respaldo viven en la configuración de Hermes, en `auxiliary.meeting_scribe`: el plugin lee
+y escribe ese bloque, así que los ajustes de modelos auxiliares de Hermes Desktop y estos comandos
+editan lo mismo. Por defecto usa el modelo principal de Hermes (`provider: auto`).
+
+```bash
+hermes meeting-scribe llm show                         # proveedor, modelo, respaldos, timeout, origen
+hermes meeting-scribe llm set --provider <proveedor> --model <modelo>
+hermes meeting-scribe llm fallback add <proveedor>:<modelo>
+hermes meeting-scribe llm fallback add <proveedor>:<modelo> --position 1
+hermes meeting-scribe llm fallback remove 2            # por posición, proveedor o proveedor:modelo
+hermes meeting-scribe llm fallback clear
+hermes meeting-scribe llm test                         # llamada mínima a cada eslabón; sin secretos
+```
+
+Esto escribe, por ejemplo:
+
+```yaml
+auxiliary:
+  meeting_scribe:
+    provider: <proveedor>
+    model: <modelo>
+    fallback_chain:
+      - {provider: <proveedor-2>, model: <modelo-2>}
+      - {provider: <proveedor-3>, model: <modelo-3>}
+```
+
+Hermes recorre la cadena ante límites de uso, errores de conexión y de pago (402), no cuando una
+llamada se cuelga. Para eso el plugin tiene su propio límite, `analysis_timeout_seconds` (600 por
+defecto): una llamada que no vuelve hace fallar el intento, que se reintenta con espera. La llamada
+colgada se abandona en segundo plano (Python no puede detenerla) y aún puede terminar y gastar
+tokens. `analysis_max_tokens` (8192 por defecto) se envía en cada llamada para que el proveedor no
+reserve toda la ventana de contexto, que es lo que convierte un saldo bajo en "402 … can only afford
+N". Una respuesta que no es JSON válido (normalmente cortada) se reintenta una vez al momento con una
+instrucción más estricta. `doctor` muestra la cadena y avisa si no hay respaldo.
 
 ## Tareas en Discord
 
@@ -440,12 +517,11 @@ hermes meeting-scribe google disconnect
   reinicios o dos procesos. Si la transcripción aún se está generando (`ENDED`) se reintenta en el
   siguiente sondeo.
 - Las notas van a `google_meet_discord_channel`; si está vacío, a `delivery_discord_channel`; si no,
-  al canal home del gateway. Ese último recurso está permitido pero se avisa: `setup`, `config set` y
-  `doctor` advierten si la importación está activa sin canal de notas, porque la transcripción
-  completa se publicaría allí. Los ids de canal deben ser numéricos (`<#id>` se acepta y se
-  desenvuelve); otros valores los rechaza `config set` y los señala `doctor`. Sin ningún canal, la
-  reunión se procesa igual (CLI, herramientas del agente, archivos, Kanban) y la entrega en Discord
-  se omite.
+  a un canal automático del servidor (nunca un DM); ver "Dónde se publica". Los canales se pueden dar
+  por id o por nombre. Sin canal utilizable la reunión queda en espera (se procesa igual: CLI,
+  herramientas del agente, archivos, Kanban) y se publica en cuanto configuras uno. `setup`,
+  `config set` y `doctor` avisan si la importación está activa sin canal, porque la transcripción
+  completa se publica con las notas.
 - Los participantes de Meet no son usuarios de Discord: las tareas muestran su nombre, sin menciones
   ni DMs.
 - `invalid_grant` (acceso revocado o caducado) aparece como "desconectado" en `google status` y

@@ -24,7 +24,7 @@ Ship a native **Meetings** page inside Hermes Desktop as part of this public plu
 - Detail sections: summary, decisions, open questions, speaker-attributed timestamped transcript, tasks and processing status.
 - Tasks show assignee, project, citations and independent Kanban/Linear delivery states. Link to the real destination; do not build a second Kanban.
 - Explicit actions for approval, dismissal, project correction and reprocessing, reusing the domain services and delivery ledger.
-- Visual settings for existing configuration, with a single source of truth rather than separate UI settings.
+- Visual settings for existing configuration, with a single source of truth rather than separate UI settings. The form is drawn from `hermes meeting-scribe config schema --json` (versioned: groups, fields, kind, bounds, choices, localized label/help, `storage` + `path`), current values and origins from `config list --json`, and the **Models and fallbacks** section from `llm show --json` (written with the `llm set` / `llm fallback` operations, i.e. Hermes' `auxiliary.meeting_scribe`). Channel fields (`format: discord_channel`) accept id or name and show the channel a name resolved to; the **Where notes are posted** section surfaces meetings waiting for a channel (`status --json` → `waiting_destination`). The backend API should expose these same payloads rather than re-describing the settings.
 - Later: authenticated audio playback with timestamp seeking and original multitrack download, conditional on a successful compatibility spike.
 
 ### Verified extension mechanisms

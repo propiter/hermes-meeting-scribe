@@ -187,7 +187,7 @@ idempotent (keys: `mtg:<meeting_id>:<item_id>`).
   frontmatter (Obsidian-compatible).
 - **discord** (`delivery_discord_enabled`, default true): summary + task index
   in `delivery_discord_channel` (default: the voice channel's text chat →
-  Hermes home channel fallback); each task as its own message, with its own
+  an automatic channel of the server, never a DM, §19); each task as its own message, with its own
   buttons, in a thread of its project's channel; assignee DMs. See §16 (the
   0.1 "all tasks, then all button rows" layout is gone).
 - **Buttons** (persistent `discord.ui.DynamicItem`, survive restarts):
@@ -401,7 +401,7 @@ press Linear/Dismiss/Project on anybody's task. The plugin is public and runs on
 so nothing below depends on any server's channel names.
 
 ### Layout
-- **Meeting chat** (`delivery_discord_channel` → voice text chat → home): the summary parts
+- **Meeting chat** (`delivery_discord_channel` → voice text chat → automatic channel, §19): the summary parts
   (`notes` pointer) and, last, the **task index** (`index` pointer): counts per project with a link to
   the thread holding them (⚠️ when a group has uncertain tasks, ⛔ when a channel lacked permissions),
   counts per person, closed DMs, and ONE `📋 My tasks` button (`mscribe:mine:<meeting>:all`).
@@ -569,8 +569,8 @@ releases the lease. The poller never runs on the Discord asyncio loop.
   "belongs to" message; imported names are shown in bold instead. Owners are Discord ids, so Meet
   tasks are never owner tasks (no Kanban auto-approve for them).
 - **Notes channel**: Meet meetings use `google_meet_discord_channel` → `delivery_discord_channel` →
-  home channel; non-numeric ids are ignored. With none, the Discord sink returns *ok + skipped*
-  (the job does not loop). The guild for project channels is taken from the notes channel.
+  automatic channel (superseded by §19: ids or names, no home channel, waits instead of skipping).
+  The guild for project channels is the one chosen for the notes (§19).
 
 ### 17.3 Transcript attachment (all sources)
 
@@ -604,4 +604,105 @@ the delivery.
 - The transcript attachment makes transcripts visible to everyone in the notes channel; it is on by
   default by design (documented in README and the catalog disclosure).
 - Discord's per-file limit can be lower on some servers than the 8 MB we assume only if Discord
-  changes it again; the split size is a single constant (`transcript_file.MAX_BYTES`).
+  changes it again; the split size is `delivery_transcript_max_mb` (default 8).
+
+## 18. Models, fallbacks and analysis robustness (unreleased)
+
+Production showed three failures in one analysis: the provider ran out of credit (`402 … requested up
+to 131072 tokens, can only afford N`), Hermes retried and the call hung ~30 minutes although the plugin
+passed `timeout=600`, and the eventual answer was truncated (`LLM response is not JSON`).
+
+- **One source of truth for models**: Hermes' `auxiliary.meeting_scribe` block, the same one its
+  auxiliary router reads per call (`_get_auxiliary_task_config`: plugin defaults layered under the
+  user's values). `llm_config` never copies it: `llm show` reads it (with the origin of each value:
+  `hermes-config` or `plugin-default`, and what `auto` resolves to — Hermes' main model); `llm set`
+  and `llm fallback add|remove|clear|set` write it with Hermes' own writer (`save_config(...,
+  merge_existing=True)` under the plugin-state lock, after a fail-closed raw read; managed installs
+  and administrator-managed keys are refused); `llm test` probes each link with a 5-token call
+  through `resolve_provider_client` and redacts the output. `hermes config set auxiliary.…` also
+  works but warns "not a recognized config key" because Hermes' `DEFAULT_CONFIG` does not list plugin
+  tasks; the plugin's writer avoids that confusion. Alternative discarded: storing models in the
+  plugin's own settings and passing `provider=`/`model=` overrides — that needs
+  `plugins.entries.meeting-scribe.llm.allow_*_override` trust flags and bypasses Hermes' fallback
+  chain, so there would be two places to configure one thing.
+- **Defaults**: `register_auxiliary_task(defaults={"provider": "auto", "model": "", "timeout": 600})`
+  (bare registration on hosts without `defaults=`). No provider is imposed.
+- **Fallbacks** jump on 402 / rate limit / connection errors only (Hermes' behaviour); a HANG is not
+  an error for Hermes. Hence:
+- **Wall clock** (`analysis_timeout_seconds`, default 600): the call runs in a daemon thread
+  (`run_with_deadline`, contextvars copied); when it does not return in time the attempt fails with
+  `LlmTimeout` and enters the normal backoff. The thread cannot be killed: it is abandoned and its
+  result discarded (it may still finish and cost tokens). No retry inside the same attempt after a
+  timeout.
+- **`analysis_max_tokens`** (default 8192) is always sent so providers do not reserve the whole
+  window (the cause of the 402 with a low balance).
+- **Non-JSON reply**: one immediate retry within the attempt, with an appended instruction to
+  answer with one complete JSON object; the second failure counts as a failed attempt. The existing
+  schema-rejection → `json_mode` retry is unchanged (different failure).
+- `doctor` shows `primary → fallback 1 → …` and warns when there is no fallback.
+
+## 19. Where notes are posted (unreleased)
+
+Production: a Meet meeting with no channel configured was posted to the gateway's home channel, which
+was a DM with the owner — no server, so no project candidates, tasks were not routed ("This message
+does not have guild info attached") and nobody else saw it.
+
+- **Order** (`discord_ui/destination.py`, resolved on the gateway loop per delivery):
+  Meet: `google_meet_discord_channel` → `delivery_discord_channel` → AUTOMATIC → PENDING.
+  Discord: `delivery_discord_channel` → voice text chat → AUTOMATIC → PENDING.
+- **Id or name**: channel settings accept `123`, `<#123>`, `#name` or `name` (`config set` stores
+  the id or the bare name; user/role mentions are rejected). Names are compared after removing
+  decoration (emoji, `#`, case, `-`/`_`/spaces). A name matching several text channels, a non-text
+  channel or nothing is reported (`doctor`, `config list`) and skipped — never guessed.
+- **Server**: the meeting's own (Discord); for imported meetings the server of a configured channel
+  id, else `delivery_discord_guild` (id or name), else the bot's only server; with several servers
+  and nothing configured nothing is guessed. A name unique across all servers also fixes the server.
+- **AUTOMATIC**: the server's `system_channel` when the bot can send AND attach files there (the
+  transcript), else the first text channel whose clean name is in `delivery_auto_channel_names`
+  (list order, then position) where it can send. Default names: general, meetings, meeting-notes,
+  notes, reuniones, notas.
+- **Never a DM**: the home-channel fallback is REMOVED, not just filtered. It was only useful when
+  it was a server channel, and then the automatic channel or an explicit setting covers it; keeping
+  it would keep the surprising "posted where only I see it" failure and a second implicit rule.
+  As defence in depth, a resolved channel without a `guild` is skipped when posting.
+- **PENDING**: no resolvable channel → the sink returns `deferred + waiting`; the stage raises
+  `StageDeferred(waiting=True)`; the runner re-queues every 2 minutes WITHOUT using attempts and
+  WITHOUT the 6 h cap of the Discord-connecting deferral (a missing channel is a configuration
+  problem: dropping the notes would be worse than waiting). The reason (with the exact
+  `config set` command) is stored under `pipeline.waiting_destination.<id>` and shown by `status`
+  and `doctor`; `config set` of a destination key re-queues waiting deliveries immediately. A
+  meeting already posted keeps being edited where it is.
+- **Tasks**: with a project → the project channel (routing of §16, candidates from the server chosen
+  above, so Meet tasks route too); without → `delivery_fallback_channel` (id or name; anchor +
+  thread like a project channel), else the notes chat as before.
+- The last resolution per source is stored (`discord.destination_report.<source>`) so `doctor` and
+  `config list` — which run in other processes without a Discord connection — can show which
+  server/channel a name resolved to.
+
+## 20. Configuration schema for UIs (unreleased)
+
+`config.SPEC` stays the single source of truth; each `Opt` now has a `group` (capture,
+transcription, analysis, llm, delivery, projects, google_meet, integrations, privacy, pipeline, ui)
+and a `format` (`discord_channel`, `discord_guild`). Labels and help live in the i18n catalogs
+(`cfg.<key>.label/help`, `cfg.group.<group>`), en and es; tests require both for every key.
+`plugin.yaml` (`label`, `description`, `group`, `format`, `minimum`, `maximum`; unknown keys are
+ignored by Hermes' form) and the README tables are generated by `scripts/gen_manifest.py`; tests fail
+on drift.
+
+- `config list [--json] [--group G]`: effective value + origin (`default` | `configured` |
+  `invalid`) + `resolved` (the channel/server a name resolved to, from §19's report), plus the LLM
+  view.
+- `config schema --json [--lang]`: `{"version": 1, "plugin", "language", "groups": [{key, label}],
+  "fields": [{key, type, group, label, help, default, storage, path, choices?, minimum?, maximum?,
+  format?}]}`. `storage` is `plugin` (`plugins.entries.meeting-scribe.settings.<key>`) or `hermes`
+  (the virtual `llm` group: `llm_provider`, `llm_model`, `llm_base_url`, `llm_fallback_chain` at
+  `auxiliary.meeting_scribe.*`, each with the `cli` command that edits it). Adding fields is
+  compatible; `version` changes only for incompatible shape changes.
+
+Fixed on purpose (not settings): Discord limits (2000/4096 chars, 25 select options, 100-char
+names), button id templates, lease/heartbeat/reclaim timings, the retry backoff curve
+(60/300/900 s; only the attempt count is a setting), Meet's 30-day retention and its 5-failure
+give-up, whisper hallucination filters and merge gaps, status emojis and thread names (i18n text,
+not configuration), fuzzy-matching internals (the user-facing thresholds are settings). Each is
+either imposed by an external system or an internal safety margin a user cannot tune meaningfully.
+
