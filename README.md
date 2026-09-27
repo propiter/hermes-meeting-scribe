@@ -303,8 +303,8 @@ If your server puts decorative *words* in front of channel names, list them in
 
 When the match is weak, or two channels score about the same, the task is still posted in the most
 likely channel, marked **⚠️ project not certain — confirm with 📁**. Pressing 📁 moves the task: it is
-re-posted in the right channel's thread, the old message is deleted, and the correction is
-remembered for next time. If the bot lacks View Channel, Send Messages or Create Public Threads in
+re-posted in the right channel's thread and the old message is deleted. When an owner moves a task,
+the correction is also remembered for future meetings; an assignee's move only affects their task. If the bot lacks View Channel, Send Messages or Create Public Threads in
 the matched channel, the task stays in the meeting chat and the index says why.
 
 Reprocessing a meeting edits these messages in place instead of posting new ones.

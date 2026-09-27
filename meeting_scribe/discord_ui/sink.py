@@ -46,6 +46,7 @@ class DiscordNotesSink:
         self._options = options
         self._views = views
         self._timeout = timeout
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def enabled(self) -> bool:
         return self._settings().delivery_discord_enabled
@@ -80,8 +81,16 @@ class DiscordNotesSink:
                 out.append(str(cid))
         return out
 
+    def _lock(self, meeting_id: str) -> asyncio.Lock:
+        """One publication at a time per meeting (delivery retry, refresh, move): no racing duplicates."""
+        lock = self._locks.get(meeting_id)
+        if lock is None:
+            lock = self._locks[meeting_id] = asyncio.Lock()
+        return lock
+
     async def publish(self, meeting: Meeting, notes: Notes) -> str:
-        return await self._publisher(meeting).publish(meeting, notes, send_dms=True)
+        async with self._lock(meeting.id):
+            return await self._publisher(meeting).publish(meeting, notes, send_dms=True)
 
     async def _load(self, meeting_id: str) -> Optional[tuple[Meeting, Notes]]:
         svc = self._service()
@@ -100,12 +109,20 @@ class DiscordNotesSink:
 
     async def refresh(self, meeting_id: str) -> None:
         """Re-render everything of a meeting in place (edits; nothing new is DMed)."""
+        async with self._lock(meeting_id):
+            await self._refresh(meeting_id)
+
+    async def _refresh(self, meeting_id: str) -> None:
         loaded = await self._load(meeting_id)
         if loaded is not None:
             await self._publisher(loaded[0]).publish(*loaded, send_dms=False)
 
     async def refresh_item(self, meeting_id: str, item_id: str) -> None:
         """After a button action: that task's message, its assignee's DM panel and the index counts."""
+        async with self._lock(meeting_id):
+            await self._refresh_item(meeting_id, item_id)
+
+    async def _refresh_item(self, meeting_id: str, item_id: str) -> None:
         got = await self.board(meeting_id)
         if got is None:
             return
@@ -113,7 +130,7 @@ class DiscordNotesSink:
         view = board.view(item_id)
         ptrs = Pointers(pub.repo, meeting_id)
         if view is None or not await pub.edit_task(board.meeting, view, ptrs):
-            await self.refresh(meeting_id)
+            await self._refresh(meeting_id)
             return
         if view.item.owner_speaker_id and pub.settings.delivery_dm_assignees:
             await pub.dm(board, view.item.owner_speaker_id, ptrs, send=False)
@@ -134,8 +151,12 @@ class DiscordNotesSink:
             raise LookupError(meeting_id)
         return move_options(got[1], item_id, self._settings().channel_name_ignore_prefixes)
 
-    async def move_item(self, meeting_id: str, item_id: str, channel_id: str) -> str:
-        """📁: file the task under ``channel_id`` (learned), re-post it there, delete the old message."""
+    async def move_item(self, meeting_id: str, item_id: str, channel_id: str, *, learn: bool = True) -> str:
+        """📁: pin the task to ``channel_id`` (``learn``: owners teach routing), re-post it there, drop the old one."""
+        async with self._lock(meeting_id):
+            return await self._move_item(meeting_id, item_id, channel_id, learn)
+
+    async def _move_item(self, meeting_id: str, item_id: str, channel_id: str, learn: bool) -> str:
         got = await self.board(meeting_id)
         if got is None:
             raise LookupError(meeting_id)
@@ -144,6 +165,6 @@ class DiscordNotesSink:
         if chan is None or not chan.can_post:
             raise LookupError(f"channel {channel_id} is not available")
         name = clean_channel_name(chan.name, self._settings().channel_name_ignore_prefixes) or chan.name
-        await asyncio.to_thread(self._service().move_item, meeting_id, item_id, chan.id, name)
-        await self.refresh(meeting_id)
+        await asyncio.to_thread(lambda: self._service().move_item(meeting_id, item_id, chan.id, name, learn=learn))
+        await self._refresh(meeting_id)
         return f"<#{chan.id}>"

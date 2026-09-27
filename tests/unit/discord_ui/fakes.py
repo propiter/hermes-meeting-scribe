@@ -161,10 +161,12 @@ class FakeAdapter:
 class FakeResponse:
     def __init__(self) -> None:
         self.deferred = False
+        self.defers: list[dict] = []
         self.sent: list[dict] = []
 
     async def defer(self, **kw: Any) -> None:
         self.deferred = True
+        self.defers.append(kw)
 
     async def send_message(self, content: str = "", **kw: Any) -> None:
         self.sent.append({"content": content, **kw})

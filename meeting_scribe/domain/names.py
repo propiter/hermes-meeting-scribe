@@ -107,8 +107,13 @@ def similarity(spoken: str, channel_name: str, *, ignore_prefixes: Sequence[str]
     a, b = fold(spoken), fold(clean_channel_name(channel_name, ignore_prefixes))
     if not a or not b:
         return 0.0
+    if a == b:
+        return 1.0
+    ta = a.split()
+    if len(ta) == 1 and len(ta[0]) < MIN_TOKEN_LEN:
+        return 0.0  # "dev", "ux", "api": too ambiguous for fuzzy matching; only exact names count
     best = _ratio(a, b)
-    ta, tb = a.split(), b.split()
+    tb = b.split()
     if len(ta) != len(tb):
         short, long = (ta, tb) if len(ta) < len(tb) else (tb, ta)
         best = max(best, _window_score(short, long))

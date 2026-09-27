@@ -27,9 +27,11 @@ All notable changes to this project are documented here. The format follows
   fail the delivery.
 - **📁 Move** re-posts a task in another channel's thread, deletes the old message and learns the
   mapping. Uncertain matches are posted in the most probable channel with a ⚠️ warning.
+- A 📁 move by an assignee pins only that task; an owner's move also teaches routing. Moves survive
+  re-analysis.
 - New settings: `delivery_project_threads`, `delivery_dm_assignees`, `project_channels`,
   `project_match_min_score`, `channel_name_ignore_prefixes`.
-- Schema v3: learned project → channel map.
+- Schema v3: learned project → channel map and per-task overrides.
 
 ### Fixed
 

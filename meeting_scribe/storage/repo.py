@@ -71,6 +71,9 @@ INSERT OR IGNORE INTO item_sinks (meeting_id, item_id, sink, status, updated_at)
 _V3 = """
 CREATE TABLE project_channels (
   project TEXT PRIMARY KEY, channel_id TEXT NOT NULL, updated_at REAL NOT NULL);
+CREATE TABLE item_overrides (
+  meeting_id TEXT NOT NULL, item_id TEXT NOT NULL, project TEXT, project_key TEXT, updated_at REAL NOT NULL,
+  PRIMARY KEY (meeting_id, item_id));
 """
 _MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3)
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -222,16 +225,29 @@ class Repository(JobsMixin, DeliveriesMixin):
                           (meeting_id, a.id, pos, a.status.value, json.dumps(a.to_dict(), ensure_ascii=False))))
         self._tx(stmts)
 
+    _ITEM_SELECT = ("SELECT a.*, o.project AS o_project, o.project_key AS o_key FROM action_items a"
+                    " LEFT JOIN item_overrides o ON o.meeting_id=a.meeting_id AND o.item_id=a.id")
+
     def _item(self, row: sqlite3.Row) -> ActionItem:
-        return ActionItem.from_dict({**json.loads(row["data"]), "status": row["status"]})
+        data = {**json.loads(row["data"]), "status": row["status"]}
+        if row["o_key"]:  # a human 📁 move beats whatever the (re-)analysis said
+            data.update(project=row["o_project"], project_key=row["o_key"], project_confidence=1.0)
+        return ActionItem.from_dict(data)
 
     def list_action_items(self, meeting_id: str) -> list[ActionItem]:
-        rows = self._x("SELECT * FROM action_items WHERE meeting_id=? ORDER BY position", (meeting_id,))
+        rows = self._x(f"{self._ITEM_SELECT} WHERE a.meeting_id=? ORDER BY a.position", (meeting_id,))
         return [self._item(r) for r in rows.fetchall()]
 
     def get_action_item(self, meeting_id: str, item_id: str) -> Optional[ActionItem]:
-        row = self._x("SELECT * FROM action_items WHERE meeting_id=? AND id=?", (meeting_id, item_id)).fetchone()
+        row = self._x(f"{self._ITEM_SELECT} WHERE a.meeting_id=? AND a.id=?", (meeting_id, item_id)).fetchone()
         return self._item(row) if row else None
+
+    def set_item_override(self, meeting_id: str, item_id: str, *, project: str, project_key: str) -> None:
+        """Pin one task to a project (📁 move); survives re-analysis of the meeting."""
+        self._x("INSERT INTO item_overrides (meeting_id, item_id, project, project_key, updated_at) VALUES (?,?,?,?,?)"
+                " ON CONFLICT(meeting_id, item_id) DO UPDATE SET project=excluded.project,"
+                " project_key=excluded.project_key, updated_at=excluded.updated_at",
+                (meeting_id, item_id, project, project_key, time.time()))
 
     def update_action_item(self, meeting_id: str, item: ActionItem) -> None:
         """Replace an item's data (e.g. a 📁 move) without touching its human decision (status)."""

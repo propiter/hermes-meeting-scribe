@@ -80,3 +80,10 @@ def test_match_name_flags_close_candidates_as_uncertain():
 
 def test_ignore_prefixes_reach_the_scorer():
     assert similarity("orion", "squad-orion-x", ignore_prefixes=("squad",)) >= 0.8
+
+
+@pytest.mark.parametrize("spoken, channel", [("dev", "web"), ("api", "app"), ("ux", "ui"), ("ops", "orion")])
+def test_short_spoken_names_only_match_exactly(spoken, channel):
+    """A 2-3 letter name is too ambiguous for fuzzy matching, even as a weak guess (review 9)."""
+    assert similarity(spoken, channel) < 0.5
+    assert similarity(spoken, spoken.upper()) == 1.0

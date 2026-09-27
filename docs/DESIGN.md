@@ -467,6 +467,26 @@ so nothing below depends on any server's channel names.
 - custom_ids stay `mscribe:<action>:<meeting>:<item>` (< 100 chars) and are routed by DynamicItem
   templates, so every button keeps working across restarts.
 
+### Review fixes (fresh-context review before release)
+- **Moves are per task; only owners teach routing.** An assignee's 📁 pins THEIR task (new
+  `item_overrides` table, schema v3) and does not change the shared project → channel map, so it
+  cannot re-route other people's tasks. An owner's move also learns the names.
+- **Overrides survive re-analysis.** Items are read joined with `item_overrides`; a re-analysis that
+  picks the old candidate again cannot move the task back.
+- **Panel clicks defer as an update** (`response.defer()`), so `edit_original_response` edits the
+  clicked panel; clicks on public task messages defer ephemerally with "thinking".
+- **Only a confirmed missing message is re-posted** (404 / codes 10003/10008). Transient failures
+  propagate and the job retries, so nothing is duplicated.
+- **Delete fails → disarm.** A message that cannot be deleted (no Manage Messages) is edited to a
+  "moved to #x" notice without buttons.
+- **One publication per meeting at a time** (per-sink `asyncio.Lock`): delivery, refresh, refresh_item
+  and move cannot race each other into duplicate anchors, threads or DMs.
+- **DM cleanup.** An assignee who lost every task gets their DM panel edited to an empty panel.
+- **0.1 pointers** (no `"v": 2`): the old task rows (in the old notes thread) are deleted or disarmed
+  once; the header is edited in place.
+- **Short names match only exactly.** A single spoken token under 4 characters scores 0 unless it
+  equals the channel name, in every scoring path, including the weak-guess floor.
+
 ### Needs a live check
 Components v2 in ephemeral follow-ups and DMs, thread creation from an anchor message in channels with
 slow mode or restricted thread permissions, and DM delivery rate on large meetings.

@@ -35,9 +35,9 @@ class Svc:
     def folder(self, meeting):
         return self.layout.meeting_folder(meeting)
 
-    def move_item(self, meeting_id, item_id, channel_id, name):
+    def move_item(self, meeting_id, item_id, channel_id, name, *, learn=True):
         m = self.repo.get_meeting(meeting_id)
-        return apply_move(self.repo, self.folder(m), m, item_id, channel_id, name)
+        return apply_move(self.repo, self.folder(m), m, item_id, channel_id, name, learn=learn)
 
 
 class Views:
@@ -224,3 +224,93 @@ async def test_not_connected_is_a_soft_failure(env):
                             adapter=lambda: None, loop=lambda: None, options=lambda m: None, views=Views())
     res = sink.deliver(env.meeting, env.notes, env.svc.folder(env.meeting))
     assert not res.ok and "not connected" in res.errors[0]
+
+
+
+class Boom(Exception):
+    status = 503
+
+
+async def test_a_transient_edit_failure_does_not_duplicate_the_message(env):
+    sink = await deliver(env)
+    _, thread = thread_of(env, env.orion)
+    msg = next(m for m in thread.ordered() if "Landing" in m.content)
+
+    async def flaky(**kw):
+        raise Boom("503 Service Unavailable")
+    msg.edit = flaky
+    env.state["loop"] = asyncio.get_running_loop()
+    res = await asyncio.to_thread(sink.deliver, env.meeting, env.notes, env.svc.folder(env.meeting))
+    assert not res.ok  # the job retries later
+    assert sum("Landing" in m.content for m in thread.ordered()) == 1
+
+
+async def test_an_assignee_move_does_not_reroute_other_peoples_tasks(env):
+    same = ActionItem(id="a4", title="Pricing page", owner_speaker_id="11", project_hint="Nebulla")
+    items = (*ITEMS, same)
+    n = replace(env.notes, action_items=items)
+    write_notes(env.svc.folder(env.meeting), env.meeting, n, "es")
+    env.svc.repo.sync_action_items(env.meeting.id, items)
+    env.notes = n
+    sink = await deliver(env)
+    await sink.move_item(env.meeting.id, "a2", "501", learn=False)  # Ana moves HER task
+    assert env.svc.repo.project_channel("Nebulla") is None
+    assert ptr(env, "task:a2")["target"] == "501" and ptr(env, "task:a4")["target"] == "502"
+
+
+async def test_a_move_survives_reanalysis(env):
+    sink = await deliver(env)
+    await sink.move_item(env.meeting.id, "a1", "502", learn=False)
+    env.svc.repo.sync_action_items(env.meeting.id, ITEMS)  # re-analysis rewrites the item data
+    await deliver(env, sink)
+    assert ptr(env, "task:a1")["target"] == "502"
+
+
+async def test_move_that_cannot_delete_the_old_message_disarms_it(env):
+    sink = await deliver(env)
+    _, thread = thread_of(env, env.orion)
+    old = next(m for m in thread.ordered() if "Landing" in m.content)
+
+    async def forbidden():
+        raise PermissionError("Missing Permissions")
+    old.delete = forbidden
+    await sink.move_item(env.meeting.id, "a1", "502")
+    assert old.view is None and "<#502>" in old.content
+
+
+async def test_dm_of_someone_who_lost_all_tasks_is_cleared(env):
+    sink = await deliver(env)
+    dm = env.bot.users[11].dm
+    assert any("a1" in str(m.view) for m in dm.ordered())
+    left = tuple(a for a in ITEMS if a.id != "a1")
+    n = replace(env.notes, action_items=left)
+    write_notes(env.svc.folder(env.meeting), env.meeting, n, "es")
+    env.svc.repo.sync_action_items(env.meeting.id, left)
+    env.notes = n
+    await deliver(env, sink)
+    assert not any("a1" in str(m.view) for m in dm.ordered())
+
+
+async def test_concurrent_publishes_do_not_duplicate(env):
+    env.state["loop"] = asyncio.get_running_loop()
+    sink = env.make()
+    await asyncio.gather(sink.publish(env.meeting, env.notes), sink.refresh(env.meeting.id),
+                         sink.publish(env.meeting, env.notes))
+    _, thread = thread_of(env, env.orion)
+    assert sum("Landing" in m.content for m in thread.ordered()) == 1
+    assert len([c for c in env.bot.channels.values() if c.parent is env.orion]) == 1
+
+
+async def test_legacy_01_notes_messages_in_their_thread_are_removed(env):
+    """0.1 pointers kept the header in the channel and the task rows in a thread (review 3)."""
+    env.state["loop"] = asyncio.get_running_loop()
+    first = await env.chat.send("old header")
+    legacy = env.bot.add(777, "old-thread")
+    legacy.parent = env.chat
+    rows = [await legacy.send("old task rows", view=("mscribe:ok:k3v7q2ab:a1",)) for _ in range(2)]
+    env.svc.repo.upsert_delivery(env.meeting.id, "discord", f"mtg:{env.meeting.id}:notes",
+                                 external_id=json.dumps({"channel": 200, "thread": 777,
+                                                         "messages": [first.id, *[r.id for r in rows]]}), url="")
+    await deliver(env)
+    assert all(r.id not in legacy.messages for r in rows) and first.id in env.chat.messages
+    assert [m.content.split("\n")[0] for m in legacy.ordered()] == ["▫️ **Budget**"]  # thread reused for chat tasks

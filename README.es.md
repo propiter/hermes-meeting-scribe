@@ -311,8 +311,9 @@ Si tu servidor antepone *palabras* decorativas a los nombres de canal, ponlas en
 
 Cuando la coincidencia es débil, o dos canales puntúan casi igual, la tarea se publica igualmente en
 el canal más probable, marcada con **⚠️ proyecto no seguro — confirma con 📁**. Pulsar 📁 mueve la
-tarea: se vuelve a publicar en el hilo del canal correcto, se borra el mensaje anterior y la
-corrección se recuerda para la próxima vez. Si el bot no tiene Ver canal, Enviar mensajes o Crear
+tarea: se vuelve a publicar en el hilo del canal correcto y se borra el mensaje anterior. Cuando un
+owner mueve una tarea, la corrección además se recuerda para próximas reuniones; si la mueve su
+responsable, solo afecta a esa tarea. Si el bot no tiene Ver canal, Enviar mensajes o Crear
 hilos públicos en el canal elegido, la tarea se queda en el chat de la reunión y el índice explica
 por qué.
 

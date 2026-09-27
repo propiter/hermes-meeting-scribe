@@ -91,3 +91,8 @@ def test_missing_permission_falls_back_and_remembers_the_wanted_channel(meeting)
 def test_config_map_to_unknown_channel_is_ignored(meeting):
     r = route_item(item(project="orion", project_confidence=0.9), meeting, CHANNELS, ctx(channel_map={"orion": "999"}))
     assert r.channel_id == "501"
+
+
+def test_short_name_is_never_a_weak_guess(meeting):
+    chans = [ChannelInfo("601", "web"), ChannelInfo("602", "api")]
+    assert route_item(item(project_hint="dev"), meeting, chans, ctx()).channel_id is None

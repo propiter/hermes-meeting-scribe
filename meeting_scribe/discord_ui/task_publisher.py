@@ -26,7 +26,7 @@ from ..domain.models import Meeting, Notes
 from ..i18n import t
 from .board import Board, build_board
 from .guild import guild_of, snapshot_channels
-from .publisher import Messages, Pointers, ViewFactory
+from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
 
@@ -67,14 +67,18 @@ class TaskPublisher:
             try:
                 channel = await self.msgs.channel(ptr["channel"])
                 await self.msgs.edit(channel, ptr["messages"][0], spec=specs[0])
-            except Exception as exc:  # gone: post a fresh copy
-                log.info("meeting-scribe: stored notes message unavailable (%s); re-posting", exc)
+            except Exception as exc:
+                if not is_missing(exc):
+                    raise  # transient: the job retries, nothing is duplicated
+                log.info("meeting-scribe: stored notes message gone (%s); re-posting", exc)
                 channel, ptr = None, None
         if channel is None or ptr is None:
             channel = await self._chat_channel(meeting)
             first = await self.msgs.send(channel, spec=specs[0])
-            ptr = {"channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url}
+            ptr = {"v": 2, "channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url}
             await ptrs.save("notes", ptr, first.jump_url)
+        if ptr.get("v") != 2:
+            ptr = await self._migrate_legacy(channel, ptr, ptrs)
         ids: list[int] = list(ptr["messages"])
         for i, spec in enumerate(specs[1:], start=1):
             if i < len(ids):
@@ -82,15 +86,26 @@ class TaskPublisher:
                     await self.msgs.edit(channel, ids[i], spec=spec)
                     continue
                 except Exception as exc:
+                    if not is_missing(exc):
+                        raise
                     log.info("meeting-scribe: notes part %s gone (%s); sending a new one", ids[i], exc)
             msg = await self.msgs.send(channel, spec=spec)
             ids[i:i + 1] = [msg.id]
             await ptrs.save("notes", {**ptr, "messages": ids}, ptr.get("url", ""))
-        for surplus in ids[len(specs):]:  # 0.1 notes also held the task messages: drop them
+        for surplus in ids[len(specs):]:  # the summary got shorter
             await self.msgs.delete(channel.id, surplus)
         ptr = {**ptr, "messages": ids[:len(specs)]}
         await ptrs.save("notes", ptr, ptr.get("url", ""))
         return channel, ptr
+
+    async def _migrate_legacy(self, channel: Any, ptr: dict, ptrs: Pointers) -> dict:
+        """0.1 kept the header in the channel and every task + button row in ``thread``: drop those."""
+        tail_home = ptr.get("thread") or channel.id
+        for mid in list(ptr.get("messages") or ())[1:]:
+            await self.msgs.delete(tail_home, mid, notice=t("tasks.legacy_moved", self.o.lang))
+        ptr = {**ptr, "v": 2, "messages": list(ptr.get("messages") or ())[:1]}
+        await ptrs.save("notes", ptr, ptr.get("url", ""))
+        return ptr
 
     async def chat_task_target(self, channel: Any, ptr: dict, ptrs: Pointers, meeting: Meeting) -> Any:
         if ptr.get("thread"):
@@ -145,7 +160,10 @@ class TaskPublisher:
     async def place_task(self, meeting: Meeting, view: TaskView, target: Any, ptrs: Pointers) -> dict:
         suffix = f"task:{view.item.id}"
         ptr = await ptrs.load(suffix)
-        placed = await self.msgs.edit_or_send(ptr, target, spec=render_task(meeting, view, self.o))
+        notice = t("tasks.moved_notice", self.o.lang, title=view.item.title,
+                   channel=f"<#{view.route.channel_id or target.id}>")
+        placed = await self.msgs.edit_or_send(ptr, target, spec=render_task(meeting, view, self.o),
+                                              moved_notice=notice)
         new = {**placed, "target": view.route.channel_id or ""}
         await ptrs.save(suffix, new, placed.get("url", ""))
         return new
@@ -159,7 +177,9 @@ class TaskPublisher:
             await self.msgs.edit(channel, ptr["message"], spec=render_task(meeting, view, self.o))
             return True
         except Exception as exc:
-            log.info("meeting-scribe: task message %s unavailable (%s)", ptr.get("message"), exc)
+            if not is_missing(exc):
+                raise
+            log.info("meeting-scribe: task message %s gone (%s)", ptr.get("message"), exc)
             return False
 
     # -- DMs ------------------------------------------------------------------------------------
@@ -239,9 +259,14 @@ class TaskPublisher:
                 await self.place_task(meeting, view, target, ptrs)
         await self._drop_stale_tasks(board, ptrs)
         dm_failed: list[str] = []
+        assignees = [str(u) for u in dict.fromkeys(v.item.owner_speaker_id for v in board.views
+                                                   if v.item.owner_speaker_id)]
         if self.settings.delivery_dm_assignees:
-            for uid in dict.fromkeys(v.item.owner_speaker_id for v in board.views if v.item.owner_speaker_id):
-                if not await self.dm(board, str(uid), ptrs, send=send_dms):
-                    dm_failed.append(str(uid))
+            for uid in assignees:
+                if not await self.dm(board, uid, ptrs, send=send_dms):
+                    dm_failed.append(uid)
+        for uid in (await ptrs.with_prefix("dm:")):  # lost every task since the last run: empty panel
+            if uid not in assignees:
+                await self.dm(board, uid, ptrs, send=False)
         await self.index(board, chat, threads, dm_failed, ptrs)
         return str(notes_ptr.get("url") or "")

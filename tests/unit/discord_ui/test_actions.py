@@ -69,15 +69,15 @@ class Sink:
     async def refresh(self, mid):
         self.calls.append(("refresh", mid))
 
-    async def task_panel(self, mid, uid, scope, page, *, is_owner, item_id=None):
-        self.calls.append(("panel", mid, uid, scope, page, is_owner, item_id))
+    async def task_panel(self, mid, uid, scope, page, *, is_owner):
+        self.calls.append(("panel", mid, uid, scope, page, is_owner))
         return ("panel", uid, scope, page)
 
     async def move_options(self, mid, iid):
         return [("502", "#nebula"), ("501", "#orion")]
 
-    async def move_item(self, mid, iid, cid):
-        self.calls.append(("move", mid, iid, cid))
+    async def move_item(self, mid, iid, cid, *, learn):
+        self.calls.append(("move", mid, iid, cid, learn))
         return f"<#{cid}>"
 
 
@@ -164,9 +164,16 @@ async def test_page_buttons_edit_the_panel_in_place(env):
 async def test_action_from_the_ephemeral_panel_rerenders_the_panel(env):
     i = FakeInteraction(ANA, ephemeral=True)
     await env.acts.handle(i, "no", "k3v7q2ab", "a2")
+    assert i.response.defers == [{}]  # update-type defer: edit_original_response targets the panel
     assert i.original_edits and i.original_edits[0]["view"][0] == "panel"
-    assert env.sink.calls[-1] == ("panel", "k3v7q2ab", "10", "m", 0, False, "a2")
+    assert env.sink.calls[-1] == ("panel", "k3v7q2ab", "10", "m", 0, False)
     assert "dismissed" in i.replies().lower()
+
+
+async def test_action_from_a_public_task_message_defers_ephemerally(env):
+    i = FakeInteraction(ANA)
+    await env.acts.handle(i, "no", "k3v7q2ab", "a2")
+    assert i.response.defers == [{"ephemeral": True, "thinking": True}] and i.original_edits == []
 
 
 async def test_move_offers_channels_then_select_moves_and_confirms(env):
@@ -175,7 +182,9 @@ async def test_move_offers_channels_then_select_moves_and_confirms(env):
     assert i.followup.sent[0]["view"] == ("move", "k3v7q2ab", "a2", ("502", "501"))
     j = FakeInteraction(ANA, values=["502"])
     await env.acts.handle(j, "tsel", "k3v7q2ab", "a2")
-    assert env.sink.calls[-1] == ("move", "k3v7q2ab", "a2", "502") and "<#502>" in j.replies()
+    assert env.sink.calls[-1] == ("move", "k3v7q2ab", "a2", "502", False) and "<#502>" in j.replies()
+    await env.acts.handle(FakeInteraction(OWNER, values=["502"]), "tsel", "k3v7q2ab", "a2")
+    assert env.sink.calls[-1][-1] is True  # only an owner's correction is learned for everyone
 
 
 async def test_legacy_meeting_buttons_keep_working_for_owners(env):

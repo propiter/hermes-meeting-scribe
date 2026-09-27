@@ -144,10 +144,11 @@ class MeetingService:
             raise KeyError(item_id)
         self.repo.set_action_status(meeting.id, item_id, ActionStatus.DISMISSED)
 
-    def move_item(self, meeting_id: str, item_id: str, channel_id: str, name: str) -> ActionItem:
-        """📁: file one task under a Discord channel, and learn the mapping (DESIGN §16)."""
+    def move_item(self, meeting_id: str, item_id: str, channel_id: str, name: str, *,
+                  learn: bool = True) -> ActionItem:
+        """📁: pin one task to a Discord channel; ``learn`` (owners) also teaches routing (DESIGN §16)."""
         meeting = self.require(meeting_id)
-        return apply_move(self.repo, self.folder(meeting), meeting, item_id, channel_id, name)
+        return apply_move(self.repo, self.folder(meeting), meeting, item_id, channel_id, name, learn=learn)
 
     # -- projects & people --------------------------------------------------------------------
     def candidates(self, meeting: Meeting) -> list[Candidate]:

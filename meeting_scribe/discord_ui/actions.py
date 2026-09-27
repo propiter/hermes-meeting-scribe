@@ -103,10 +103,14 @@ class ButtonActions:
         if action in OPEN_ACTIONS:
             await self._panel(interaction, action, meeting_id, item_id)
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        from_panel = _from_panel(interaction) and action in TASK_ACTIONS
+        if from_panel:  # update-type defer: edit_original_response then targets the clicked panel
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             if action == "tsel":
-                reply = await self._move(meeting_id, item_id, list(values or ()))
+                reply = await self._move(meeting_id, item_id, list(values or ()), learn=self.is_owner(interaction))
             else:
                 reply = await asyncio.to_thread(self._run, action, meeting_id, item_id, list(values or ()))
         except (KeyError, LookupError, ValueError) as exc:
@@ -115,19 +119,19 @@ class ButtonActions:
             log.exception("meeting-scribe button %s failed", action)
             reply = t("ui.action_failed", self.lang, error=f"{type(exc).__name__}: {exc}")
         else:
-            await self._after(interaction, action, meeting_id, item_id)
+            await self._after(interaction, action, meeting_id, item_id, from_panel)
         await interaction.followup.send(clip_reply(reply), ephemeral=True)
 
-    async def _after(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> None:
+    async def _after(self, interaction: Any, action: str, meeting_id: str, item_id: str, from_panel: bool) -> None:
         sink = self._sink()
         try:
             if item_id == "all" or action in MEETING_ACTIONS:
                 await sink.refresh(meeting_id)
             elif action != "tsel":  # a move already re-published everything
                 await sink.refresh_item(meeting_id, item_id)
-            if _from_panel(interaction) and action in TASK_ACTIONS:
+            if from_panel:
                 view = await sink.task_panel(meeting_id, self._uid(interaction), "m", 0,
-                                             is_owner=self.is_owner(interaction), item_id=item_id)
+                                             is_owner=self.is_owner(interaction))
                 await interaction.edit_original_response(view=view)
         except Exception:  # stale buttons are cosmetic; the action itself succeeded
             log.exception("meeting-scribe: refreshing tasks of %s failed", meeting_id)
@@ -154,12 +158,14 @@ class ButtonActions:
             return t("ui.project_saved", lang, project=chosen.name)
         raise ValueError(f"unknown action {action}")
 
-    async def _move(self, meeting_id: str, item_id: str, values: list[str]) -> str:
+    async def _move(self, meeting_id: str, item_id: str, values: list[str], *, learn: bool) -> str:
         if not values:
             raise ValueError(t("ui.no_selection", self.lang))
-        mention = await self._sink().move_item(meeting_id, item_id, values[0])
+        mention = await self._sink().move_item(meeting_id, item_id, values[0], learn=learn)
         item = await asyncio.to_thread(self._service().repo.get_action_item, meeting_id, item_id)
-        project = (getattr(item, "project", None) or getattr(item, "project_hint", None) or mention)
+        if not learn:
+            return t("tasks.moved_one", self.lang, channel=mention)
+        project = (getattr(item, "project_hint", None) or getattr(item, "project", None) or mention)
         return t("tasks.moved", self.lang, channel=mention, project=project)
 
     async def _panel(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> None:
