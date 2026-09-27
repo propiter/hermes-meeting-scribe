@@ -310,3 +310,82 @@ SMTP?". Plugin skill `meeting-scribe:meeting-scribe` explains usage.
   `external_id` = JSON `{channel, thread, messages[]}`); reprocess edits those
   messages, sends extra parts, deletes surplus ones, re-posts if deleted.
   Adapter not connected yet → deliver fails softly and the job retries.
+
+## 15. Review fixes (two adversarial reviews, 22 findings + notes)
+
+Design changes that came out of the reviews. Each has a regression test named in the commit.
+
+### Capture (`capture/`)
+- **Silence is a marker, and the writer queue is bounded (C1).** The aligner queues `("gap", n_bytes)`
+  instead of zero buffers. The writer thread expands the gap from one reused 20 ms zero frame, so a
+  long silence costs O(1) memory. The loop-side `write()` never blocks: it does `put_nowait` into a
+  bounded `queue.Queue`. When that queue is full, chunks go to an ordered overflow deque that the
+  writer drains first, which keeps order and never drops audio. Past a hard backlog cap (~60 s of
+  audio) the track fails loudly (`error` set, recorded as partial) instead of growing without bound.
+  Drop-oldest was rejected because it silently corrupts the timeline. ffmpeg stderr goes to a temp
+  file, not a pipe.
+- **Lost connection (W1).** The session is only ended when discord.py's connection state is
+  disconnected, or when it has not become healthy within `vc.timeout` (the reconnect grace).
+  Teardown always calls `disconnect(force=True)`. `busy()` also counts `guild.voice_client`.
+- **Autojoin (W2).** After a manual stop or `max_duration`, the channel is on cooldown until humans
+  drop below `autojoin_min_humans`. Voice-state events from the bot itself are ignored.
+- **Lifecycle (W4-W7).** ffmpeg is resolved before connecting. A per-user writer failure is
+  isolated: that speaker is skipped and the meeting continues. `_finished` is set in a `finally`,
+  and teardown runs as a shielded task, so cancelling `stop()` cannot abort finalization. The run
+  task is created before any post-lock await, and failures (including `BaseException`) tear down.
+  The session is registered before `start()` and popped on failure. `live_meeting_ids()` keeps a
+  meeting until teardown has *finished*, so `recover()` can never close a starting or stopping
+  meeting.
+- **Consent (W9).** A leftover `[REC] ` prefix is stripped from the base nickname and restored.
+  Consent helpers moved to `capture/consent.py`.
+- **Timeline and DAVE (notes).** Timestamps come from a `time.monotonic()` timeline anchored to the
+  wall-clock `t0`, so NTP steps cannot shift tracks. `dave_session` is re-read on every drain tick.
+  While DAVE is active, frames decoded before their SSRC is mapped are dropped, because their
+  decryption is not trustworthy.
+- **Hermes TTS (note).** Hermes plays voice replies only through `play_in_voice_channel` for a guild
+  that has a `_voice_text_channels` entry. We register the client in `_voice_clients` without
+  adding that mapping, and the recording client's `play()` is also stubbed to refuse, so no reply
+  audio can reach the recording.
+
+### Discord UI (`discord_ui/`)
+- **Reload safety (W3).** Each install gets a unique factory qualname. `ctx.on_unload` removes the
+  listener, calls `remove_dynamic_items`, closes the runtime and drops the `RUNTIMES` entry. All bot
+  work is marshalled to the loop (`call_soon_threadsafe` / `run_coroutine_threadsafe`).
+- **Notes pointer (W8).** The notes pointer is persisted after every message sent, and edits/sends
+  are retried. A retry after a partial post edits instead of duplicating.
+- **Replies (S1/S2).** The project picker defers before the catalog lookup and answers through a
+  followup. Replies are truncated to 1900 characters.
+
+### Core
+- **Per-sink decisions (1).** A new `item_sinks(meeting_id, item_id, sink, status)` table. Approve mode
+  delivers only items approved for that sink. `action_items.status` is now just a display summary.
+  Schema v2 back-fills existing Kanban/Linear deliveries as `delivered`.
+- **Leases and ownership (2).** `jobs.owner` and `jobs.heartbeat` form a lease, refreshed every 30 s
+  by a helper thread. `recover()` requeues only leases older than 180 s and skips leased meetings.
+  `meetings.capture_owner` records which process is capturing. Orphan recordings are closed only
+  when the caller owns capture (the Discord-connected gateway) and that owner process is gone
+  (checked with a same-host `kill(pid, 0)`). `ensure_pipeline()` is a no-op outside the gateway
+  (`_HERMES_GATEWAY=1`), so CLI/TUI commands never start a worker or run recovery.
+- **Unicode (3/4).** `domain/text.fold`: NFKC, casefold, strip combining marks, keep every letter.
+  The hallucination filter, ids and name matching use it. A repetition only counts as a
+  hallucination at low confidence. Covered by tests in es/ru/zh/ja/ar.
+- **Routing (5).** The meeting stores the resolved `project_key`. Sinks see only candidates of their
+  sources: Linear gets `linear`; Kanban gets `hermes` and `kanban`. A real catalog candidate replaces
+  a learned stub.
+- **Claim-first delivery (6).** `deliveries.state` is `pending` or `done`. A claim is an
+  `INSERT … ON CONFLICT DO NOTHING`. Losers get `DeliveryInProgress`. A failed or abandoned claim
+  stays pending, and the next claimer reconciles before creating: Linear looks up the issue by the
+  `` `mtg:…` `` marker in its description (GraphQL `issues(filter: {description: {contains}})`).
+  Kanban relies on its server-side idempotency key.
+- **Profiles (7).** Runtime keeps a repository and service per database path and never closes one
+  that another caller may still hold. `/meeting` resolves the service on every call.
+- **LLM schema (8).** Only `title` is required. Numbers are nullable and additional properties are
+  allowed. When Hermes rejects the output against the schema, the adapter retries in `json_mode`
+  without a schema, and the normaliser absorbs the variants.
+- **Timeout (9).** The worker timeout scales with the *sum* of track durations.
+- **Flat settings (10).** Keys are flat (`kanban_mode`, …), because Hermes' Desktop form reads
+  `settings[key]` flat while dotted keys are stored nested. Old nested values are still read as a
+  fallback, and the CLI accepts the dotted spelling. `plugin.yaml` is regenerated by
+  `scripts/gen_manifest.py`.
+- **Pagination (11).** Linear users, projects and teams follow `pageInfo`, capped at 40 pages of 250.
+
