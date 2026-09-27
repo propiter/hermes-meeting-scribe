@@ -1,0 +1,13 @@
+{
+  "name": "meeting-scribe",
+  "label": "Meetings",
+  "description": "Meeting library, processing status, diagnostics and settings for meeting-scribe (the page lives in Hermes Desktop).",
+  "icon": "Mic",
+  "version": "0.2.0",
+  "tab": {
+    "path": "/meeting-scribe",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
