@@ -21,8 +21,8 @@ from ..storage.artifacts import fmt_ts
 MESSAGE_LIMIT = 2000
 EMBED_LIMIT = 4096
 ITEMS_PER_MESSAGE = 5
-ACTIONS = ("ok", "lin", "no", "prj", "allk", "alll", "psel")
-TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+ACTIONS = ("ok", "lin", "no", "prj", "allk", "alll", "psel", "mine", "pg", "tsel")
+TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _TEMPLATE_RE = re.compile(f"^{TEMPLATE}$")
 _TOKEN_RE = re.compile(r"<[@#][!&]?\d+>|\S+|\s+")
 _STATUS_ICON = {ActionStatus.PENDING: "▫️", ActionStatus.APPROVED: "☑️", ActionStatus.DELIVERED: "✅",
