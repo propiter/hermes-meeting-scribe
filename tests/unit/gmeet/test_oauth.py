@@ -201,3 +201,31 @@ def test_connect_flow_browser_uses_loopback(files, client_file):
                              read_line=lambda p: pytest.fail("should not ask"), open_browser=open_browser,
                              timeout=10)
     assert tok["refresh_token"] == "rt-1"
+
+
+def test_reconnect_keeps_the_original_connected_at(files, client_file):
+    """Re-running connect after a revocation must not open a never-imported gap (review finding 8)."""
+    client = oauth.import_client_file(files, client_file)
+    files.write_token({"access_token": None, "refresh_token": "rt-0", "connected_at": 100.0, "disconnected": True})
+
+    def read_line(_prompt):
+        return f"http://127.0.0.1:1/?state={state[0]}&code=4/good"
+    state = []
+
+    def emit(url):
+        state.append(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))["state"])
+    tok = oauth.connect_flow(files, client, transport=token_server(), no_browser=True, emit=emit,
+                             read_line=read_line, now=lambda: 999.0)
+    assert tok["connected_at"] == 100.0 and not tok.get("disconnected")
+    assert tok["reconnected_at"] == 999.0 and files.read_token()["connected_at"] == 100.0
+
+
+def test_connect_after_explicit_disconnect_starts_fresh(files, client_file):
+    client = oauth.import_client_file(files, client_file)
+    files.write_token({"refresh_token": "rt-0", "connected_at": 100.0})
+    files.delete_token()  # `google disconnect`
+    state = []
+    tok = oauth.connect_flow(files, client, transport=token_server(), no_browser=True,
+                             emit=lambda u: state.append(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(u).query))["state"]),
+                             read_line=lambda p: f"http://127.0.0.1:1/?state={state[0]}&code=4/good", now=lambda: 999.0)
+    assert tok["connected_at"] == 999.0

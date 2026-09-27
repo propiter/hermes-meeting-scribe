@@ -65,6 +65,7 @@
   "google.error": "Google: {error}",
   "google.no_client": "Google: no hay cliente OAuth guardado. Pasa --client-secret <archivo.json> (Cloud Console → Credenciales → ID de cliente OAuth, tipo App de escritorio).",
   "google.not_connected": "Google: no conectado. Ejecuta `hermes meeting-scribe google connect --client-secret <archivo.json>`.",
+  "google.reconnected": "✅ Google reconectado. Se importarán las transcripciones de Meet aún no importadas que terminaron después de la primera conexión ({since}, como mucho 30 días atrás){extra}.",
   "google.revoked": ", acceso revocado en Google",
   "google.status_connected": "Google: conectado (scope meetings.space.readonly; no se lee la cuenta).",
   "google.status_disconnected": "Google: desconectado — el acceso se revocó o caducó. Vuelve a ejecutar `hermes meeting-scribe google connect`.",

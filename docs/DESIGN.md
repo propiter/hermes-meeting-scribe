@@ -522,7 +522,9 @@ releases the lease. The poller never runs on the Discord asyncio loop.
 - **No new dependency**: urllib, http.server, secrets, hashlib, base64, json.
 - **Files**: `<plugin data>/google/{client,token}.json`, created 0600 atomically (dir 0700), under
   `plugin_data_dir` of the active profile (never a hard-coded home). `connected_at` lives in the
-  token. `invalid_grant`/`invalid_client` mark the token `disconnected` (no refresh storm; the
+  token and survives a re-`connect` (a revoked/expired token is replaced, the window start is kept,
+  `reconnected_at` is added): no never-imported gap. `google disconnect` deletes the token, so the
+  next `connect` starts a fresh window. `invalid_grant`/`invalid_client` mark the token `disconnected` (no refresh storm; the
   poller backs off to hourly) until `connect` runs again.
 - **Errors**: 401 → forced refresh + one retry; 403 → "forbidden" status (API disabled, scope, admin
   policy); 429/5xx/network → "temporary", next cycle. Messages carry Google's error *status* and

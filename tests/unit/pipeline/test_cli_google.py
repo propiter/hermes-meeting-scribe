@@ -172,3 +172,11 @@ def test_doctor_reports_given_up_records(grt, client_file, capsys, monkeypatch):
         imp.sync(ended_after=imp.window_start(days=3))
     res = check_google_meet(grt)
     assert res.status == "warn" and "skipped after repeated errors" in res.detail
+
+
+def test_reconnect_says_the_window_is_kept(grt, client_file, capsys, monkeypatch):
+    connect(grt, client_file, capsys, monkeypatch)
+    first = json.loads(grt.google_files().token_path.read_text())["connected_at"]
+    code, out = connect(grt, client_file, capsys, monkeypatch)
+    assert code == 0 and "reconnected" in out
+    assert json.loads(grt.google_files().token_path.read_text())["connected_at"] == first

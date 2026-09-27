@@ -75,15 +75,22 @@ def _connect(args: argparse.Namespace, rt: Any) -> int:
         return _READ_LINE("> ")
 
     try:
-        oauth.connect_flow(files, client, transport=transport, no_browser=args.no_browser, emit=emit,
-                           read_line=read_line, open_browser=None if args.no_browser else webbrowser.open,
-                           timeout=float(args.timeout))
+        token = oauth.connect_flow(files, client, transport=transport, no_browser=args.no_browser, emit=emit,
+                                   read_line=read_line, open_browser=None if args.no_browser else webbrowser.open,
+                                   timeout=float(args.timeout))
     except (oauth.GoogleAuthError, OSError) as exc:
         _print(t("google.error", lang, error=exc))
         return 1
-    rt.meet_importer().set_status(last_error=None)
+    try:
+        rt.meet_importer().set_status(last_error=None)
+    except Exception:  # storage trouble is reported by `doctor`; the token is stored
+        pass
     extra = "" if rt.settings().google_meet_enabled else t("google.enable_hint", lang)
-    _print(t("google.connected", lang, extra=extra))
+    if token.get("reconnected_at"):
+        since = datetime.fromtimestamp(float(token["connected_at"]), timezone.utc).isoformat(timespec="minutes")
+        _print(t("google.reconnected", lang, since=since, extra=extra))
+    else:
+        _print(t("google.connected", lang, extra=extra))
     return 0
 
 

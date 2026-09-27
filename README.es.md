@@ -374,7 +374,9 @@ hermes meeting-scribe google disconnect
 - El gateway sondea cada `google_meet_poll_minutes` (5 por defecto). Solo un proceso sondea (un
   lease en el SQLite del plugin). Solo se importan automáticamente las conferencias que **terminan
   después de conectar**; usa `google sync --days N` para importar historia de forma explícita
-  (máximo 30 días).
+  (máximo 30 días). Volver a ejecutar `connect` (tras una revocación o con un cliente nuevo)
+  conserva la hora de la primera conexión, así que las reuniones que terminaron mientras el acceso
+  estaba roto se recuperan (dentro de los 30 días de Meet); solo `google disconnect` la reinicia.
 - Una conferencia se importa una sola vez (única por el nombre de su registro en Meet), aunque haya
   reinicios o dos procesos. Si la transcripción aún se está generando (`ENDED`) se reintenta en el
   siguiente sondeo.

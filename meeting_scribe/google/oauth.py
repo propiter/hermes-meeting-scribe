@@ -384,7 +384,17 @@ def connect_flow(files: GoogleFiles, client: ClientConfig, *, transport: Transpo
             receiver.close()
         code = parse_redirect(read_line("paste"), state)
     token = exchange_code(transport, client, code=code, verifier=verifier, redirect_uri=redirect_uri, now=now())
-    token["connected_at"] = now()
+    # Re-connecting (revoked/expired access, a new client) keeps the ORIGINAL connection time: the
+    # poll window starts there (clamped to Meet's 30-day retention), so meetings that ended while
+    # access was broken are still imported. Only `google disconnect` (which deletes the token)
+    # starts a fresh window.
+    previous = files.read_token() or {}
+    first = previous.get("connected_at")
+    if isinstance(first, (int, float)) and first > 0:
+        token["connected_at"] = float(first)
+        token["reconnected_at"] = now()
+    else:
+        token["connected_at"] = now()
     files.write_token(token)
     return token
 

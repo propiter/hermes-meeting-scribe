@@ -361,7 +361,10 @@ hermes meeting-scribe google disconnect
   fail to load; that is expected) or just the code.
 - The gateway polls every `google_meet_poll_minutes` (default 5). Only one process polls (a lease in
   the plugin's SQLite). Only conferences that **end after you connected** are imported
-  automatically; use `google sync --days N` for an explicit backfill (max 30 days).
+  automatically; use `google sync --days N` for an explicit backfill (max 30 days). Running
+  `connect` again (after a revocation, or with a new client) keeps the original connection time,
+  so meetings that ended while access was broken are still picked up (within Meet's 30 days);
+  only `google disconnect` resets it.
 - A conference is imported once, ever (unique on its Meet record name), even across restarts or two
   processes. A transcript still being generated (`ENDED`) is retried on the next poll.
 - Notes go to `google_meet_discord_channel`, else `delivery_discord_channel`, else the gateway's
