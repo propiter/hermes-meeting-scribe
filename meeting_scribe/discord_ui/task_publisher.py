@@ -34,10 +34,36 @@ from .transcript_file import SUFFIX as TRANSCRIPT_SUFFIX, mark_legacy, publish_t
 
 log = logging.getLogger(__name__)
 MOVE_SUFFIX = "dm_move"  # a move out of a DM in progress: {from, channel, key, attach, old: {suffix: ptr}}
+LEFTOVER_SUFFIX = "dm_leftover"  # DM messages a finished move kept (no confirmed replacement): {from, old, why}
 
 
 class DmMoveError(RuntimeError):
     """The server channel a DM meeting should move to cannot be used; nothing in the DM was touched."""
+
+
+def transcript_intent(notes_ptr: Optional[dict], transcript_ptr: Optional[dict]) -> bool:
+    """Does the full transcript belong with this summary? An explicit ``attach`` in the summary
+    pointer wins. Pointers written before that key existed decide from the transcript pointer: one
+    really delivered (``done`` with its messages) means yes; the legacy marker, or none, means no."""
+    if notes_ptr and "attach" in notes_ptr:
+        return bool(notes_ptr["attach"])
+    tp = transcript_ptr or {}
+    if tp.get("skipped") == "legacy":
+        return False
+    return bool(tp.get("done") and tp.get("messages"))
+
+
+def move_intent(move: dict) -> bool:
+    """The transcript intent of a move, re-derived from the DM pointers it carries: a move saved by
+    an earlier build recorded ``attach: false`` for summaries that predate the key."""
+    old = move.get("old") or {}
+    if "notes" in old:
+        return transcript_intent(old["notes"], old.get(TRANSCRIPT_SUFFIX))
+    return bool(move.get("attach"))
+
+
+def _message_ids(p: dict) -> list:
+    return list(p.get("messages") or ()) + ([p["message"]] if p.get("message") else [])
 
 
 class TaskPublisher:
@@ -288,21 +314,31 @@ class TaskPublisher:
                 await ptrs.drop(f"task:{item_id}")
 
     # -- whole meeting --------------------------------------------------------------------------
-    async def _transcript(self, meeting: Meeting, chat: Any, notes_ptr: dict, ptrs: Pointers) -> None:
+    async def _transcript(self, meeting: Meeting, chat: Any, notes_ptr: dict, ptrs: Pointers, *,
+                          strict: bool = False) -> None:
         """DELIVER only (never a button refresh). A summary posted without the attachment intent —
-        before the upgrade, or with the setting off — never gets the full transcript afterwards."""
+        before the upgrade, or with the setting off — never gets the full transcript afterwards.
+        ``strict`` (a move out of a DM): a failed upload raises, so the DM copy is not deleted and
+        the job retries; otherwise it never fails the delivery (DESIGN §17.3)."""
         if not self.settings.delivery_discord_transcript or self._transcript_text is None:
             return
         if not notes_ptr.get("attach") and await ptrs.load(TRANSCRIPT_SUFFIX) is None:
             await mark_legacy(ptrs)
             return
-        try:  # never fails the delivery (DESIGN §17.3)
-            await publish_transcript(self.msgs, ptrs, chat, meeting, self._transcript_text,
-                                     getattr(self.views, "file", None), self.o.lang,
-                                     max_bytes=int(self.settings.delivery_transcript_max_mb) * 1024 * 1024)
+        try:
+            ptr = await publish_transcript(self.msgs, ptrs, chat, meeting, self._transcript_text,
+                                           getattr(self.views, "file", None), self.o.lang,
+                                           max_bytes=int(self.settings.delivery_transcript_max_mb) * 1024 * 1024)
         except Exception as exc:
+            if strict:
+                raise RuntimeError(f"the transcript of meeting {meeting.id} could not be re-posted while moving "
+                                   f"it out of the DM ({type(exc).__name__}: {exc}); the DM copy is kept") from exc
             if not is_missing(exc):
                 log.info("meeting-scribe: transcript attachment skipped: %s", exc)
+            return
+        if strict and ptr is not None and not ptr.get("done"):  # a transient upload error, logged inside
+            raise RuntimeError(f"the transcript of meeting {meeting.id} could not be re-posted while moving it "
+                               "out of the DM (upload failed); the DM copy is kept and the delivery retries")
 
     # -- notes an older version posted in a DM (DESIGN §19) ---------------------------------------
     async def _kv(self, key: str, value: Optional[str]) -> None:
@@ -361,22 +397,54 @@ class TaskPublisher:
         for item, p in (await ptrs.with_prefix("task:")).items():
             if str(p.get("channel")) == str(dm.id):
                 old[f"task:{item}"] = p
-        move = {"from": dm.id, "channel": target.id, "key": step.key, "attach": bool(notes_ptr.get("attach")),
-                "old": old}
+        move = {"from": dm.id, "channel": target.id, "key": step.key,
+                "attach": transcript_intent(notes_ptr, await ptrs.load(TRANSCRIPT_SUFFIX)), "old": old}
         await ptrs.save(MOVE_SUFFIX, move)  # first: an interrupted move resumes from here
         for suffix in old:  # the DM messages stay until the new ones exist (their ids live in ``move``)
             await ptrs.drop(suffix)
         log.warning("meeting-scribe: moving meeting %s from a DM to channel %s", meeting.id, target.id)
         return move
 
-    async def _finish_move(self, meeting: Meeting, move: dict, ptrs: Pointers) -> None:
-        """Last step, after the new summary, tasks and index exist and their pointers are saved."""
-        for p in (move.get("old") or {}).values():
-            ids = list(p.get("messages") or ()) + ([p["message"]] if p.get("message") else [])
-            for mid in ids:
+    async def _replaced(self, suffix: str, dm_id: Any, ptrs: Pointers, alive: set[str]) -> tuple[bool, str]:
+        """Is the new copy of ``suffix`` confirmed outside the DM? ``(ok, why-not)``."""
+        if suffix.startswith("task:") and suffix[len("task:"):] not in alive:
+            return True, ""  # the task no longer exists: nothing replaces it, the DM copy is stale
+        new = await ptrs.load(suffix)
+        if not new or not _message_ids(new) or str(new.get("channel")) == str(dm_id):
+            if suffix == TRANSCRIPT_SUFFIX and new and new.get("skipped"):
+                return False, f"its copy in the server channel was not posted (skipped: {new['skipped']})"
+            return False, "its copy in the server channel was not confirmed"
+        if suffix == TRANSCRIPT_SUFFIX and (not new.get("done") or new.get("skipped")):
+            return False, f"its copy in the server channel is incomplete ({new.get('skipped') or 'not done'})"
+        return True, ""
+
+    def _leftover_hint(self, meeting: Meeting, why: dict[str, str]) -> str:
+        kinds = "; ".join(f"{suffix}: {reason}" for suffix, reason in why.items())
+        return (f"meeting {meeting.id} was moved out of a direct message, but some DM messages were kept because "
+                f"their replacement is not confirmed ({kinds}). They are removed by a later "
+                f"`hermes meeting-scribe reprocess {meeting.id} --from deliver` once replaced; delete them by hand "
+                "if they must go now")
+
+    async def _finish_move(self, meeting: Meeting, move: dict, ptrs: Pointers, *, alive: set[str]) -> None:
+        """Last step, after the new summary, tasks and index exist and their pointers are saved. A DM
+        message is deleted only when its replacement is confirmed; the rest is kept and explained."""
+        kept: dict[str, dict] = {}
+        why: dict[str, str] = {}
+        for suffix, p in (move.get("old") or {}).items():
+            ok, reason = await self._replaced(suffix, move.get("from"), ptrs, alive)
+            if not ok:
+                kept[suffix], why[suffix] = p, reason
+                continue
+            for mid in _message_ids(p):
                 await self.msgs.delete(p.get("channel") or move.get("from"), mid)
         await ptrs.drop(MOVE_SUFFIX)
         await self._kv(KV_MOVE_FROM_DM + meeting.id, None)
+        if kept:
+            await ptrs.save(LEFTOVER_SUFFIX, {"from": move.get("from"), "old": kept, "why": why})
+            await self._kv(KV_DM_NOTES + meeting.id, self._leftover_hint(meeting, why))
+            log.warning("meeting-scribe: meeting %s moved out of the DM; kept there: %s", meeting.id, why)
+            return
+        await ptrs.drop(LEFTOVER_SUFFIX)
         await self._kv(KV_DM_NOTES + meeting.id, None)
         log.warning("meeting-scribe: meeting %s moved out of the DM", meeting.id)
 
@@ -408,7 +476,8 @@ class TaskPublisher:
             return move
         dm = await self._dm_of(await ptrs.load("notes"))
         if dm is None:
-            await self._kv(KV_DM_NOTES + meeting.id, None)
+            if await ptrs.load(LEFTOVER_SUFFIX) is None:  # a kept DM message keeps its explanation
+                await self._kv(KV_DM_NOTES + meeting.id, None)
             return None
         if move_from_dm:
             return await self._start_move(meeting, dm, ptrs)
@@ -428,9 +497,10 @@ class TaskPublisher:
         if move is not None and chat is None:
             move = None
         chat, notes_ptr = await self.header(meeting, notes, ptrs, chat=chat,
-                                            attach=move.get("attach") if move else None)
+                                            attach=move_intent(move) if move else None)
         if attach_transcript:
-            await self._transcript(meeting, chat, notes_ptr, ptrs)
+            await self._transcript(meeting, chat, notes_ptr, ptrs,
+                                   strict=bool(move and TRANSCRIPT_SUFFIX in (move.get("old") or {})))
         board = await self.board(meeting, notes)
         groups: dict[Optional[str], list[TaskView]] = {}
         for view in board.views:
@@ -463,6 +533,12 @@ class TaskPublisher:
             if uid not in assignees:
                 await self.dm(board, uid, ptrs, send=False)
         await self.index(board, chat, threads, dm_failed, ptrs)
-        if move is not None and attach_transcript:
-            await self._finish_move(meeting, move, ptrs)
+        if attach_transcript:
+            alive = {v.item.id for v in board.views}
+            if move is not None:
+                await self._finish_move(meeting, move, ptrs, alive=alive)
+            else:
+                leftover = await ptrs.load(LEFTOVER_SUFFIX)
+                if leftover is not None:  # a kept DM message whose replacement may exist by now
+                    await self._finish_move(meeting, leftover, ptrs, alive=alive)
         return str(notes_ptr.get("url") or "")
