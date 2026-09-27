@@ -6,7 +6,7 @@ import time
 import pytest
 
 from meeting_scribe.audio.ffmpeg import probe_duration
-from meeting_scribe.capture.tracks import BYTES_PER_SAMPLE, SAMPLE_RATE, Aligner, TrackWriter
+from meeting_scribe.capture.tracks import SAMPLE_RATE, Aligner, Silence, TrackWriter
 
 FRAME_SAMPLES = 960
 FRAME = b"\x10\x00\x10\x00" * FRAME_SAMPLES  # 20 ms stereo s16le
@@ -17,8 +17,8 @@ def frames(start: float, seconds: float) -> list[tuple[float, bytes]]:
     return [(start + i * 0.02, FRAME) for i in range(n)]
 
 
-def silence_samples(chunks: list[bytes]) -> int:
-    return sum(len(c) for c in chunks if not c.strip(b"\x00")) // BYTES_PER_SAMPLE
+def silence_samples(chunks: list) -> int:
+    return sum(c.samples for c in chunks if isinstance(c, Silence))
 
 
 def test_aligner_pads_leading_gap_and_gaps_over_100ms():
@@ -40,10 +40,10 @@ def test_aligner_ignores_small_gaps_and_never_goes_backwards():
     assert al.position_seconds == pytest.approx(0.14, abs=1e-6)
 
 
-def test_aligner_splits_huge_gaps_into_bounded_chunks():
+def test_aligner_represents_huge_gaps_as_one_marker():
     al = Aligner(t0=0.0)
-    out = al.feed([(600.0, FRAME)])  # 10 min of silence must not be one 115 MB bytes object
-    assert max(len(c) for c in out) <= Aligner.MAX_CHUNK
+    out = al.feed([(600.0, FRAME)])  # 10 min of silence must not be materialised as bytes
+    assert [type(c) for c in out] == [Silence, bytes]
     assert silence_samples(out) == 600 * SAMPLE_RATE
 
 
