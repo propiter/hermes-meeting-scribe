@@ -41,17 +41,32 @@ def candidates_block(candidates: Sequence[Candidate], hints: Sequence[str], meet
             f"<context_hints>{' / '.join(h for h in hints if h)}</context_hints>{when}")
 
 
+# The schema we send is deliberately tolerant (review finding 8), and with a non-strict schema real
+# models simply OMIT optional keys (E2E run: owner_name, quote, t0, decisions and open_questions all
+# vanished). Spelling the full shape out in the instructions works on every provider.
+_ITEM_SHAPE = ('{"title": str, "description": str, "owner_speaker_id": str|null, "owner_name": str|null, '
+               '"due": "YYYY-MM-DD"|null, "project": str|null, "project_confidence": number, "quote": str, '
+               '"t0": number}')
+_NOTES_SHAPE = ('Return one JSON object: {"meeting_title": str, "tldr": str, "summary": str, '
+                '"topics": [{"title": str, "points": [str]}], "decisions": [str], "open_questions": [str], '
+                f'"action_items": [{_ITEM_SHAPE}], "language": str, "project": str|null, '
+                '"project_confidence": number}. Always include every key (use null or [] when empty).')
+_CHUNK_SHAPE = ('Return one JSON object: {"summary": str, "topics": [{"title": str, "points": [str]}], '
+                f'"decisions": [str], "open_questions": [str], "action_items": [{_ITEM_SHAPE}]}}. '
+                'Always include every key (use null or [] when empty).')
+
+
 def single_instructions(lang: str | None) -> str:
     return ("You are a meeting scribe. Produce structured notes for the whole meeting. "
-            f"{_SAFETY} {_RULES} {language_line(lang)}")
+            f"{_SAFETY} {_RULES} {language_line(lang)} {_NOTES_SHAPE}")
 
 
 def chunk_instructions(lang: str | None) -> str:
     return ("You are a meeting scribe. This is ONE PART of a longer meeting; extract only what is in this "
-            f"part. {_SAFETY} {_RULES} {language_line(lang)}")
+            f"part. {_SAFETY} {_RULES} {language_line(lang)} {_CHUNK_SHAPE}")
 
 
 def reduce_instructions(lang: str | None) -> str:
     return ("You are a meeting scribe. Merge the partial notes of consecutive parts of one meeting into "
             "final notes: deduplicate action items, decisions and topics, keep the most specific owner/due. "
-            f"{_SAFETY} {_RULES} {language_line(lang)}")
+            f"{_SAFETY} {_RULES} {language_line(lang)} {_NOTES_SHAPE}")

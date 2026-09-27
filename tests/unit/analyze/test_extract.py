@@ -156,6 +156,24 @@ def test_schemas_only_require_what_extract_needs():
     assert NOTES_SCHEMA.get("additionalProperties", True) is not False
 
 
+@pytest.mark.parametrize("single", [True, False])
+def test_instructions_spell_out_every_output_key(meeting, utterances, single):
+    """E2E finding: with a non-strict json_schema a real model OMITTED optional keys (owner_name,
+    quote, t0, decisions, open_questions), so no task reached Kanban. The schema must stay tolerant
+    (review finding 8), so the instructions carry the full shape, which works on any provider."""
+    from meeting_scribe.analyze.schemas import CHUNK_SCHEMA
+
+    llm = FakeLLM(lambda n, t: full() if n == "meeting_notes" else {"summary": "s", "action_items": []})
+    utts = utterances if single else utterances * 400
+    analyzer(llm, analysis_chunk_chars=2000).analyze(meeting, utts, CANDS)
+    for call in llm.calls:
+        schema = NOTES_SCHEMA if call["schema_name"] == "meeting_notes" else CHUNK_SCHEMA
+        keys = set(schema["properties"]) | set(schema["properties"]["action_items"]["items"]["properties"])
+        missing = [k for k in keys if f'"{k}"' not in call["instructions"]]
+        assert not missing, (call["schema_name"], missing)
+        assert "Always include every key" in call["instructions"]
+
+
 def test_candidate_echoed_with_its_source_suffix_still_matches(meeting, utterances):
     """E2E finding: the model copied the candidate line format and answered "Chatio (hermes)"."""
     def resp(name, text):
