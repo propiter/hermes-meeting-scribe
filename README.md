@@ -239,6 +239,10 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `delivery_discord_thread` | bool | `true` | Post notes in a thread when possible. |
 | `delivery_project_threads` | bool | `true` | Post each task in a thread of its project's channel. |
 | `delivery_dm_assignees` | bool | `true` | DM each assignee their tasks with buttons after delivery. |
+| `delivery_discord_transcript` | bool | `true` | Attach the full transcript (`transcript-<date>-<slug>.md`) to the Discord notes. |
+| `google_meet_enabled` | bool | `false` | Import Google Meet transcripts (needs `hermes meeting-scribe google connect`). |
+| `google_meet_poll_minutes` | int | `5` | Minutes between Google Meet polls (2–1440). |
+| `google_meet_discord_channel` | str | `""` | Discord text channel id for Google Meet notes (empty = `delivery_discord_channel`, then home). |
 | `project_channels` | list | `[]` | Explicit project → channel map, entries like `Project name=channel_id`. |
 | `project_match_min_score` | float | `0.8` | Minimum fuzzy score to route a task to a channel by name. |
 | `channel_name_ignore_prefixes` | list | `[]` | Decorative leading words ignored in channel names. |

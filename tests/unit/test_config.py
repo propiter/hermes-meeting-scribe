@@ -113,3 +113,13 @@ def test_canonical_key_accepts_legacy_spelling():
     assert validate_value("kanban.mode", "auto") == "auto"
     with pytest.raises(KeyError):
         canonical_key("nope")
+
+
+def test_google_meet_and_transcript_settings_defaults_and_bounds():
+    """DESIGN §17: Meet import is opt-in; the transcript attachment is on by default."""
+    s = Settings.defaults()
+    assert s.google_meet_enabled is False and s.google_meet_poll_minutes == 5
+    assert s.google_meet_discord_channel == "" and s.delivery_discord_transcript is True
+    from meeting_scribe.config import settings_from_mapping
+    low = settings_from_mapping({"google_meet_poll_minutes": 0})
+    assert low.google_meet_poll_minutes == 5 and low.warnings  # below the minimum: default + warning

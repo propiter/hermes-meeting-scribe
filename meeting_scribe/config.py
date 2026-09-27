@@ -70,6 +70,11 @@ SPEC: dict[str, Opt] = {
     "delivery_discord_thread": Opt("bool", True, "Post notes in a thread when possible."),
     "delivery_project_threads": Opt("bool", True, "Post each task in a thread of its project's channel."),
     "delivery_dm_assignees": Opt("bool", True, "DM each assignee their tasks with buttons after delivery."),
+    "delivery_discord_transcript": Opt("bool", True, "Attach the full transcript (Markdown file) to the notes."),
+    "google_meet_enabled": Opt("bool", False, "Import Google Meet transcripts (needs `google connect`)."),
+    "google_meet_poll_minutes": Opt("int", 5, "Minutes between Google Meet polls.", minimum=2, maximum=1440),
+    "google_meet_discord_channel": Opt("str", "", "Discord text channel id for Google Meet notes "
+                                       "(empty = delivery_discord_channel, then home)."),
     "project_channels": Opt("list", (), "Explicit project to channel map, entries like 'Project name=channel_id'."),
     "project_match_min_score": Opt("float", 0.8, "Minimum fuzzy score to route a task to a channel by name.",
                                    minimum=0.0, maximum=1.0),
@@ -182,6 +187,10 @@ class Settings:
     delivery_discord_thread: bool
     delivery_project_threads: bool
     delivery_dm_assignees: bool
+    delivery_discord_transcript: bool
+    google_meet_enabled: bool
+    google_meet_poll_minutes: int
+    google_meet_discord_channel: str
     project_channels: tuple[str, ...]
     project_match_min_score: float
     channel_name_ignore_prefixes: tuple[str, ...]

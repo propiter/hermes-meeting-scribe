@@ -246,6 +246,10 @@ advertencia.
 | `delivery_discord_thread` | bool | `true` | Publicar las notas en un hilo cuando sea posible. |
 | `delivery_project_threads` | bool | `true` | Publicar cada tarea en un hilo del canal de su proyecto. |
 | `delivery_dm_assignees` | bool | `true` | Enviar por DM a cada responsable sus tareas con botones. |
+| `delivery_discord_transcript` | bool | `true` | Adjuntar la transcripción completa (`transcript-<fecha>-<slug>.md`) a las notas en Discord. |
+| `google_meet_enabled` | bool | `false` | Importar transcripciones de Google Meet (requiere `hermes meeting-scribe google connect`). |
+| `google_meet_poll_minutes` | int | `5` | Minutos entre sondeos de Google Meet (2–1440). |
+| `google_meet_discord_channel` | str | `""` | Id del canal de texto de Discord para las notas de Meet (vacío = `delivery_discord_channel` y, si no, home). |
 | `project_channels` | list | `[]` | Mapa explícito proyecto → canal, entradas como `Nombre del proyecto=id_canal`. |
 | `project_match_min_score` | float | `0.8` | Puntuación difusa mínima para enviar una tarea a un canal por nombre. |
 | `channel_name_ignore_prefixes` | list | `[]` | Palabras decorativas iniciales que se ignoran en los nombres de canal. |

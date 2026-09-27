@@ -148,6 +148,23 @@ config_schema:
     type: bool
     default: true
     description: DM each assignee their tasks with buttons after delivery.
+  delivery_discord_transcript:
+    type: bool
+    default: true
+    description: Attach the full transcript (Markdown file) to the notes.
+  google_meet_enabled:
+    type: bool
+    default: false
+    description: Import Google Meet transcripts (needs `google connect`).
+  google_meet_poll_minutes:
+    type: int
+    default: 5
+    description: Minutes between Google Meet polls.
+  google_meet_discord_channel:
+    type: str
+    default: ''
+    description: Discord text channel id for Google Meet notes (empty = delivery_discord_channel, then
+      home).
   project_channels:
     type: list
     default: []
