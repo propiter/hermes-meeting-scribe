@@ -188,7 +188,7 @@ class TaskPublisher:
         return channel
 
     def _thread_name(self, meeting: Meeting) -> str:
-        title = (meeting.title or meeting.channel_name or "meeting")[:80]
+        title = (meeting.title or meeting.channel_name or t("tasks.thread_default", self.o.lang))[:80]
         return t("tasks.thread_name", self.o.lang, title=title, date=f"{meeting.started_at:%Y-%m-%d}")[:100]
 
     # -- project channels -----------------------------------------------------------------------
@@ -196,8 +196,8 @@ class TaskPublisher:
                              ptrs: Pointers) -> Any:
         channel = await self.msgs.channel(channel_id)
         title = notes.meeting_title or meeting.title or meeting.channel_name
-        spec = MessageSpec(f"🎙️ **{title}** · {meeting.started_at:%Y-%m-%d} · `{meeting.id}` — "
-                           f"📋 {t('tasks.index_title', self.o.lang)}: {count}")
+        spec = MessageSpec(t("tasks.project_anchor", self.o.lang, title=title,
+                             date=f"{meeting.started_at:%Y-%m-%d}", id=meeting.id, count=count))
         suffix = f"thread:{channel_id}"
         ptr = await ptrs.load(suffix) or {}
         placed = await self.msgs.edit_or_send(ptr, channel, spec=spec)

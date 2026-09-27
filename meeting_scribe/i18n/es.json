@@ -301,5 +301,7 @@
   "ui.source.hermes": "Proyecto de Hermes",
   "ui.source.kanban": "Tablero Kanban",
   "ui.source.learned": "Usado antes en este canal",
-  "ui.source.linear": "Proyecto de Linear"
+  "ui.source.linear": "Proyecto de Linear",
+  "tasks.thread_default": "Reunión",
+  "tasks.project_anchor": "🎙️ **{title}** · {date} — 📋 Tareas: {count} · ref. `{id}`"
 }
