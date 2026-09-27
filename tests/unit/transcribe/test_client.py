@@ -31,7 +31,7 @@ def fake_worker(tmp_path):
 
 
 def _transcriber(ff, fake_worker, mode="ok", timeout_floor=30.0):
-    settings = settings_from_mapping({"transcribe.language": "es", "transcribe.model": "tiny"})
+    settings = settings_from_mapping({"transcribe_language": "es", "transcribe_model": "tiny"})
     return SubprocessTranscriber(lambda: settings, lambda: ff, command=[sys.executable, str(fake_worker)],
                                  extra_job={"_fake_mode": mode}, timeout_floor=timeout_floor, poll_interval=0.05)
 

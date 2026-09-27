@@ -26,8 +26,8 @@ def tiny_model_available():
 def test_real_worker_on_speech_free_audio(tiny_model_available, ff, make_track, tmp_path, meeting):
     make_track("10", seconds=3.0, freq=440)
     make_track("11", seconds=3.0, silence=True)
-    settings = settings_from_mapping({"transcribe.model": "tiny", "transcribe.language": "en",
-                                      "transcribe.cpu_threads": 2})
+    settings = settings_from_mapping({"transcribe_model": "tiny", "transcribe_language": "en",
+                                      "transcribe_cpu_threads": 2})
     seen: list[float] = []
     utts = SubprocessTranscriber(lambda: settings, lambda: ff, poll_interval=0.2).transcribe(
         meeting, tmp_path, progress=lambda _sid, frac: seen.append(frac))

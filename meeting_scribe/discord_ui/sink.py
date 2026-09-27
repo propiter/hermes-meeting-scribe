@@ -6,8 +6,8 @@ with a timeout. The result is a mutable pointer ``(sink="discord", key="mtg:<id>
 ``{"channel", "thread", "messages"}``: a reprocess (or a button click via :meth:`refresh`) edits
 those messages in place, posts extras, deletes surplus, and re-posts only if they were deleted.
 
-Target: ``delivery.discord.channel`` → the voice channel's text chat → Hermes home channel. The
-header goes in the channel; with ``delivery.discord.thread`` the rest goes in a thread started from
+Target: ``delivery_discord_channel`` → the voice channel's text chat → Hermes home channel. The
+header goes in the channel; with ``delivery_discord_thread`` the rest goes in a thread started from
 it (voice text chats cannot host threads, so there everything stays in the channel).
 
 Partial posts (review W8): the pointer is persisted after EVERY message sent, so when part N fails
@@ -101,7 +101,7 @@ class DiscordNotesSink:
                 return await adapter._resolve_channel(cid)
             except Exception as exc:  # deleted channel, missing access: try the next fallback
                 log.info("meeting-scribe: notes channel %s unavailable: %s", cid, exc)
-        raise LookupError("no reachable Discord channel for notes (delivery.discord.channel / voice chat / home)")
+        raise LookupError("no reachable Discord channel for notes (delivery_discord_channel / voice chat / home)")
 
     async def publish(self, meeting: Meeting, specs: Sequence[MessageSpec]) -> str:
         adapter = self._adapter()

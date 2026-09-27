@@ -85,33 +85,35 @@ def test_reprocess_queue_only(rt, capsys):
 
 
 def test_config_get_set(rt, capsys):
-    code, out = run(rt, ["config", "get", "kanban.mode"], capsys)
+    code, out = run(rt, ["config", "get", "kanban_mode"], capsys)
     assert code == 0 and out.strip() == "approve"
-    code, _ = run(rt, ["config", "set", "kanban.mode", "auto"], capsys)
-    assert code == 0 and rt.cfg["kanban.mode"] == "auto"
-    code, out = run(rt, ["config", "set", "kanban.mode", "sometimes"], capsys)
+    code, _ = run(rt, ["config", "set", "linear.mode", "off"], capsys)  # legacy spelling still accepted
+    assert code == 0 and rt.cfg["linear_mode"] == "off" and "linear.mode" not in rt.cfg
+    code, _ = run(rt, ["config", "set", "kanban_mode", "auto"], capsys)
+    assert code == 0 and rt.cfg["kanban_mode"] == "auto"
+    code, out = run(rt, ["config", "set", "kanban_mode", "sometimes"], capsys)
     assert code == 2
     code, out = run(rt, ["config", "get"], capsys)
-    assert "transcribe.model" in out
+    assert "transcribe_model" in out
 
 
 def test_setup_non_interactive(rt, capsys):
     code, out = run(rt, ["setup", "--non-interactive", "--language", "es", "--model", "small",
                          "--kanban-mode", "off", "--owners", "1,2", "--no-autojoin"], capsys)
     assert code == 0
-    assert rt.cfg["transcribe.language"] == "es" and rt.cfg["analysis.language"] == "es"
-    assert rt.cfg["ui.language"] == "es" and rt.cfg["transcribe.model"] == "small"
-    assert rt.cfg["kanban.mode"] == "off" and rt.cfg["owners"] == ["1", "2"]
-    assert rt.cfg["autojoin.enabled"] is False
+    assert rt.cfg["transcribe_language"] == "es" and rt.cfg["analysis_language"] == "es"
+    assert rt.cfg["ui_language"] == "es" and rt.cfg["transcribe_model"] == "small"
+    assert rt.cfg["kanban_mode"] == "off" and rt.cfg["owners"] == ["1", "2"]
+    assert rt.cfg["autojoin_enabled"] is False
 
 
 def test_setup_interactive_uses_defaults_on_enter(rt, capsys, monkeypatch):
     answers = iter(["en", "", "", "", "", "", "", "", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers, ""))
     code, out = run(rt, ["setup"], capsys)
-    assert code == 0 and rt.cfg["transcribe.language"] == "en"
+    assert code == 0 and rt.cfg["transcribe_language"] == "en"
     # Enter keeps the current value WITHOUT pinning it, so future default changes still apply.
-    assert "transcribe.model" not in rt.cfg and rt.settings().transcribe_model == "medium"
+    assert "transcribe_model" not in rt.cfg and rt.settings().transcribe_model == "medium"
 
 
 def test_setup_rejects_bad_value(rt, capsys):

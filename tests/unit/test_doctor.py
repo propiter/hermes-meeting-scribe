@@ -57,8 +57,8 @@ def env(tmp_path: Path, **settings):
 
 def test_settings_warnings(tmp_path):
     assert check_settings(env(tmp_path)).status == "ok"
-    bad = check_settings(env(tmp_path, **{"kanban.mode": "maybe"}))
-    assert bad.status == "warn" and "kanban.mode" in bad.detail
+    bad = check_settings(env(tmp_path, **{"kanban_mode": "maybe"}))
+    assert bad.status == "warn" and "kanban_mode" in bad.detail
 
 
 def test_ffmpeg_real(tmp_path):
@@ -75,13 +75,13 @@ def test_storage_creates_db_with_fts(tmp_path):
 
 def test_obsidian(tmp_path):
     assert check_obsidian(env(tmp_path)).status == "ok"  # disabled is fine
-    assert check_obsidian(env(tmp_path, **{"obsidian.vault_path": str(tmp_path / "x")})).status == "fail"
+    assert check_obsidian(env(tmp_path, **{"obsidian_vault_path": str(tmp_path / "x")})).status == "fail"
     (tmp_path / "v").mkdir()
-    assert check_obsidian(env(tmp_path, **{"obsidian.vault_path": str(tmp_path / "v")})).status == "ok"
+    assert check_obsidian(env(tmp_path, **{"obsidian_vault_path": str(tmp_path / "v")})).status == "ok"
 
 
 def test_linear(tmp_path):
-    assert check_linear(env(tmp_path, **{"linear.mode": "off"})).status == "ok"
+    assert check_linear(env(tmp_path, **{"linear_mode": "off"})).status == "ok"
     assert check_linear(env(tmp_path)).status == "warn"
 
     class Backend:
@@ -107,7 +107,7 @@ def test_kanban(tmp_path):
 
     e.kanban_boards = broken
     assert check_kanban(e).status == "warn"
-    assert check_kanban(env(tmp_path, **{"kanban.mode": "off"})).status == "ok"
+    assert check_kanban(env(tmp_path, **{"kanban_mode": "off"})).status == "ok"
 
 
 def test_capture_reports_phase_b(tmp_path):

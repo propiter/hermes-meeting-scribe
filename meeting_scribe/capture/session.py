@@ -9,7 +9,7 @@ voice-mode reply in another text chat of the guild can never be spoken into the 
 
 A drain loop (0.5 s) moves timed frames from the receiver into per-speaker writers, sends the UDP
 keepalive, re-reads the DAVE session every tick, and decides when to stop: explicit stop, no
-humans for ``autoleave.grace_seconds``, ``limits.max_duration_minutes``, or the voice client being
+humans for ``autoleave_grace_seconds``, ``limits_max_duration_minutes``, or the voice client being
 lost (``/voice leave``/adapter disconnect immediately; a discord.py reconnect only after it has
 not recovered for ``vc.timeout`` seconds → partial).
 

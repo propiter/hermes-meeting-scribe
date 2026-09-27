@@ -31,7 +31,7 @@ HEADER = {
     "platforms": ["linux", "macos"],
     "tags": ["discord", "voice", "meetings", "transcription", "notes"],
     "python_dependencies": ["faster-whisper>=1.1,<2"],
-    "external_dependencies": ["ffmpeg with libopus (PATH, ~/.hermes/tools or audio.ffmpeg_path)"],
+    "external_dependencies": ["ffmpeg with libopus (PATH, ~/.hermes/tools or audio_ffmpeg_path)"],
     "optional_env": [{
         "name": "LINEAR_API_KEY",
         "description": "Linear personal API key (enables Linear issue creation)",

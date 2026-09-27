@@ -86,9 +86,9 @@ def test_reprocess_and_project_and_link(prepo, layout, settings, clock, meeting)
 
 def test_config_and_spanish(prepo, layout, settings, clock):
     from meeting_scribe.config import settings_from_mapping
-    s = settings_from_mapping({"ui.language": "es"})
+    s = settings_from_mapping({"ui_language": "es"})
     cmds, *_ = make(prepo, layout, lambda: s, clock)
-    assert "`kanban.mode` = approve" in cmds.handle("config", CALLER, "meeting")
+    assert "`kanban_mode` = approve" in cmds.handle("config", CALLER, "meeting")
     assert "Ninguna reunión" in cmds.handle("list", CALLER, "meeting") or "Aún no" in cmds.handle(
         "list", CALLER, "meeting")
 

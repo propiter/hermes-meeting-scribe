@@ -43,7 +43,7 @@ def test_settings_are_read_per_call(tmp_path):
     h, cfg = host(tmp_path)
     rt = Runtime(h)
     assert rt.settings().kanban_mode == "approve"
-    cfg["kanban.mode"] = "auto"
+    cfg["kanban_mode"] = "auto"
     assert rt.settings().kanban_mode == "auto"
 
 
@@ -134,8 +134,8 @@ def test_runtime_is_a_doctor_env(tmp_path):
     assert env.data_dir() == tmp_path / "data"
     assert env.kanban_boards()[0]["slug"] == "default"
     assert env.llm_status() == (True, "ok")
-    rt.set_config("kanban.mode", "off")
-    assert cfg["kanban.mode"] == "off"
+    rt.set_config("kanban_mode", "off")
+    assert cfg["kanban_mode"] == "off"
 
 
 def test_switching_data_dir_never_closes_a_repo_in_use(tmp_path):

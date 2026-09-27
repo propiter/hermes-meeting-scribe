@@ -63,13 +63,13 @@ def _setup(repo, meeting, **cfg):
     item = ActionItem(id="a1", title="Enviar informe", owner_speaker_id="11")
     notes = Notes("t", "t", "s", action_items=(item,))
     repo.sync_action_items(m.id, notes.action_items)
-    s = settings_from_mapping({"linear.default_team": "ENG", "owners": ["11"], **cfg})
+    s = settings_from_mapping({"linear_default_team": "ENG", "owners": ["11"], **cfg})
     return m, notes, (lambda: s)
 
 
 def test_kanban_auto_does_not_make_linear_approve_auto(tmp_path, repo, meeting):
     """Finding 1: Kanban delivering an item used to count as 'approved' for Linear."""
-    m, notes, s = _setup(repo, meeting, **{"kanban.mode": "auto", "linear.mode": "approve"})
+    m, notes, s = _setup(repo, meeting, **{"kanban_mode": "auto", "linear_mode": "approve"})
     lb = FakeLinear()
     kanban = KanbanSink(s, repo, FakeKanban(), owners=lambda: ("11",), project_for=lambda *a: None)
     linear = LinearSink(s, repo, lambda: lb, project_for=lambda *a: None)
@@ -79,7 +79,7 @@ def test_kanban_auto_does_not_make_linear_approve_auto(tmp_path, repo, meeting):
 
 
 def test_approving_for_kanban_is_not_approving_for_linear(tmp_path, repo, meeting):
-    m, notes, s = _setup(repo, meeting, **{"kanban.mode": "approve", "linear.mode": "approve"})
+    m, notes, s = _setup(repo, meeting, **{"kanban_mode": "approve", "linear_mode": "approve"})
     lb = FakeLinear()
     kanban = KanbanSink(s, repo, FakeKanban(), owners=lambda: ("11",), project_for=lambda *a: None)
     linear = LinearSink(s, repo, lambda: lb, project_for=lambda *a: None)
@@ -94,7 +94,7 @@ def test_approving_for_kanban_is_not_approving_for_linear(tmp_path, repo, meetin
 
 def test_concurrent_approvals_create_one_linear_issue(tmp_path, repo, meeting):
     """Finding 6: double click / Approve-all overlapping a click created two issues."""
-    m, notes, s = _setup(repo, meeting, **{"linear.mode": "approve"})
+    m, notes, s = _setup(repo, meeting, **{"linear_mode": "approve"})
     lb = FakeLinear(delay=0.2)
     sink = LinearSink(s, repo, lambda: lb, project_for=lambda *a: None)
     results: list[object] = []
@@ -117,7 +117,7 @@ def test_concurrent_approvals_create_one_linear_issue(tmp_path, repo, meeting):
 
 def test_crash_between_create_and_record_reconciles_by_marker(tmp_path, repo, meeting):
     """Finding 6: a claim left pending by a crash is taken over, and Linear is searched first."""
-    m, notes, s = _setup(repo, meeting, **{"linear.mode": "auto"})
+    m, notes, s = _setup(repo, meeting, **{"linear_mode": "auto"})
     key = idempotency_key(m.id, "a1")
     claim = repo.claim_delivery(m.id, "linear", key)  # the crashed attempt
     assert claim.kind == "new"
@@ -130,7 +130,7 @@ def test_crash_between_create_and_record_reconciles_by_marker(tmp_path, repo, me
 
 
 def test_failed_create_keeps_the_claim_for_reconciliation(tmp_path, repo, meeting):
-    m, notes, s = _setup(repo, meeting, **{"linear.mode": "auto"})
+    m, notes, s = _setup(repo, meeting, **{"linear_mode": "auto"})
 
     class Timeout(FakeLinear):
         def create_issue(self, issue):

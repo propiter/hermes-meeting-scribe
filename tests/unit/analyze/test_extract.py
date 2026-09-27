@@ -68,7 +68,7 @@ def test_prompt_marks_transcript_as_untrusted(meeting, utterances):
 
 def test_notes_language_setting(meeting, utterances):
     llm = FakeLLM(lambda n, t: full(language="es"))
-    analyzer(llm, **{"analysis.language": "en"}).analyze(meeting, utterances, CANDS)
+    analyzer(llm, **{"analysis_language": "en"}).analyze(meeting, utterances, CANDS)
     assert "English" in llm.calls[0]["instructions"]
 
 
@@ -85,7 +85,7 @@ def test_map_reduce_for_long_meeting(meeting):
                                    "owner_name": "Ana", "due": None, "project": None,
                                    "project_confidence": 0, "quote": "", "t0": 1.0}])
     llm = FakeLLM(respond)
-    notes = analyzer(llm, **{"analysis.chunk_chars": 3000}).analyze(meeting, utts, CANDS)
+    notes = analyzer(llm, **{"analysis_chunk_chars": 3000}).analyze(meeting, utts, CANDS)
     names = [c["schema_name"] for c in llm.calls]
     assert names[-1] == "meeting_notes" and names.count("meeting_chunk") == len(names) - 1 >= 2
     assert "<chunk_notes>" in llm.calls[-1]["text"]

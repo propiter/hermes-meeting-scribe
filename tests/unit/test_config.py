@@ -27,8 +27,8 @@ def test_defaults_match_design():
 
 
 def test_coercion_of_string_values():
-    s = Settings.load(_getter({"autojoin.enabled": "false", "autojoin.min_humans": "3",
-                               "projects.min_confidence": "0.75", "commands.aliases": "meet, nova-rec",
+    s = Settings.load(_getter({"autojoin_enabled": "false", "autojoin_min_humans": "3",
+                               "projects_min_confidence": "0.75", "commands_aliases": "meet, nova-rec",
                                "owners": 123}))
     assert s.autojoin_enabled is False and s.autojoin_min_humans == 3
     assert s.projects_min_confidence == 0.75
@@ -37,24 +37,24 @@ def test_coercion_of_string_values():
 
 
 @pytest.mark.parametrize("key,value", [
-    ("audio.retention", "flac"), ("kanban.mode", "sometimes"), ("autojoin.min_humans", "many"),
-    ("projects.min_confidence", 3.0), ("audio.bitrate_kbps", 0), ("ui.language", "fr"),
+    ("audio_retention", "flac"), ("kanban_mode", "sometimes"), ("autojoin_min_humans", "many"),
+    ("projects_min_confidence", 3.0), ("audio_bitrate_kbps", 0), ("ui_language", "fr"),
 ])
 def test_invalid_values_fall_back_with_warning(key, value):
     s = Settings.load(_getter({key: value}))
-    assert getattr(s, key.replace(".", "_")) == SPEC[key].default
+    assert getattr(s, key) == SPEC[key].default
     assert any(key in w for w in s.warnings)
 
 
 def test_aliases_are_normalized_and_primary_excluded():
-    s = Settings.load(_getter({"commands.aliases": ["/Meet", "meeting", "rec", "bad name!"]}))
+    s = Settings.load(_getter({"commands_aliases": ["/Meet", "meeting", "rec", "bad name!"]}))
     assert s.commands_aliases == ("meet", "rec")
 
 
 def test_cpu_threads_auto(monkeypatch):
     monkeypatch.setattr("os.cpu_count", lambda: 16)
     assert Settings.load(_getter({})).effective_cpu_threads == 14
-    assert Settings.load(_getter({"transcribe.cpu_threads": 4})).effective_cpu_threads == 4
+    assert Settings.load(_getter({"transcribe_cpu_threads": 4})).effective_cpu_threads == 4
     monkeypatch.setattr("os.cpu_count", lambda: 1)
     assert Settings.load(_getter({})).effective_cpu_threads == 1
 
@@ -81,10 +81,35 @@ def test_plugin_yaml_config_schema_in_sync_with_settings():
 
 def test_validate_value_for_cli():
     from meeting_scribe.config import validate_value
-    assert validate_value("kanban.mode", "auto") == "auto"
-    assert validate_value("autojoin.enabled", "no") is False
+    assert validate_value("kanban_mode", "auto") == "auto"
+    assert validate_value("autojoin_enabled", "no") is False
     assert validate_value("owners", "1, 2") == ["1", "2"]  # YAML-friendly list, not tuple
-    with pytest.raises(ValueError, match="kanban.mode"):
-        validate_value("kanban.mode", "sometimes")
+    with pytest.raises(ValueError, match="kanban_mode"):
+        validate_value("kanban_mode", "sometimes")
     with pytest.raises(KeyError):
         validate_value("nope", "x")
+
+
+# -- review finding 10: flat keys (Hermes' Desktop form reads settings[key] flat) --------------
+def test_config_schema_keys_are_flat():
+    assert all("." not in key for key in SPEC)
+
+
+def test_legacy_nested_values_are_still_read():
+    """Configs saved by 0.1 (``ctx.set_config("kanban.mode")`` -> nested YAML) keep working."""
+    s = Settings.load(_getter({"kanban.mode": "auto", "delivery.discord.channel": "123"}))
+    assert s.kanban_mode == "auto" and s.delivery_discord_channel == "123"
+
+
+def test_flat_value_wins_over_legacy():
+    s = Settings.load(_getter({"kanban_mode": "off", "kanban.mode": "auto"}))
+    assert s.kanban_mode == "off"
+
+
+def test_canonical_key_accepts_legacy_spelling():
+    from meeting_scribe.config import canonical_key, validate_value
+
+    assert canonical_key("kanban.mode") == "kanban_mode" == canonical_key("kanban_mode")
+    assert validate_value("kanban.mode", "auto") == "auto"
+    with pytest.raises(KeyError):
+        canonical_key("nope")

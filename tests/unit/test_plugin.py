@@ -79,7 +79,7 @@ def test_register_wires_everything(ctx):
 
 
 def test_aliases_from_config(tmp_path, monkeypatch):
-    c = FakeCtx(tmp_path, {"commands.aliases": ["nova-rec", "Meeting", "bad name!"]})
+    c = FakeCtx(tmp_path, {"commands_aliases": ["nova-rec", "Meeting", "bad name!"]})
     monkeypatch.setattr(plugin, "_host_overrides", lambda: {"data_dir": lambda: tmp_path / "d",
                                                            "secret": lambda name: None,
                                                            "mcp_allowed": lambda: False})
@@ -108,7 +108,7 @@ def test_cli_handler_returns_exit_code(ctx, capsys):
     setup_fn, handler_fn = ctx.cli["meeting-scribe"]
     parser = argparse.ArgumentParser()
     setup_fn(parser)
-    assert handler_fn(parser.parse_args(["config", "get", "kanban.mode"])) == 0
+    assert handler_fn(parser.parse_args(["config", "get", "kanban_mode"])) == 0
     assert capsys.readouterr().out.strip() == "approve"
 
 

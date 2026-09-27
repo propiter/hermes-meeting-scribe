@@ -38,7 +38,7 @@ meeting_scribe/
   storage/     layout.py (paths), repo.py (SQLite index + FTS5 + job table),
                artifacts.py (meta.json, transcript.jsonl/.md, notes.md, tasks.json)
   audio/       ffmpeg.py (binary resolution: PATH → ~/.hermes/tools/ffmpeg-*/bin →
-               audio.ffmpeg_path; decode, probe), archive.py (final packaging per
+               audio_ffmpeg_path; decode, probe), archive.py (final packaging per
                retention, stream extraction for reprocess)
   capture/     compat.py (probe), receiver.py (ScribeReceiver + TimedBuffer),
                tracks.py (live ffmpeg opus writer per speaker, timeline-aligned),
@@ -75,7 +75,7 @@ skills/meeting-scribe/SKILL.md
 Slash commands registered with `ctx.register_command` (names colliding with
 Hermes built-ins are rejected by Hermes — `/start` and `/stop` ARE built-ins,
 so they cannot be used). Primary: **`/meeting`**. Aliases configurable
-(`commands.aliases`, default `["meet", "rec"]`; e.g. a user can add `nova-rec`).
+(`commands_aliases`, default `["meet", "rec"]`; e.g. a user can add `nova-rec`).
 Every alias routes to the same router with a subcommand argument:
 
 | Subcommand | Effect |
@@ -93,7 +93,7 @@ Every alias routes to the same router with a subcommand argument:
 | `help` | usage |
 
 Ending a meeting: `stop`, OR automatically when no humans remain for
-`autoleave.grace_seconds` (default 60), OR `limits.max_duration_minutes`
+`autoleave_grace_seconds` (default 60), OR `limits_max_duration_minutes`
 (default 240), OR the voice connection is lost / someone runs `/voice leave`.
 
 ## 4. Capture
@@ -123,16 +123,16 @@ Ending a meeting: `stop`, OR automatically when no humans remain for
 - Consent: announce message in the voice channel's text chat (and configured
   notes channel); optional `[REC]` nickname prefix (needs Manage Nicknames;
   failure is non-fatal and restored on stop).
-- Auto-join (`autojoin.enabled`, default **true**): `on_voice_state_update`
-  listener; when a voice channel reaches `autojoin.min_humans` (default 2) for
-  `autojoin.grace_seconds` (default 20) and the channel passes
-  `autojoin.channels` allowlist / `autojoin.ignore_channels`, and the bot has no
+- Auto-join (`autojoin_enabled`, default **true**): `on_voice_state_update`
+  listener; when a voice channel reaches `autojoin_min_humans` (default 2) for
+  `autojoin_grace_seconds` (default 20) and the channel passes
+  `autojoin_channels` allowlist / `autojoin_ignore_channels`, and the bot has no
   voice client in that guild → start. Only one recording per guild (Discord
   limit); multiple guilds concurrently.
 
 ## 5. Audio retention (one file per meeting)
 
-`audio.retention`:
+`audio_retention`:
 - **`multitrack`** (default): one `recording.mka` (Matroska) containing stream 0
   = mixed-down Opus (default track, plays anywhere) + one Opus stream per
   speaker titled with the speaker name/id. Single file, playable, and still
@@ -148,9 +148,9 @@ the `.mka`.
 - Runs in a **subprocess** (`python -m meeting_scribe.transcribe.worker`) with
   `sys.executable`, one meeting at a time, low priority (`nice`), so the
   gateway never blocks and memory is released.
-- Model own instance: `transcribe.model` (default `medium`), `device` auto
+- Model own instance: `transcribe_model` (default `medium`), `device` auto
   (CPU int8 without CUDA), `cpu_threads` default `max(1, cores-2)`, language
-  `transcribe.language` (default `auto`; the setup wizard asks and strongly
+  `transcribe_language` (default `auto`; the setup wizard asks and strongly
   recommends pinning it — auto-detect can flip per chunk). `vad_filter=True`,
   `word_timestamps=True`, `condition_on_previous_text=False`, beam 5.
 - Decodes each track to 16 kHz mono via ffmpeg; per-segment hallucination
@@ -171,12 +171,12 @@ the `.mka`.
   owner_name|null, due|null (only if explicitly said, ISO), project|null,
   project_confidence 0..1, quote, t0}]`, `meeting_title`.
 - Transcript is DATA: prompt forbids following instructions inside it.
-- Notes language: `analysis.language` (default = transcript language).
+- Notes language: `analysis_language` (default = transcript language).
 - **Project resolution** (`analyze/projects.py`): candidates = Hermes projects
   (`projects_db`, per profile) + kanban boards + Linear projects/teams (if
   enabled) + learned `channel_id→project` map; hints = guild/category/channel
   names. LLM chooses only from candidates or null; below
-  `projects.min_confidence` (0.6) → unassigned. `/meeting project` and the 📁
+  `projects_min_confidence` (0.6) → unassigned. `/meeting project` and the 📁
   button teach the channel map.
 
 ## 8. Delivery (sinks)
@@ -185,28 +185,28 @@ All sinks implement `Sink.deliver(ctx, meeting, notes) -> SinkResult` and are
 idempotent (keys: `mtg:<meeting_id>:<item_id>`).
 - **files** (always): meeting folder artifacts + `notes.md` with YAML
   frontmatter (Obsidian-compatible).
-- **discord** (`delivery.discord.enabled`, default true): thread (or message if
-  threads unavailable) in `delivery.discord.channel` (default: the voice
+- **discord** (`delivery_discord_enabled`, default true): thread (or message if
+  threads unavailable) in `delivery_discord_channel` (default: the voice
   channel's text chat → Hermes home channel fallback) with TL;DR, decisions,
   open questions, action items **grouped by person with mentions**, and
   per-task buttons.
 - **Buttons** (persistent `discord.ui.DynamicItem`, survive restarts):
   ✅ Kanban (owners only, for owner tasks) · 🟣 Linear (when Linear active) ·
   ❌ Dismiss · 📁 Project (select menu of candidates) · bulk "Approve all".
-- **kanban** (`kanban.mode`: `approve` default | `auto` | `off`): creates
+- **kanban** (`kanban_mode`: `approve` default | `auto` | `off`): creates
   tasks for OWNER items via `hermes_cli.kanban_db.create_task(triage=True,
   idempotency_key=..., project_id=resolved)`; body links meeting folder +
   quote + timestamp. Owner = `owners` config (default: Discord home channel
   user_id + DISCORD_ALLOWED_USERS first entry).
-- **linear** (`linear.mode`: `approve` default | `auto` | `off`; active only if
+- **linear** (`linear_mode`: `approve` default | `auto` | `off`; active only if
   connected): backend A = GraphQL API with `LINEAR_API_KEY` (secret scope);
   backend B = Hermes MCP server named `linear` via `ctx.call_mcp` if
   allowlisted. Issue per action item: team/project from resolution, assignee
   from person mapping (learned links → email/name fuzzy match of Linear users
   vs Discord display name), description with quote + meeting ref. Not
   connected → silently skipped (doctor reports it).
-- **obsidian** (`obsidian.vault_path`, off unless set): copies notes.md into
-  `<vault>/<obsidian.folder>/`.
+- **obsidian** (`obsidian_vault_path`, off unless set): copies notes.md into
+  `<vault>/<obsidian_folder>/`.
 
 ## 9. Pipeline & storage
 
@@ -285,7 +285,7 @@ SMTP?". Plugin skill `meeting-scribe:meeting-scribe` explains usage.
   and waits (start 60 s, stop 90 s). If ever called on the loop thread it schedules
   the coroutine and answers "starting…/stopping…".
 - **Auto-leave** is polled by the session each drain tick (no humans for
-  `autoleave.grace_seconds`), not driven by the voice-state listener; auto-join uses
+  `autoleave_grace_seconds`), not driven by the voice-state listener; auto-join uses
   one watcher task per channel re-checking every second (debounce).
   `ctx.on_unload` also cancels pending auto-join watchers.
 - **Stop reasons**: `stopped`, `empty`, `max_duration` → complete;
@@ -293,7 +293,7 @@ SMTP?". Plugin skill `meeting-scribe:meeting-scribe` explains usage.
   `error` → `partial=True`.
 - **Notes layout**: header message (title, partial warning, TL;DR, decisions, open
   questions; split at 2000 chars, mentions never cut) in the target channel; the rest
-  in a thread started from it when `delivery.discord.thread` and the channel supports
+  in a thread started from it when `delivery_discord_thread` and the channel supports
   threads (voice text chats do not → everything stays in the channel). Items grouped
   by owner (`<@id> (name)`, "Unassigned" last), ≤ 5 items per message (one button
   row per item; Discord max 5 rows), then a bulk row. Plain content, no embeds.

@@ -104,5 +104,5 @@ def prepo(layout):
 
 @pytest.fixture
 def settings():
-    s = settings_from_mapping({"audio.retention": "none"})
+    s = settings_from_mapping({"audio_retention": "none"})
     return lambda: s

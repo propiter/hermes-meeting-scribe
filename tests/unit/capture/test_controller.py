@@ -61,7 +61,7 @@ def world(tmp_path):
     adapter_cls = type("DiscordAdapter", (FakeAdapter,), {"__module__": "fake_hermes_adapter"})
     adapter = adapter_cls(FakeBot([guild]))
     svc = Svc(tmp_path)
-    s = settings_from_mapping({"consent.nickname_prefix": ""})
+    s = settings_from_mapping({"consent_nickname_prefix": ""})
     mgr = CaptureManager(service=lambda: svc, settings=lambda: s, ffmpeg=lambda: None,
                          writer_factory=lambda ff, path, t0, kbps: NullWriter(),
                          compat=lambda adapter: CompatResult(True, (), ("x",)), tick=0.001)

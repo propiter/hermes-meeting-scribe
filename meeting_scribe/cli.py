@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
 from . import doctor
-from .config import SPEC, Settings, validate_value
+from .config import LEGACY_KEYS, SPEC, Settings, canonical_key, validate_value
 from .domain.models import Stage
 from .i18n import t
 from .pipeline.service import MeetingService
@@ -47,7 +47,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     s.add_argument("--owners", help="Comma-separated Discord user ids allowed to send tasks to Kanban")
     s.add_argument("--autojoin", dest="autojoin", action="store_true", default=None)
     s.add_argument("--no-autojoin", dest="autojoin", action="store_false")
-    s.add_argument("--retention", choices=SPEC["audio.retention"].choices)
+    s.add_argument("--retention", choices=SPEC["audio_retention"].choices)
     s.add_argument("--kanban-mode")
     s.add_argument("--linear-mode")
     s.add_argument("--linear-team")
@@ -73,7 +73,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     g = cf_sub.add_parser("get")
     g.add_argument("key", nargs="?")
     se = cf_sub.add_parser("set")
-    se.add_argument("key", choices=list(SPEC))
+    se.add_argument("key", choices=[*SPEC, *LEGACY_KEYS.values()], metavar="KEY")
     se.add_argument("value")
     parser.set_defaults(_ms_parser=parser)
 
@@ -91,10 +91,10 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
     current = rt.settings()
     lang = current.ui_language
     flags: dict[str, Any] = {
-        "transcribe.language": args.language, "transcribe.model": args.model,
-        "delivery.discord.channel": args.notes_channel, "owners": args.owners, "autojoin.enabled": args.autojoin,
-        "audio.retention": args.retention, "kanban.mode": args.kanban_mode, "linear.mode": args.linear_mode,
-        "linear.default_team": args.linear_team, "obsidian.vault_path": args.obsidian_vault}
+        "transcribe_language": args.language, "transcribe_model": args.model,
+        "delivery_discord_channel": args.notes_channel, "owners": args.owners, "autojoin_enabled": args.autojoin,
+        "audio_retention": args.retention, "kanban_mode": args.kanban_mode, "linear_mode": args.linear_mode,
+        "linear_default_team": args.linear_team, "obsidian_vault_path": args.obsidian_vault}
     answers = {k: v for k, v in flags.items() if v is not None}
     if not args.non_interactive:
         _print(t("cli.setup_intro", lang))
@@ -102,19 +102,19 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
         for key in flags:
             if key in answers:
                 continue
-            default = _fmt(getattr(current, key.replace(".", "_")))
-            if key == "transcribe.model":
+            default = _fmt(getattr(current, key))
+            if key == "transcribe_model":
                 for m in MODELS:
                     _print("  " + t("cli.model_estimate", lang, model=m, factor=realtime_factor(m),
                                     threads=current.effective_cpu_threads))
             raw = input(f"{key} [{default}]: ").strip()
             if raw:
                 answers[key] = raw
-    if "transcribe.language" in answers and str(answers["transcribe.language"]) != "auto":
-        code = str(answers["transcribe.language"])
-        answers.setdefault("analysis.language", code)
+    if "transcribe_language" in answers and str(answers["transcribe_language"]) != "auto":
+        code = str(answers["transcribe_language"])
+        answers.setdefault("analysis_language", code)
         if code in ("es", "en"):
-            answers.setdefault("ui.language", code)
+            answers.setdefault("ui_language", code)
     try:
         validated = {k: validate_value(k, v) for k, v in answers.items()}
     except ValueError as exc:
@@ -219,14 +219,19 @@ def _config(args: argparse.Namespace, rt: CliRuntime) -> int:
     settings = rt.settings()
     if getattr(args, "config_command", None) == "set":
         try:
-            rt.set_config(args.key, validate_value(args.key, args.value))
+            rt.set_config(canonical_key(args.key), validate_value(args.key, args.value))
+        except KeyError:
+            _print(f"unknown key {args.key}")
+            return 2
         except ValueError as exc:
             _print(str(exc))
             return 2
         return 0
     key = getattr(args, "key", None)
     if key:
-        if key not in SPEC:
+        try:
+            key = canonical_key(key)
+        except KeyError:
             _print(f"unknown key {key}")
             return 2
         _print(_fmt(settings.as_dict()[key]))

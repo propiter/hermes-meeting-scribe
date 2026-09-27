@@ -1,8 +1,8 @@
 """Auto-join (DESIGN §4): start recording when people gather in a voice channel.
 
 ``on_voice_state_update`` is registered with ``bot.add_listener``. Every event re-evaluates the
-channels it touches; a channel with at least ``autojoin.min_humans`` humans (bots never count)
-gets ONE watcher task that waits ``autojoin.grace_seconds`` while re-checking the conditions, so
+channels it touches; a channel with at least ``autojoin_min_humans`` humans (bots never count)
+gets ONE watcher task that waits ``autojoin_grace_seconds`` while re-checking the conditions, so
 bursts of join/leave/mute events debounce to a single start. ``busy(guild)`` (a live or starting
 session, or any other voice client such as ``/voice join``) blocks a start: one voice connection
 per guild. Auto-leave is not decided here — the session polls the same human count every tick.

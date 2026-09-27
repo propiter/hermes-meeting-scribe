@@ -82,7 +82,7 @@ async def test_posts_in_voice_text_chat_without_thread_and_records_pointer(env):
 
 
 async def test_configured_channel_gets_header_plus_thread(env):
-    env["cfg"]["delivery.discord.channel"] = "300"
+    env["cfg"]["delivery_discord_channel"] = "300"
     res = await deliver(env)
     assert res.ok
     assert len(env["notes_ch"].ordered()) == 1  # header in channel, details in its thread
@@ -92,7 +92,7 @@ async def test_configured_channel_gets_header_plus_thread(env):
 
 
 async def test_thread_disabled_posts_everything_in_channel(env):
-    env["cfg"].update({"delivery.discord.channel": "300", "delivery.discord.thread": False})
+    env["cfg"].update({"delivery_discord_channel": "300", "delivery_discord_thread": False})
     await deliver(env)
     assert len(env["notes_ch"].ordered()) > 1
 
@@ -158,5 +158,5 @@ async def test_refresh_rerenders_statuses_on_loop(env):
 
 def test_enabled_follows_setting(env):
     assert env["make"]().enabled()
-    env["cfg"]["delivery.discord.enabled"] = False
+    env["cfg"]["delivery_discord_enabled"] = False
     assert not env["make"]().enabled()

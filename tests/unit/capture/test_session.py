@@ -72,7 +72,7 @@ def world(tmp_path):
     adapter = FakeAdapter(FakeBot([guild]))
     clock = Clock()
     service = FakeService(tmp_path)
-    cfg = {"autoleave.grace_seconds": 60, "limits.max_duration_minutes": 240}
+    cfg = {"autoleave_grace_seconds": 60, "limits_max_duration_minutes": 240}
 
     def deps(**over: Any) -> SessionDeps:
         s = settings_from_mapping({**cfg, **over})
@@ -139,7 +139,7 @@ async def test_stop_is_idempotent(world):
 
 
 async def test_autoleave_after_grace_with_no_humans(world):
-    s = await started(world, **{"autoleave.grace_seconds": 30})
+    s = await started(world, **{"autoleave_grace_seconds": 30})
     world["voice"].members = [m for m in world["voice"].members if m.bot]
     await run_ticks()
     assert not s.done
@@ -149,7 +149,7 @@ async def test_autoleave_after_grace_with_no_humans(world):
 
 
 async def test_humans_returning_cancel_autoleave(world):
-    s = await started(world, **{"autoleave.grace_seconds": 30})
+    s = await started(world, **{"autoleave_grace_seconds": 30})
     humans = [m for m in world["voice"].members if not m.bot]
     world["voice"].members = []
     await run_ticks()
@@ -163,7 +163,7 @@ async def test_humans_returning_cancel_autoleave(world):
 
 
 async def test_max_duration_stops(world):
-    s = await started(world, **{"limits.max_duration_minutes": 1})
+    s = await started(world, **{"limits_max_duration_minutes": 1})
     world["clock"].t += 61
     await asyncio.wait_for(s.wait(), 1)
     assert s.reason == "max_duration"

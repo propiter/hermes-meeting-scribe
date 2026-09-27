@@ -41,7 +41,7 @@ def world():
     guild.channels = [ch, ignored]
     starter = Starter()
     clock = Clock()
-    cfg = {"autojoin.grace_seconds": 20, "autojoin.min_humans": 2, "autojoin.ignore_channels": ["afk"]}
+    cfg = {"autojoin_grace_seconds": 20, "autojoin_min_humans": 2, "autojoin_ignore_channels": ["afk"]}
 
     def make(**over):
         s = settings_from_mapping({**cfg, **over})
@@ -115,14 +115,14 @@ async def test_ignore_list_allowlist_and_disabled(world):
     await settle()
     assert world.starter.started == []
 
-    aj2 = world.make(**{"autojoin.channels": ["999"]})
+    aj2 = world.make(**{"autojoin_channels": ["999"]})
     await aj2.on_voice_state_update(*join(world.ch, 1))
     await aj2.on_voice_state_update(*join(world.ch, 2))
     world.clock.t = 60
     await settle()
     assert world.starter.started == []
 
-    aj3 = world.make(**{"autojoin.enabled": False})
+    aj3 = world.make(**{"autojoin_enabled": False})
     await aj3.on_voice_state_update(*join(world.ch, 3))
     world.clock.t = 90
     await settle()
@@ -130,7 +130,7 @@ async def test_ignore_list_allowlist_and_disabled(world):
 
 
 async def test_allowlist_by_name_and_busy_guild(world):
-    aj = world.make(**{"autojoin.channels": ["daily sync"], "autojoin.grace_seconds": 0})
+    aj = world.make(**{"autojoin_channels": ["daily sync"], "autojoin_grace_seconds": 0})
     world.starter.busy_guilds.add(world.guild.id)
     await aj.on_voice_state_update(*join(world.ch, 1))
     await aj.on_voice_state_update(*join(world.ch, 2))
@@ -146,7 +146,7 @@ async def test_start_failure_is_logged_not_raised(world):
     async def boom(channel, *, started_by=None):
         raise RuntimeError("no perms")
     world.starter.start_in = boom
-    aj = world.make(**{"autojoin.grace_seconds": 0})
+    aj = world.make(**{"autojoin_grace_seconds": 0})
     await aj.on_voice_state_update(*join(world.ch, 1))
     await aj.on_voice_state_update(*join(world.ch, 2))
     await settle()

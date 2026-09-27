@@ -27,8 +27,8 @@ def test_real_transcriber_end_to_end(tmp_path, meeting, ff, monkeypatch):
     from meeting_scribe.storage.repo import Repository
     from meeting_scribe.transcribe.client import SubprocessTranscriber
 
-    s = settings_from_mapping({"transcribe.model": "tiny", "transcribe.language": "en",
-                               "transcribe.cpu_threads": min(4, os.cpu_count() or 1), "audio.retention": "multitrack"})
+    s = settings_from_mapping({"transcribe_model": "tiny", "transcribe_language": "en",
+                               "transcribe_cpu_threads": min(4, os.cpu_count() or 1), "audio_retention": "multitrack"})
     settings = lambda: s  # noqa: E731
     layout = Layout(lambda: tmp_path / "data")
     repo = Repository(layout.db_path())

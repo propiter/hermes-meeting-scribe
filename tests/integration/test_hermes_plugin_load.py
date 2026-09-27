@@ -87,8 +87,33 @@ def test_cli_command_config_roundtrip(manager, hermes_home, capsys):
     entry = manager._cli_commands["meeting-scribe"]
     parser = argparse.ArgumentParser()
     entry["setup_fn"](parser)
-    assert entry["handler_fn"](parser.parse_args(["config", "set", "kanban.mode", "off"])) == 0
+    assert entry["handler_fn"](parser.parse_args(["config", "set", "kanban_mode", "off"])) == 0
     cfg = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
-    assert cfg["plugins"]["entries"]["meeting-scribe"]["settings"]["kanban"]["mode"] == "off"
-    assert entry["handler_fn"](parser.parse_args(["config", "get", "kanban.mode"])) == 0
+    assert cfg["plugins"]["entries"]["meeting-scribe"]["settings"]["kanban_mode"] == "off"  # flat
+    assert entry["handler_fn"](parser.parse_args(["config", "get", "kanban_mode"])) == 0
     assert capsys.readouterr().out.strip().endswith("off")
+
+
+def test_desktop_settings_form_shows_saved_values(manager, hermes_home):
+    """Review finding 10: Hermes' form reads settings[key] flat; dotted keys always showed defaults."""
+    from hermes_cli.plugins_settings import plugin_settings_fields, save_plugin_settings
+
+    plugin_dir = hermes_home / "plugins" / "meeting-scribe"
+    save_plugin_settings("meeting-scribe", plugin_dir, {"kanban_mode": "auto", "autojoin_min_humans": 3})
+    fields = {f["key"]: f for f in plugin_settings_fields("meeting-scribe", plugin_dir)}
+    assert fields["kanban_mode"]["value"] == "auto" and fields["autojoin_min_humans"]["value"] == 3
+    import meeting_scribe.plugin as plugin
+
+    rt = next(iter(plugin.RUNTIMES.values()))
+    assert rt.settings().kanban_mode == "auto" and rt.settings().autojoin_min_humans == 3
+
+
+def test_legacy_nested_settings_are_still_honoured(manager, hermes_home):
+    cfg = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    cfg.setdefault("plugins", {}).setdefault("entries", {})["meeting-scribe"] = {
+        "settings": {"linear": {"mode": "off"}}}
+    (hermes_home / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    import meeting_scribe.plugin as plugin
+
+    rt = next(iter(plugin.RUNTIMES.values()))
+    assert rt.settings().linear_mode == "off"

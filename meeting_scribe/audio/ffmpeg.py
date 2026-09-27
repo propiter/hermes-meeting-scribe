@@ -1,7 +1,7 @@
 """ffmpeg binary resolution and thin, typed wrappers.
 
 Resolution order: ``PATH`` → Hermes-managed tools (``~/.hermes/tools/ffmpeg-*/bin``, newest
-version first) → ``audio.ffmpeg_path`` config. PATH wins so a system ffmpeg the user maintains is
+version first) → ``audio_ffmpeg_path`` config. PATH wins so a system ffmpeg the user maintains is
 preferred; the config path is the explicit escape hatch when neither exists.
 """
 from __future__ import annotations
@@ -62,7 +62,7 @@ def resolve_ffmpeg(configured: str = "", tools_dirs: Optional[Iterable[Path]] = 
             return pair
     if configured and (pair := _pair(Path(configured).expanduser())):
         return pair
-    raise FfmpegNotFound("ffmpeg/ffprobe not found (PATH, ~/.hermes/tools/ffmpeg-*/bin, audio.ffmpeg_path)")
+    raise FfmpegNotFound("ffmpeg/ffprobe not found (PATH, ~/.hermes/tools/ffmpeg-*/bin, audio_ffmpeg_path)")
 
 
 def run(args: Sequence[str], timeout: float = _TIMEOUT) -> subprocess.CompletedProcess[str]:

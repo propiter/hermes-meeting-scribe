@@ -1,7 +1,8 @@
 """Typed plugin settings (DESIGN §10) read from ``plugins.entries.meeting-scribe.settings``.
 
 ``SPEC`` is the single source of truth; ``plugin.yaml`` ``config_schema`` must mirror it (a unit
-test enforces both directions). Settings are loaded through an injected getter
+test enforces both directions). Keys are FLAT (``kanban_mode``): Hermes stores dotted keys as
+nested YAML but its Desktop form reads them flat (DESIGN §15, review finding 10). Settings are loaded through an injected getter
 (``ctx.get_config``) and re-read per operation so an edit in the Desktop form takes effect
 without restarting the gateway. Invalid values never crash the plugin: they fall back to the
 default and surface as ``warnings`` (shown by ``doctor``).
@@ -38,46 +39,78 @@ class Opt:
 
 
 SPEC: dict[str, Opt] = {
-    "commands.aliases": Opt("list", ("meet", "rec"), "Extra slash-command names routed to /meeting."),
-    "autojoin.enabled": Opt("bool", True, "Join a voice channel automatically when people gather."),
-    "autojoin.min_humans": Opt("int", 2, "Humans required in a voice channel to auto-join.", minimum=1),
-    "autojoin.grace_seconds": Opt("int", 20, "Seconds the channel must stay populated before joining.",
+    "commands_aliases": Opt("list", ("meet", "rec"), "Extra slash-command names routed to /meeting."),
+    "autojoin_enabled": Opt("bool", True, "Join a voice channel automatically when people gather."),
+    "autojoin_min_humans": Opt("int", 2, "Humans required in a voice channel to auto-join.", minimum=1),
+    "autojoin_grace_seconds": Opt("int", 20, "Seconds the channel must stay populated before joining.",
                                   minimum=0),
-    "autojoin.channels": Opt("list", (), "Voice channel ids/names allowed for auto-join (empty = all)."),
-    "autojoin.ignore_channels": Opt("list", (), "Voice channel ids/names never auto-joined."),
-    "autoleave.grace_seconds": Opt("int", 60, "Seconds with no humans before the recording stops.",
+    "autojoin_channels": Opt("list", (), "Voice channel ids/names allowed for auto-join (empty = all)."),
+    "autojoin_ignore_channels": Opt("list", (), "Voice channel ids/names never auto-joined."),
+    "autoleave_grace_seconds": Opt("int", 60, "Seconds with no humans before the recording stops.",
                                    minimum=0),
-    "limits.max_duration_minutes": Opt("int", 240, "Hard cap on a single recording.", minimum=1),
-    "audio.retention": Opt("str", "multitrack", "Audio kept after processing.",
+    "limits_max_duration_minutes": Opt("int", 240, "Hard cap on a single recording.", minimum=1),
+    "audio_retention": Opt("str", "multitrack", "Audio kept after processing.",
                            choices=("multitrack", "mixed", "none")),
-    "audio.bitrate_kbps": Opt("int", 48, "Opus bitrate per speaker track.", minimum=8, maximum=256),
-    "audio.ffmpeg_path": Opt("str", "", "Explicit ffmpeg binary (empty = auto-detect)."),
-    "transcribe.model": Opt("str", "medium", "faster-whisper model (tiny/base/small/medium/large-v3...)."),
-    "transcribe.device": Opt("str", "auto", "Inference device.", choices=("auto", "cpu", "cuda")),
-    "transcribe.compute_type": Opt("str", "auto", "CTranslate2 compute type.",
+    "audio_bitrate_kbps": Opt("int", 48, "Opus bitrate per speaker track.", minimum=8, maximum=256),
+    "audio_ffmpeg_path": Opt("str", "", "Explicit ffmpeg binary (empty = auto-detect)."),
+    "transcribe_model": Opt("str", "medium", "faster-whisper model (tiny/base/small/medium/large-v3...)."),
+    "transcribe_device": Opt("str", "auto", "Inference device.", choices=("auto", "cpu", "cuda")),
+    "transcribe_compute_type": Opt("str", "auto", "CTranslate2 compute type.",
                                    choices=("auto", "int8", "int8_float16", "float16", "float32")),
-    "transcribe.cpu_threads": Opt("int", 0, "CPU threads for whisper (0 = cores minus 2).", minimum=0),
-    "transcribe.language": Opt("str", "auto", "Spoken language code (auto = detect; pin it if you can)."),
-    "transcribe.beam_size": Opt("int", 5, "Beam size for decoding.", minimum=1, maximum=10),
-    "analysis.language": Opt("str", "auto", "Notes language (auto = transcript language)."),
-    "analysis.chunk_chars": Opt("int", 12000, "Transcript chunk size for map-reduce analysis.",
+    "transcribe_cpu_threads": Opt("int", 0, "CPU threads for whisper (0 = cores minus 2).", minimum=0),
+    "transcribe_language": Opt("str", "auto", "Spoken language code (auto = detect; pin it if you can)."),
+    "transcribe_beam_size": Opt("int", 5, "Beam size for decoding.", minimum=1, maximum=10),
+    "analysis_language": Opt("str", "auto", "Notes language (auto = transcript language)."),
+    "analysis_chunk_chars": Opt("int", 12000, "Transcript chunk size for map-reduce analysis.",
                                 minimum=2000),
-    "projects.min_confidence": Opt("float", 0.6, "Minimum confidence to auto-assign a project.",
+    "projects_min_confidence": Opt("float", 0.6, "Minimum confidence to auto-assign a project.",
                                    minimum=0.0, maximum=1.0),
-    "delivery.discord.enabled": Opt("bool", True, "Post notes to Discord."),
-    "delivery.discord.channel": Opt("str", "", "Notes channel id (empty = voice text chat, then home)."),
-    "delivery.discord.thread": Opt("bool", True, "Post notes in a thread when possible."),
+    "delivery_discord_enabled": Opt("bool", True, "Post notes to Discord."),
+    "delivery_discord_channel": Opt("str", "", "Notes channel id (empty = voice text chat, then home)."),
+    "delivery_discord_thread": Opt("bool", True, "Post notes in a thread when possible."),
     "owners": Opt("list", (), "Discord user ids whose tasks may go to Kanban (empty = first allowed user)."),
-    "kanban.mode": Opt("str", "approve", "Kanban delivery of owner tasks.", choices=MODES),
-    "kanban.board": Opt("str", "", "Kanban board slug (empty = default board)."),
-    "linear.mode": Opt("str", "approve", "Linear issue creation.", choices=MODES),
-    "linear.default_team": Opt("str", "", "Linear team key/id used when no project resolves."),
-    "obsidian.vault_path": Opt("str", "", "Obsidian vault path (empty = disabled)."),
-    "obsidian.folder": Opt("str", "Meetings", "Folder inside the vault for notes."),
-    "ui.language": Opt("str", "en", "Language of bot messages.", choices=("en", "es")),
-    "consent.announce": Opt("bool", True, "Announce recording in the channel chat."),
-    "consent.nickname_prefix": Opt("str", "[REC] ", "Nickname prefix while recording (empty = off)."),
+    "kanban_mode": Opt("str", "approve", "Kanban delivery of owner tasks.", choices=MODES),
+    "kanban_board": Opt("str", "", "Kanban board slug (empty = default board)."),
+    "linear_mode": Opt("str", "approve", "Linear issue creation.", choices=MODES),
+    "linear_default_team": Opt("str", "", "Linear team key/id used when no project resolves."),
+    "obsidian_vault_path": Opt("str", "", "Obsidian vault path (empty = disabled)."),
+    "obsidian_folder": Opt("str", "Meetings", "Folder inside the vault for notes."),
+    "ui_language": Opt("str", "en", "Language of bot messages.", choices=("en", "es")),
+    "consent_announce": Opt("bool", True, "Announce recording in the channel chat."),
+    "consent_nickname_prefix": Opt("str", "[REC] ", "Nickname prefix while recording (empty = off)."),
 }
+# Pre-0.2 dotted names. ``ctx.set_config("kanban.mode")`` stored NESTED YAML while Hermes' Desktop
+# settings form reads ``settings[key]`` FLAT, so dotted keys always showed their defaults there
+# (review finding 10). Canonical keys are now flat; the old nested values are still read as a fallback
+# (and the dotted spelling is accepted by the CLI) so existing configs keep working.
+LEGACY_KEYS: dict[str, str] = {
+    "commands_aliases": "commands.aliases", "autojoin_enabled": "autojoin.enabled",
+    "autojoin_min_humans": "autojoin.min_humans", "autojoin_grace_seconds": "autojoin.grace_seconds",
+    "autojoin_channels": "autojoin.channels", "autojoin_ignore_channels": "autojoin.ignore_channels",
+    "autoleave_grace_seconds": "autoleave.grace_seconds",
+    "limits_max_duration_minutes": "limits.max_duration_minutes", "audio_retention": "audio.retention",
+    "audio_bitrate_kbps": "audio.bitrate_kbps", "audio_ffmpeg_path": "audio.ffmpeg_path",
+    "transcribe_model": "transcribe.model", "transcribe_device": "transcribe.device",
+    "transcribe_compute_type": "transcribe.compute_type", "transcribe_cpu_threads": "transcribe.cpu_threads",
+    "transcribe_language": "transcribe.language", "transcribe_beam_size": "transcribe.beam_size",
+    "analysis_language": "analysis.language", "analysis_chunk_chars": "analysis.chunk_chars",
+    "projects_min_confidence": "projects.min_confidence", "delivery_discord_enabled": "delivery.discord.enabled",
+    "delivery_discord_channel": "delivery.discord.channel", "delivery_discord_thread": "delivery.discord.thread",
+    "kanban_mode": "kanban.mode", "kanban_board": "kanban.board", "linear_mode": "linear.mode",
+    "linear_default_team": "linear.default_team", "obsidian_vault_path": "obsidian.vault_path",
+    "obsidian_folder": "obsidian.folder", "ui_language": "ui.language", "consent_announce": "consent.announce",
+    "consent_nickname_prefix": "consent.nickname_prefix",
+}
+_BY_LEGACY = {v: k for k, v in LEGACY_KEYS.items()}
+_MISSING = object()
+
+
+def canonical_key(key: str) -> str:
+    """Flat canonical name for ``key`` (accepts the legacy dotted spelling); ``KeyError`` if unknown."""
+    flat = _BY_LEGACY.get(key, key)
+    if flat not in SPEC:
+        raise KeyError(key)
+    return flat
 
 _TRUE = {"1", "true", "yes", "on", "si", "sí"}
 _FALSE = {"0", "false", "no", "off", ""}
@@ -158,12 +191,14 @@ class Settings:
         values: dict[str, Any] = {}
         warnings: list[str] = []
         for key, opt in SPEC.items():
-            raw = getter(key, opt.default)
+            raw = getter(key, _MISSING)
+            if raw is _MISSING and key in LEGACY_KEYS:
+                raw = getter(LEGACY_KEYS[key], _MISSING)  # value saved by a pre-0.2 version (nested)
             try:
-                values[key.replace(".", "_")] = opt.default if raw is None else _coerce(opt, raw)
+                values[key] = opt.default if raw is None or raw is _MISSING else _coerce(opt, raw)
             except (ValueError, TypeError) as exc:
                 warnings.append(f"{key}={raw!r} is invalid ({exc}); using {opt.yaml_default!r}")
-                values[key.replace(".", "_")] = opt.default
+                values[key] = opt.default
         values["commands_aliases"] = _normalize_aliases(values["commands_aliases"])
         return cls(**values, warnings=tuple(warnings))
 
@@ -176,9 +211,9 @@ class Settings:
         return self.transcribe_cpu_threads or max(1, (os.cpu_count() or 1) - 2)
 
     def as_dict(self) -> dict[str, Any]:
-        """Dotted-key view (``config`` subcommand / ``/meeting config``)."""
+        """Canonical-key view (``config`` subcommand / ``/meeting config``)."""
         names = {f.name for f in fields(self)}
-        return {k: getattr(self, k.replace(".", "_")) for k in SPEC if k.replace(".", "_") in names}
+        return {k: getattr(self, k) for k in SPEC if k in names}
 
 
 def effective_owners(settings: Settings, secret: Callable[[str], Optional[str]]) -> tuple[str, ...]:
@@ -206,8 +241,9 @@ def schema_for_manifest() -> dict[str, dict[str, Any]]:
 
 
 def settings_from_mapping(values: Mapping[str, Any]) -> Settings:
-    """Convenience for tests/CLI: load from a flat dotted mapping."""
-    return Settings.load(lambda key, default=None: values.get(key, default))
+    """Convenience for tests/CLI: load from a mapping of canonical (or legacy dotted) keys."""
+    flat = {_BY_LEGACY.get(k, k): v for k, v in values.items()}
+    return Settings.load(lambda key, default=None: flat.get(key, default))
 
 
 def validate_value(key: str, raw: Any) -> Any:
@@ -215,7 +251,7 @@ def validate_value(key: str, raw: Any) -> Any:
 
     Raises ``KeyError`` for unknown keys and ``ValueError`` (naming the key) for invalid values.
     """
-    opt = SPEC[key]
+    opt = SPEC[canonical_key(key)]
     try:
         value = _coerce(opt, raw)
     except (ValueError, TypeError) as exc:

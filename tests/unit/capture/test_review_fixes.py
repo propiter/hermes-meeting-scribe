@@ -71,7 +71,7 @@ def world(tmp_path: Path) -> SimpleNamespace:
     guild.members = {42: a, 43: b}
     guild.channels = [voice]
     adapter = FakeAdapter(FakeBot([guild]))
-    cfg: dict = {"autoleave.grace_seconds": 60, "autojoin.grace_seconds": 0, "autojoin.min_humans": 2}
+    cfg: dict = {"autoleave_grace_seconds": 60, "autojoin_grace_seconds": 0, "autojoin_min_humans": 2}
     return SimpleNamespace(guild=guild, voice=voice, adapter=adapter, cfg=cfg, clock=Clock(), tmp=tmp_path,
                            settings=lambda: settings_from_mapping(cfg), members=(a, b))
 
@@ -158,7 +158,7 @@ async def test_autojoin_does_not_rejoin_after_manual_stop(world):
 
 
 async def test_autojoin_close_from_another_thread_cancels_on_loop(world):
-    world.cfg["autojoin.grace_seconds"] = 3600
+    world.cfg["autojoin_grace_seconds"] = 3600
     mgr = manager(world)
     aj = AutoJoiner(mgr, world.settings, poll=0.001)
     m = world.members[0]

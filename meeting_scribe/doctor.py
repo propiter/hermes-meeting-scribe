@@ -154,7 +154,7 @@ def check_llm(env: DoctorEnv) -> Check:
 
 def check_kanban(env: DoctorEnv) -> Check:
     if env.settings().kanban_mode == "off":
-        return Check.ok("disabled (kanban.mode=off)")
+        return Check.ok("disabled (kanban_mode=off)")
     try:
         boards = env.kanban_boards()
     except Exception as exc:  # kanban is optional; report, do not fail
@@ -164,7 +164,7 @@ def check_kanban(env: DoctorEnv) -> Check:
 
 def check_linear(env: DoctorEnv) -> Check:
     if env.settings().linear_mode == "off":
-        return Check.ok("disabled (linear.mode=off)")
+        return Check.ok("disabled (linear_mode=off)")
     backend = env.linear_backend()
     if backend is None:
         return Check.warn(t("sink.linear_inactive", env.settings().ui_language))
@@ -176,7 +176,7 @@ def check_linear(env: DoctorEnv) -> Check:
 def check_obsidian(env: DoctorEnv) -> Check:
     vault = env.settings().obsidian_vault_path.strip()
     if not vault:
-        return Check.ok("disabled (obsidian.vault_path empty)")
+        return Check.ok("disabled (obsidian_vault_path empty)")
     path = Path(vault).expanduser()
     return Check.ok(str(path)) if path.is_dir() else Check.fail(f"vault not found: {path}")
 
