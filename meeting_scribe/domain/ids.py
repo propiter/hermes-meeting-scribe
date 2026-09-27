@@ -12,6 +12,8 @@ import re
 import secrets
 import unicodedata
 
+from .text import fold
+
 _SLUG_MAX = 40
 
 
@@ -35,8 +37,9 @@ def idempotency_key(meeting_id: str, item_id: str, *, sink: str | None = None) -
 
 
 def _normalize_title(title: str) -> str:
-    norm = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii").lower()
-    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", norm).split())
+    """Script-preserving (NFKC + casefold) so CJK/Cyrillic titles get distinct ids (finding 4);
+    Latin titles fold exactly as before, so existing ids stay stable."""
+    return fold(title)
 
 
 def action_item_id(title: str, owner_speaker_id: str | None) -> str:

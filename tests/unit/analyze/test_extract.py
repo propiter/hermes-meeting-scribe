@@ -117,3 +117,19 @@ def test_match_owner():
     assert match_owner(None, "Luis", speakers) == speakers[1]  # unique first-name
     assert match_owner("99", "Nadie", speakers) is None
     assert match_owner(None, None, speakers) is None
+
+
+def test_non_latin_items_are_not_merged(meeting, utterances):
+    """Review finding 4: two Chinese tasks of the same owner used to collapse into one id."""
+    items = [{"title": "报告", "owner_speaker_id": "11"}, {"title": "打电话给客户", "owner_speaker_id": "11"},
+             {"title": "Отправить отчёт", "owner_speaker_id": "11"}]
+    llm = FakeLLM(lambda name, text: full(action_items=items))
+    notes = analyzer(llm).analyze(meeting, utterances, CANDS)
+    assert [a.title for a in notes.action_items] == ["报告", "打电话给客户", "Отправить отчёт"]
+    assert len({a.id for a in notes.action_items}) == 3
+
+
+def test_cyrillic_owner_name_matches_speaker():
+    speakers = [Speaker("11", "Иван Петров"), Speaker("12", "Ана")]
+    assert match_owner(None, "иван петров", speakers).user_id == "11"
+    assert match_owner(None, "Ана", speakers).user_id == "12"

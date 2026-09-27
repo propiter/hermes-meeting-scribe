@@ -14,7 +14,6 @@ from __future__ import annotations
 import difflib
 import json
 import re
-import unicodedata
 import urllib.error
 import urllib.request
 from datetime import timedelta
@@ -22,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
 from ..config import Settings
+from ..domain.text import fold
 from ..domain.models import ActionItem, Meeting, Notes, Speaker
 from ..i18n import t
 from ..storage.artifacts import fmt_ts
@@ -175,8 +175,11 @@ def select_backend(api_key: Callable[[], Optional[str]], mcp: Optional[McpCaller
 
 
 def _norm(text: str) -> str:
-    s = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii").lower()
-    return " ".join(re.sub(r"[^a-z0-9@. ]+", " ", s).split())
+    return fold(text)  # script-preserving: Cyrillic/CJK display names must match too
+
+
+def _email(text: str) -> str:
+    return (text or "").strip().casefold()
 
 
 def match_linear_user(speaker: Speaker, users: Sequence[Mapping[str, Any]],
@@ -188,7 +191,7 @@ def match_linear_user(speaker: Speaker, users: Sequence[Mapping[str, Any]],
             if hit:
                 return hit
         if link.get("email"):
-            hit = next((u for u in active if _norm(u.get("email", "")) == _norm(link["email"])), None)
+            hit = next((u for u in active if _email(u.get("email", "")) == _email(link["email"])), None)
             if hit:
                 return hit
     wanted = _norm((link or {}).get("name") or speaker.name)

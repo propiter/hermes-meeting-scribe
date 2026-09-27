@@ -11,12 +11,12 @@ from __future__ import annotations
 import difflib
 import json
 import re
-import unicodedata
 from dataclasses import replace
 from datetime import date
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..config import Settings
+from ..domain.text import fold
 from ..domain.ids import action_item_id
 from ..domain.models import ActionItem, Candidate, Meeting, Notes, Speaker, Topic, Utterance
 from ..domain.ports import StructuredLLM
@@ -29,8 +29,7 @@ FUZZY_RATIO = 0.85
 
 
 def _norm(text: str) -> str:
-    s = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii").lower()
-    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", s).split())
+    return fold(text)  # script-preserving: Cyrillic/CJK names and projects must match too
 
 
 def match_owner(speaker_id: Optional[str], name: Optional[str], speakers: Sequence[Speaker]) -> Optional[Speaker]:

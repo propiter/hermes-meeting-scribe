@@ -8,11 +8,10 @@ guild/category/channel names → unassigned.
 """
 from __future__ import annotations
 
-import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Protocol, Sequence
 
+from ..domain.text import fold
 from ..domain.models import Candidate, Meeting, ProjectResolution
 
 
@@ -21,8 +20,7 @@ class LearnedMap(Protocol):
 
 
 def _norm(text: str) -> str:
-    s = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii").lower()
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
+    return fold(text)  # script-preserving: Cyrillic/CJK names and projects must match too
 
 
 @dataclass
