@@ -136,3 +136,33 @@ def test_runtime_is_a_doctor_env(tmp_path):
     assert env.llm_status() == (True, "ok")
     rt.set_config("kanban.mode", "off")
     assert cfg["kanban.mode"] == "off"
+
+
+def test_switching_data_dir_never_closes_a_repo_in_use(tmp_path):
+    """Review finding 7: a handler holding the old service must keep a working connection."""
+    root = {"p": tmp_path / "a"}
+    h, _ = host(tmp_path)
+    h.data_dir = lambda: root["p"]
+    rt = Runtime(h)
+    old_svc = rt.service()
+    root["p"] = tmp_path / "b"
+    new_svc = rt.service()
+    assert new_svc is not old_svc
+    assert old_svc.repo.list_meetings(limit=1) == []  # not "Cannot operate on a closed database"
+    root["p"] = tmp_path / "a"
+    assert rt.service() is old_svc  # no flip-flop reopen: repos are kept per path
+    rt.close()
+
+
+def test_commands_resolve_the_service_per_call(tmp_path):
+    from meeting_scribe.commands import MeetingCommands
+
+    root = {"p": tmp_path / "a"}
+    h, _ = host(tmp_path)
+    h.data_dir = lambda: root["p"]
+    rt = Runtime(h)
+    cmds = MeetingCommands(rt.service, rt.settings, capture=lambda: None)
+    first = cmds.service
+    root["p"] = tmp_path / "b"
+    assert cmds.service is not first and cmds.service.repo is rt.repo()
+    rt.close()

@@ -1,8 +1,10 @@
 """Composition root. Builds adapters from a :class:`Host` (Hermes capabilities as plain callables)
 so unit tests wire the whole plugin with fakes and ``register()`` stays tiny.
 
-Multi-profile safety (DESIGN §1.4): settings are read on every call; the SQLite repository is
-re-opened whenever ``plugin_data_dir`` resolves to a different path.
+Multi-profile safety (DESIGN §1.4, §15): settings are read on every call; repositories (and the
+service built on them) are kept PER database path. When ``plugin_data_dir`` resolves elsewhere the
+runtime switches to (or opens) that path's repository — it never closes one another caller may
+still hold (review finding 7). All of them are closed by :meth:`close`.
 """
 from __future__ import annotations
 
@@ -61,9 +63,9 @@ class Runtime:
         self.capture: Optional[CaptureController] = None
         self._extra_sinks: list[Sink] = []
         self._lock = threading.RLock()
-        self._repo: Optional[Repository] = None
+        self._repos: dict[Path, Repository] = {}
+        self._services: dict[Path, MeetingService] = {}
         self._repo_path: Optional[Path] = None
-        self._service: Optional[MeetingService] = None
 
     # -- settings & simple adapters -------------------------------------------------------------
     def settings(self) -> Settings:
@@ -84,13 +86,17 @@ class Runtime:
     def repo(self) -> Repository:
         path = self.layout().db_path()
         with self._lock:
-            if self._repo is None or self._repo_path != path:
-                if self._repo is not None:
-                    self.stop_pipeline()
-                    self._repo.close()
-                    self._service = None
-                self._repo, self._repo_path = Repository(path), path
-            return self._repo
+            if path != self._repo_path and self._repo_path in self._services:
+                self._services[self._repo_path].runner.stop()  # one worker, for the active profile
+            repo = self._repos.get(path)
+            if repo is None:
+                repo = self._repos[path] = Repository(path)
+            self._repo_path = path
+            return repo
+
+    @property
+    def _service(self) -> Optional[MeetingService]:
+        return self._services.get(self._repo_path) if self._repo_path is not None else None
 
     # -- projects & sinks -----------------------------------------------------------------------
     def catalogs(self) -> list[ProjectCatalog]:
@@ -127,27 +133,30 @@ class Runtime:
     def service(self) -> MeetingService:
         with self._lock:
             repo = self.repo()
-            if self._service is None:
+            path = self._repo_path
+            assert path is not None
+            if path not in self._services:
                 stages = Stages(repo=repo, layout=self.layout(), settings=self.settings,
                                 transcriber=SubprocessTranscriber(self.settings, self.ffmpeg),
                                 analyzer=LlmAnalyzer(HermesStructuredLLM(self.host.llm), self.settings),
                                 catalogs=self.catalogs, sinks=self.sinks,
                                 archiver=make_archiver(self.settings, self.ffmpeg))
                 runner = PipelineRunner(repo, stages, clock=self.clock, spawner=self.host.spawner)
-                self._service = MeetingService(repo, self.layout(), runner, self.settings, clock=self.clock,
-                                               item_sinks=self.item_sinks, catalogs=self.catalogs)
-            return self._service
+                self._services[path] = MeetingService(repo, self.layout(), runner, self.settings, clock=self.clock,
+                                                      item_sinks=self.item_sinks, catalogs=self.catalogs)
+            return self._services[path]
 
     def start_pipeline(self, live_meeting_ids: Iterable[str] = ()) -> None:
         self.service().runner.start(live_meeting_ids)
 
     def stop_pipeline(self) -> None:
         with self._lock:
-            if self._service is not None:
-                self._service.runner.stop()
+            for svc in self._services.values():
+                svc.runner.stop()
 
     def pipeline_running(self) -> bool:
-        return self._service is not None and self._service.runner.running
+        svc = self._service
+        return svc is not None and svc.runner.running
 
     # -- doctor / CLI surface -------------------------------------------------------------------
     def data_dir(self) -> Path:
@@ -183,6 +192,8 @@ class Runtime:
     def close(self) -> None:
         with self._lock:
             self.stop_pipeline()
-            if self._repo is not None:
-                self._repo.close()
-            self._repo = self._service = None
+            for repo in self._repos.values():
+                repo.close()
+            self._repos.clear()
+            self._services.clear()
+            self._repo_path = None

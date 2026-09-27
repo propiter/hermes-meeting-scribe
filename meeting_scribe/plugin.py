@@ -115,7 +115,7 @@ def register(ctx: Any, plugin_root: Path) -> Runtime:
     ctx.register_tool("meeting_get", TOOLSET, SCHEMAS["meeting_get"], tools.get,
                       description=SCHEMAS["meeting_get"]["description"], emoji="🎙️")
 
-    commands = MeetingCommands(runtime.service(), runtime.settings, capture=lambda: runtime.capture)
+    commands = MeetingCommands(runtime.service, runtime.settings, capture=lambda: runtime.capture)
     for name in (PRIMARY_COMMAND, *runtime.settings().commands_aliases):
         ctx.register_command(name, _command_handler(commands, runtime, name),
                              description="Meeting scribe: record, transcribe and summarise voice meetings",

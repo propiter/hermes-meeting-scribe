@@ -141,3 +141,21 @@ def test_unload_closes_runtime_and_drops_registry(tmp_path, monkeypatch):
     for cb in reversed(c.unload):
         cb()
     assert closed == [1] and id(c) not in plugin.RUNTIMES
+
+
+def test_meeting_command_follows_profile_switch(tmp_path, monkeypatch):
+    """Review finding 7: /meeting used to capture runtime.service() and hit a closed database."""
+    root = {"p": tmp_path / "a"}
+    c = FakeCtx(tmp_path, {})
+    monkeypatch.setattr(plugin, "_host_overrides", lambda: {"data_dir": lambda: root["p"],
+                                                           "secret": lambda name: None,
+                                                           "mcp_allowed": lambda: False})
+    monkeypatch.setattr(plugin, "caller_from_session", lambda: plugin.Caller("discord", "1", "2"))
+    rt = plugin.register(c, ROOT)
+    handler = c.commands["meeting"][0]
+    handler("list")
+    root["p"] = tmp_path / "b"
+    reply = handler("list")
+    assert "closed database" not in reply and "Error" not in reply
+    plugin.RUNTIMES.pop(id(c))
+    rt.close()

@@ -11,7 +11,7 @@ import logging
 import re
 import shlex
 from dataclasses import dataclass
-from typing import Callable, Optional, Protocol
+from typing import Callable, Optional, Protocol, Union
 
 from .config import PRIMARY_COMMAND, Settings
 from .domain.models import Stage
@@ -49,11 +49,17 @@ class CaptureController(Protocol):
 
 
 class MeetingCommands:
-    def __init__(self, service: MeetingService, settings: Callable[[], Settings],
+    def __init__(self, service: Union[MeetingService, Callable[[], MeetingService]], settings: Callable[[], Settings],
                  capture: Callable[[], Optional[CaptureController]]) -> None:
-        self.service = service
+        # A callable is resolved per command (review finding 7): the runtime may switch to another
+        # profile's database, and a captured instance would keep answering from the old one.
+        self._service = service if callable(service) else (lambda: service)
         self.settings = settings
         self.capture = capture
+
+    @property
+    def service(self) -> MeetingService:
+        return self._service()
 
     def handle(self, raw_args: str, caller: Caller, invoked_as: str = PRIMARY_COMMAND) -> str:
         lang = self.settings().ui_language
