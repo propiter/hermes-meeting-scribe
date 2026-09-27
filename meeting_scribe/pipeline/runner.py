@@ -60,6 +60,7 @@ def _in_progress_rewind(meeting: Meeting) -> Meeting:
 
 
 _DEFER_KV = "pipeline.deferred_since."  # meeting id -> first deferral (epoch seconds)
+WAITING_KV = "pipeline.waiting_destination."  # meeting id -> why (shown by status/doctor), DESIGN §19
 
 
 def _thread_spawner(target: Callable[[], None], *, name: str, daemon: bool = True) -> threading.Thread:
@@ -73,17 +74,18 @@ class PipelineRunner:
     RECLAIM_SECONDS = 60.0  # how often the worker loop re-checks for expired/orphaned leases
     STRAGGLER_AGE_SECONDS = 600.0
     DEFER_SECONDS = 60.0  # retry delay for a stage that only waits for a target (not an attempt)
-    DEFER_MAX_SECONDS = 6 * 3600.0  # after this long waiting, deferrals count as normal failures  # a resumable row without a job, untouched this long, is re-queued
+    DEFER_MAX_SECONDS = 6 * 3600.0  # after this long waiting for Discord, deferrals count as normal failures
+    WAIT_SECONDS = 120.0  # re-check interval while a delivery waits for a destination (no deadline)
 
     def __init__(self, repo: Repository, stages: Stages, *, clock: Clock, spawner: Spawner = _thread_spawner,
-                 max_attempts: int = 3, backoff: Sequence[float] = (60, 300, 900),
+                 max_attempts: "int | Callable[[], int]" = 3, backoff: Sequence[float] = (60, 300, 900),
                  owner: Optional[str] = None) -> None:
         self.repo = repo
         self.owner = owner or process_owner_id()
         self.stages = stages
         self.clock = clock
         self.spawner = spawner
-        self.max_attempts = max_attempts
+        self._max_attempts = max_attempts
         self.backoff = tuple(backoff)
         self._listeners: list[Listener] = []
         self._wake = threading.Event()
@@ -92,6 +94,16 @@ class PipelineRunner:
         self._owns_capture = False  # recover() already ran with capture ownership
         self._last_reclaim: Optional[float] = None  # set by recover(); gates periodic lease reclaim
         self._thread: Optional[threading.Thread] = None
+
+    @property
+    def max_attempts(self) -> int:
+        """Read per failure so ``pipeline_max_attempts`` edits apply without a restart."""
+        value = self._max_attempts() if callable(self._max_attempts) else self._max_attempts
+        return max(1, int(value))
+
+    @max_attempts.setter
+    def max_attempts(self, value: "int | Callable[[], int]") -> None:
+        self._max_attempts = value
 
     # -- observers ----------------------------------------------------------------------------
     def subscribe(self, listener: Listener) -> None:
@@ -263,11 +275,23 @@ class PipelineRunner:
             self._fail(job_id, meeting_id, stage, attempts, exc)
             return
         self.repo.kv_set(_DEFER_KV + meeting_id, None)
+        self.repo.kv_set(WAITING_KV + meeting_id, None)
         self.repo.complete_job(job_id)
         self._emit(meeting_id, "done", self.stages.last_results.pop(meeting_id, []))
 
     def _defer(self, job_id: int, meeting_id: str, stage: Stage, exc: Exception) -> bool:
-        """Re-queue without using an attempt; ``False`` once the wait exceeded ``DEFER_MAX_SECONDS``."""
+        """Re-queue without using an attempt; ``False`` once the wait exceeded ``DEFER_MAX_SECONDS``.
+
+        Waiting for a DESTINATION (no channel configured or found) has no deadline: dropping the
+        meeting after hours would lose notes the user only has to point somewhere (DESIGN §19)."""
+        if getattr(exc, "waiting", False):
+            self.repo.kv_set(WAITING_KV + meeting_id, str(exc)[:2000])
+            self.repo.defer_job(job_id, stage, str(exc),
+                                retry_at=self.clock.now() + timedelta(seconds=self.WAIT_SECONDS))
+            self.stages.persist(self._meeting(meeting_id).with_state(rewind_target(stage), rewind=True))
+            self._emit(meeting_id, "waiting", {"stage": stage.value, "reason": str(exc)})
+            return True
+        self.repo.kv_set(WAITING_KV + meeting_id, None)
         now = self.clock.now().timestamp()
         raw = self.repo.kv_get(_DEFER_KV + meeting_id)
         try:
@@ -287,6 +311,7 @@ class PipelineRunner:
         error = f"{type(exc).__name__}: {exc}"
         log.warning("meeting-scribe %s failed at %s (attempt %d): %s", meeting_id, stage.value, attempts + 1, error)
         meeting = self._meeting(meeting_id)
+        self.repo.kv_set(WAITING_KV + meeting_id, None)
         if attempts + 1 >= self.max_attempts:
             self.repo.kv_set(_DEFER_KV + meeting_id, None)
             self.repo.fail_job(job_id, stage, error, retry_at=None)

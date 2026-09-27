@@ -34,7 +34,12 @@ class StageError(RuntimeError):
 
 class StageDeferred(StageError):
     """Only waiting for a target to become ready (Discord still connecting): retried later without
-    using up an attempt."""
+    using up an attempt. ``waiting``: no destination is configured/resolvable yet — that wait has no
+    deadline (it ends when the user configures a channel, DESIGN §19)."""
+
+    def __init__(self, message: str, *, waiting: bool = False) -> None:
+        super().__init__(message)
+        self.waiting = waiting
 
 
 def make_archiver(settings: Callable[[], Settings], ffmpeg: Callable[[], Ffmpeg]) -> Archiver:
@@ -129,8 +134,9 @@ class Stages:
         self.last_results[meeting.id] = results
         errors = [f"{r.sink}: {e}" for r in results for e in r.errors]
         if errors:
-            if all(r.deferred for r in results if r.errors):
-                raise StageDeferred("; ".join(errors))
+            failed = [r for r in results if r.errors]
+            if all(r.deferred or r.waiting for r in failed):
+                raise StageDeferred("; ".join(errors), waiting=all(r.waiting for r in failed))
             raise StageError("; ".join(errors))
         return meeting
 

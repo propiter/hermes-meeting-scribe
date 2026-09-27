@@ -70,7 +70,30 @@ class MeetingService:
                              "state": job.state, "stage": job.stage.value, "attempts": job.attempts,
                              "failed_stage": job.failed_stage.value if job.failed_stage else None,
                              "error": job.error}})
-        return {"queued": self.repo.pending_job_count(), "worker_running": self.runner.running, "recent": rows}
+        waiting = self.waiting_destination()
+        for row in rows:
+            if row["id"] in waiting:
+                row["delivery"] = {"state": "waiting_destination", "reason": waiting[row["id"]]}
+        return {"queued": self.repo.pending_job_count(), "worker_running": self.runner.running, "recent": rows,
+                "waiting_destination": waiting}
+
+    def retry_waiting(self) -> int:
+        """Re-queue now every delivery waiting for a destination (a channel setting changed)."""
+        n = 0
+        for mid in self.waiting_destination():
+            job = self.repo.get_job(mid)
+            if job is not None and job.state == "queued":
+                self.repo.enqueue_job(mid, job.stage, now=self.clock.now())
+                n += 1
+        if n:
+            self.runner._wake.set()
+        return n
+
+    def waiting_destination(self) -> dict[str, str]:
+        """Meetings whose delivery waits for a Discord channel (DESIGN §19): id -> instruction."""
+        from .runner import WAITING_KV
+
+        return {k[len(WAITING_KV):]: v for k, v in self.repo.kv_prefix(WAITING_KV).items()}
 
     # -- capture lifecycle (Phase B) -----------------------------------------------------------
     def begin_recording(self, meeting: Meeting) -> Meeting:

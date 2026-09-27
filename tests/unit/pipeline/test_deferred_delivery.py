@@ -73,3 +73,59 @@ def test_deferral_is_bounded_when_discord_never_connects(prepo, layout, settings
             pass
         clock.advance(max(runner.backoff) + 1)
     assert prepo.get_meeting(m.id).state is MeetingState.FAILED  # reported, not queued forever
+
+
+class NoDestinationSink(NotConnectedSink):
+    """Connected, but no channel is configured/resolvable yet (DESIGN §19)."""
+
+    def __init__(self):
+        super().__init__()
+        self.channel = None
+
+    def deliver(self, meeting, notes, folder):
+        self.calls += 1
+        if self.channel is None:
+            return SinkResult(self.name, False, errors=("waiting for a Discord channel: set one with "
+                                                        "`hermes meeting-scribe config set ...`",),
+                              deferred=True, waiting=True)
+        return SinkResult(self.name, True, (f"https://discord/{self.channel}",))
+
+
+def test_waiting_for_a_destination_has_no_deadline_and_resumes_when_configured(prepo, layout, settings, clock, meeting):
+    from meeting_scribe.pipeline.runner import WAITING_KV
+    from meeting_scribe.pipeline.service import MeetingService
+
+    sink = NoDestinationSink()
+    runner, *_ = build(prepo, layout, settings, clock, sinks=[sink])
+    m, _folder = captured(prepo, layout, meeting)
+    runner.enqueue(m.id)
+    while runner.run_once():
+        pass
+    clock.advance(runner.DEFER_MAX_SECONDS * 4)  # far beyond the Discord-connecting cap
+    for _ in range(5):
+        while runner.run_once():
+            pass
+        clock.advance(runner.WAIT_SECONDS + 1)
+    assert prepo.get_meeting(m.id).state is MeetingState.ANALYZED  # parked, not failed
+    job = prepo.get_job(m.id)
+    assert job.attempts == 0 and job.state == "queued"
+    svc = MeetingService(prepo, layout, runner, settings, clock=clock, item_sinks=lambda: {}, catalogs=lambda: [])
+    st = svc.status()
+    assert m.id in st["waiting_destination"] and "config set" in st["waiting_destination"][m.id]
+    row = next(r for r in st["recent"] if r["id"] == m.id)
+    assert row["delivery"]["state"] == "waiting_destination"
+    sink.channel = "notes"  # the user configured a channel: next cycle publishes by itself
+    clock.advance(runner.WAIT_SECONDS + 1)
+    while runner.run_once():
+        pass
+    assert prepo.get_meeting(m.id).state is MeetingState.DONE
+    assert prepo.kv_prefix(WAITING_KV) == {}
+
+
+def test_max_attempts_follows_settings(prepo, layout, settings, clock, meeting):
+    runner, *_ = build(prepo, layout, settings, clock)
+    box = {"n": 5}
+    runner.max_attempts = lambda: box["n"]
+    assert runner.max_attempts == 5
+    box["n"] = 0
+    assert runner.max_attempts == 1
