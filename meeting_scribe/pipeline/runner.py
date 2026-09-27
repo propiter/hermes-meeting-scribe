@@ -27,7 +27,7 @@ from ..domain.models import (
 from ..domain.ports import Clock
 from ..storage.owner import owner_alive, owner_dead, process_owner_id
 from ..storage.repo import Repository
-from .stages import StageDeferred, Stages
+from .stages import SINKS_DONE_KV, StageDeferred, Stages
 
 log = logging.getLogger(__name__)
 Spawner = Callable[..., threading.Thread]
@@ -138,6 +138,7 @@ class PipelineRunner:
         stage = effective_stage(meeting, stage)
         # Only an explicit re-delivery may move notes an older version posted in a DM (DESIGN §19).
         self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, "1" if stage is Stage.DELIVER else None)
+        self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)  # an explicit re-delivery runs every sink
         self.stages.persist(meeting.with_state(rewind_target(stage), rewind=True))
         self.enqueue(meeting_id, stage)
         return stage
@@ -278,6 +279,7 @@ class PipelineRunner:
             return
         self.repo.kv_set(_DEFER_KV + meeting_id, None)
         self.repo.kv_set(WAITING_KV + meeting_id, None)
+        self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)
         self.repo.complete_job(job_id)
         self._emit(meeting_id, "done", self.stages.last_results.pop(meeting_id, []))
 
@@ -317,6 +319,7 @@ class PipelineRunner:
         if attempts + 1 >= self.max_attempts:
             self.repo.kv_set(_DEFER_KV + meeting_id, None)
             self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, None)  # a later retry must be asked for again
+            self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)
             self.repo.fail_job(job_id, stage, error, retry_at=None)
             self.stages.persist(meeting.with_state(MeetingState.FAILED))
             self._emit(meeting_id, "failed", {"stage": stage.value, "error": error})

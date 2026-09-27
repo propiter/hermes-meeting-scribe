@@ -129,3 +129,39 @@ def test_max_attempts_follows_settings(prepo, layout, settings, clock, meeting):
     assert runner.max_attempts == 5
     box["n"] = 0
     assert runner.max_attempts == 1
+
+
+class CountingSink:
+    def __init__(self, name):
+        self.name = name
+        self.calls = 0
+
+    def enabled(self):
+        return True
+
+    def deliver(self, meeting, notes, folder):
+        self.calls += 1
+        return SinkResult(self.name, True, (f"{self.name}:ok",))
+
+
+def test_sinks_already_done_are_not_rerun_while_discord_waits(prepo, layout, settings, clock, meeting):
+    """Review M4: every 2-minute retry used to rewrite Files/Obsidian and re-read Kanban/Linear claims."""
+    from meeting_scribe.domain.models import Stage
+
+    discord, files, kanban = NoDestinationSink(), CountingSink("files"), CountingSink("kanban")
+    runner, *_ = build(prepo, layout, settings, clock, sinks=[discord, files, kanban])
+    m, _folder = captured(prepo, layout, meeting)
+    runner.enqueue(m.id)
+    for _ in range(4):
+        while runner.run_once():
+            pass
+        clock.advance(runner.WAIT_SECONDS + 1)
+    assert discord.calls == 4 and files.calls == 1 and kanban.calls == 1
+    discord.channel = "notes"
+    while runner.run_once():
+        pass
+    assert prepo.get_meeting(m.id).state is MeetingState.DONE and files.calls == 1
+    runner.reprocess(m.id, Stage.DELIVER)  # an explicit re-delivery runs every sink again
+    while runner.run_once():
+        pass
+    assert files.calls == 2 and kanban.calls == 2

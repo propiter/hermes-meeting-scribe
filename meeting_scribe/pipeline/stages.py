@@ -6,6 +6,8 @@ which are idempotent through the ``deliveries`` table.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -19,13 +21,16 @@ from ..config import Settings
 from ..domain.models import Meeting, SinkResult, Stage
 from ..domain.ports import Analyzer, ProjectCatalog, Sink, Transcriber
 from ..storage.artifacts import (
-    read_notes, read_transcript, write_meta, write_notes, write_transcript, write_transcript_md,
+    NOTES_JSON, read_notes, read_transcript, write_meta, write_notes, write_transcript, write_transcript_md,
 )
 from ..storage.layout import Layout
 from ..storage.repo import Repository
 
 Archiver = Callable[[Meeting, Path], Optional[Path]]
 ProgressCb = Callable[[str, str, float], None]  # meeting_id, track, fraction
+
+
+SINKS_DONE_KV = "pipeline.sinks_done."  # meeting id -> {"notes": sha256, "sinks": [...]} (review M4)
 
 
 class StageError(RuntimeError):
@@ -123,22 +128,52 @@ class Stages:
         if notes is None:
             raise StageError(f"notes.json missing in {folder}; reprocess from=analyze")
         results: list[SinkResult] = []
+        digest = self._notes_digest(folder)
+        done = self._done_sinks(meeting.id, digest)
         for sink in self.sinks():
+            name = getattr(sink, "name", type(sink).__name__)
             try:
                 if not sink.enabled():
                     continue
-                results.append(sink.deliver(meeting, notes, folder))
+                if name in done:  # delivered this same content in an earlier try of this job
+                    continue
+                result = sink.deliver(meeting, notes, folder)
+                results.append(result)
+                if result.ok and not result.errors and not result.deferred:
+                    done.add(name)
             except Exception as exc:  # one sink must not stop the others; the job retries
                 results.append(SinkResult(getattr(sink, "name", type(sink).__name__), False,
                                           errors=(f"{type(exc).__name__}: {exc}",)))
         self.last_results[meeting.id] = results
         errors = [f"{r.sink}: {e}" for r in results for e in r.errors]
+        self.repo.kv_set(SINKS_DONE_KV + meeting.id,
+                         json.dumps({"notes": digest, "sinks": sorted(done)}) if errors else None)
         if errors:
             failed = [r for r in results if r.errors]
             if all(r.deferred or r.waiting for r in failed):
                 raise StageDeferred("; ".join(errors), waiting=all(r.waiting for r in failed))
             raise StageError("; ".join(errors))
         return meeting
+
+    @staticmethod
+    def _notes_digest(folder: Path) -> str:
+        try:
+            return hashlib.sha256((folder / NOTES_JSON).read_bytes()).hexdigest()
+        except OSError:
+            return ""
+
+    def _done_sinks(self, meeting_id: str, digest: str) -> set[str]:
+        """Sinks that already delivered THIS notes content during the current job's retries, so a
+        delivery waiting for Discord does not rewrite files or re-check claims every cycle. Forgotten
+        when the job finishes, on an explicit reprocess and whenever the notes change."""
+        raw = self.repo.kv_get(SINKS_DONE_KV + meeting_id)
+        try:
+            data = json.loads(raw) if raw else {}
+        except ValueError:
+            data = {}
+        if not digest or data.get("notes") != digest:
+            return set()
+        return {str(s) for s in data.get("sinks") or ()}
 
     def archive(self, meeting: Meeting) -> Meeting:
         self.archiver(meeting, self.folder(meeting))
