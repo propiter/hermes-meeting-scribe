@@ -25,6 +25,34 @@ All notable changes to this project are documented here. The format follows
 
 - Speakers that are not Discord users (imported from Meet) are never mentioned or DMed; their name
   is shown instead.
+- The worker and the Meet poller start when the gateway loads the plugin, not only when Discord
+  connects or a `/meeting` command runs.
+- Re-running `google connect` keeps the original connection time, so meetings that ended while
+  access was broken are still imported (within Meet's 30 days).
+
+### Fixed
+
+- Meet import: one failing conference (403/404/5xx, malformed data) no longer blocks the others; it
+  is given up after 5 permanent failures (shown by `doctor`). No exception escapes a sync, so the
+  status is always updated and `google sync` never prints a traceback. Conferences without a
+  transcript an hour after they end are no longer polled, and a 429 `Retry-After` is honoured.
+- `reprocess` of an imported meeting starts at analysis (there is no audio to re-transcribe), and
+  recovery never rewinds one to transcription.
+- The full transcript is attached only by the delivery step: button clicks never attach it, meetings
+  delivered before the attachment existed never get it later, a new title alone does not re-post
+  it, and a lost pointer write after an upload no longer causes a duplicate.
+- Concurrent opening of an older database no longer fails with "duplicate column name" (migrations
+  run under one write lock).
+- OAuth: the loopback receiver is not blocked by idle browser connections and ignores redirects
+  with a wrong `state`; token refreshes are serialised across processes and never undo a
+  `disconnect` or overwrite a newer `connect`; a failed revoke on `disconnect` is reported with the
+  link to remove access by hand.
+- Meet display names are escaped in Discord (no mentions, no Markdown injection).
+- Import crash leftovers are cleaned up and rows without a job are re-queued while running; the
+  poller stops promptly and releases its lease from its own thread.
+- Discord channel ids are validated (`config set` rejects non-numeric ids, `doctor` reports them),
+  and `setup`, `config set` and `doctor` warn when the Meet import has no notes channel.
+- Docs: the Meet API only lists conferences organised by the connected account.
 
 ## [0.2.0] - 2026-09-27
 
