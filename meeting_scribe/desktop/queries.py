@@ -34,7 +34,19 @@ STATE_GROUPS: dict[str, tuple[str, ...]] = {
     "empty": ("empty",),  # nobody was heard: discarded, never "needs attention"
 }
 WAITING_KV = "pipeline.waiting_destination."
-ARTIFACTS = ("notes.json", "recording.ogg", "recording.mka", "transcript.json")
+ARTIFACTS = ("notes.json", "recording.ogg", "recording.mka", "playback.ogg", "transcript.json")
+# What an operator can do about a failure, by the words found in the (redacted) error. The page shows a
+# plain-language sentence for the category; the raw text stays available under «Details».
+_PROBLEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("ffmpeg", ("ffmpeg", "ffprobe")),
+    ("no_audio", ("no audio", "notracks", "no tracks")),
+    ("model", ("faster_whisper", "faster-whisper", "whisper", "ctranslate", "cuda", "out of memory")),
+    ("llm", ("llm", "model returned", "json", "openrouter", "anthropic", "openai", "timeout", "timed out", "429",
+             "rate limit")),
+    ("destination", ("channel", "destination", "discord", "forbidden", "missing access")),
+    ("kanban", ("kanban",)),
+    ("linear", ("linear",)),
+)
 WORKER_RECENT_SECONDS = 180
 _HIDDEN_MEETING_KEYS = ("folder", "started_by", "external_id")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -74,6 +86,19 @@ def public_meeting(data: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if k not in _HIDDEN_MEETING_KEYS}
 
 
+def problem_kind(error: str) -> str:
+    """Category of a pipeline error for the page's plain-language explanation."""
+    low = (error or "").lower()
+    for kind, words in _PROBLEMS:
+        if any(w in low for w in words):
+            return kind
+    return "unknown"
+
+
+def _people(data: dict[str, Any]) -> int:
+    return sum(1 for s in data.get("speakers") or () if isinstance(s, dict) and not s.get("is_bot"))
+
+
 class Library:
     def __init__(self, repo: Repository, root: Path) -> None:
         self.repo, self.root = repo, Path(root)
@@ -86,9 +111,10 @@ class Library:
 
     # -- library ------------------------------------------------------------------------------
     def meetings(self, *, limit: int = 30, cursor: str = "", q: str = "", source: str = "", state: str = "",
-                 since: str = "", until: str = "") -> dict[str, Any]:
-        """Newest first. ``q`` matches the title or any transcript line (FTS5); ``state`` is a state or
-        a group (``processing``); ``since``/``until`` are inclusive UTC days."""
+                 since: str = "", until: str = "", channel: str = "", project: str = "") -> dict[str, Any]:
+        """Newest first. ``q`` matches the title, the project or any transcript line (FTS5); ``state``
+        is a state or a group (``processing``); ``since``/``until`` are inclusive UTC days; ``channel``
+        is a channel id; ``project`` a project name (the meeting's or one of its tasks')."""
         if not 1 <= limit <= 100:
             raise ValueError("limit must be 1..100")
         where, params = ["1=1"], []
@@ -103,6 +129,13 @@ class Library:
                 raise ValueError("unknown state")
             where.append(f"state IN ({','.join('?' * len(states))})")
             params.extend(states)
+        if channel:
+            where.append("channel_id=?")
+            params.append(channel[:200])
+        if project:
+            where.append("(lower(json_extract(data, '$.project'))=lower(?) OR id IN (SELECT meeting_id FROM "
+                         "action_items WHERE lower(json_extract(data, '$.project'))=lower(?)))")
+            params.extend([project[:200], project[:200]])
         start, end = _day(since, "since"), _day(until, "until")
         if start and end and end < start:
             raise ValueError("until is before since")
@@ -115,8 +148,9 @@ class Library:
         q = q.strip()
         if q:
             words = re.findall(r"\w+", q, re.UNICODE)
-            clause = "instr(lower(title), lower(?)) > 0"
-            params.append(q)
+            clause = ("(instr(lower(title), lower(?)) > 0 OR instr(lower(coalesce(json_extract(data, '$.project'), "
+                      "'')), lower(?)) > 0)")
+            params.extend([q, q])
             if words:  # each word quoted: user text can never become FTS5 syntax
                 clause = f"({clause} OR id IN (SELECT meeting_id FROM utterances_fts WHERE utterances_fts MATCH ?))"
                 params.append(" ".join('"' + w + '"' for w in words))
@@ -133,6 +167,11 @@ class Library:
             data = public_meeting(meeting_dict_from_row(r))  # source from the column (authoritative)
             job = self.repo.get_job(r["id"])
             data["job_state"] = job.state if job else None
+            data["job_stage"] = job.stage.value if job else None
+            data["people"] = _people(data)
+            data["task_count"] = int(self.repo._x("SELECT COUNT(*) FROM action_items WHERE meeting_id=? AND "
+                                                  "status!='dismissed'", (r["id"],)).fetchone()[0])
+            data["waiting_destination"] = self.repo.kv_get(WAITING_KV + r["id"]) is not None
             items.append(data)
         more = len(rows) > limit
         return {"items": items,
@@ -144,9 +183,18 @@ class Library:
                     self.repo._x("SELECT state, COUNT(*) AS n FROM meetings GROUP BY state").fetchall()}
         by_source = {r["source"]: r["n"] for r in
                      self.repo._x("SELECT source, COUNT(*) AS n FROM meetings GROUP BY source").fetchall()}
+        channels = [{"id": r["channel_id"], "name": r["name"] or r["channel_id"], "count": r["n"]} for r in self.repo._x(
+            "SELECT channel_id, max(json_extract(data, '$.channel_name')) AS name, COUNT(*) AS n FROM meetings "
+            "WHERE channel_id != '' GROUP BY channel_id ORDER BY n DESC, name LIMIT 200").fetchall()]
+        projects = {str(r["p"]): int(r["n"]) for r in self.repo._x(
+            "SELECT p, COUNT(DISTINCT mid) AS n FROM (SELECT id AS mid, json_extract(data, '$.project') AS p FROM "
+            "meetings UNION ALL SELECT meeting_id, json_extract(data, '$.project') FROM action_items) "
+            "WHERE p IS NOT NULL AND p != '' GROUP BY lower(p)").fetchall()}
         return {"total": sum(by_state.values()),
                 "states": {g: sum(by_state.get(s, 0) for s in members) for g, members in STATE_GROUPS.items()},
-                "sources": {s: by_source.get(s, 0) for s in SOURCES}}
+                "sources": {s: by_source.get(s, 0) for s in SOURCES},
+                "channels": channels,
+                "projects": [{"name": k, "count": v} for k, v in sorted(projects.items(), key=lambda kv: kv[0].lower())][:200]}
 
     # -- one meeting --------------------------------------------------------------------------
     def artifact(self, mid: str, name: str) -> Path:
@@ -175,8 +223,13 @@ class Library:
                 notes = Notes.from_dict(json.loads(notes_path.read_text(encoding="utf-8"))).to_dict()
             except (ValueError, KeyError, TypeError):
                 notes = None  # a damaged file must not break the page; the transcript still shows
-        return {"meeting": public_meeting(meeting.to_dict()), "notes": notes, "tasks": self.tasks(mid),
+        tasks = self.tasks(mid)
+        projects = sorted({p for p in [meeting.project, *(t.get("project") for t in tasks)] if p}, key=str.lower)
+        public = public_meeting(meeting.to_dict())
+        public["people"] = _people(public)
+        return {"meeting": public, "notes": notes, "tasks": tasks, "projects": projects,
                 "transcript_total": self.repo.utterance_count(mid), "job": self.job(mid),
+                "history": self.history(mid),
                 "waiting_destination": redact(self.repo.kv_get(WAITING_KV + mid) or "") or None,
                 "dm_notes": redact(self.repo.kv_get(KV_DM_NOTES + mid) or "") or None,
                 "audio": self.audio(mid), "command": self.last_command(mid)}
@@ -191,6 +244,8 @@ class Library:
                 sinks[sink] = {"status": self.repo.item_sink_status(mid, item.id, sink) or "pending",
                                # only https links reach the page (never javascript:/file:/data:)
                                "url": safe_url(url) if url.startswith("https://") else ""}
+            kanban = self.repo.get_delivery("kanban", f"mtg:{mid}:{item.id}") or {}
+            sinks["kanban"]["task_id"] = str(kanban.get("external_id") or "") or None
             out.append({**item.to_dict(), "sinks": sinks, "discord": self._discord_task(mid, item.id)})
         return out
 
@@ -208,22 +263,64 @@ class Library:
                 "url": url if url.startswith("https://") else ""}
 
     def audio(self, mid: str) -> dict[str, Any]:
-        mixed = self.artifact(mid, "recording.ogg")
-        if mixed.is_file():
-            return {"available": True, "reason": "mixed", "path": str(mixed), "bytes": mixed.stat().st_size}
+        """What the player can stream. ``multitrack`` alone (an archive made before listening copies
+        existed) can be prepared on demand: ``prepare_audio`` command, run by the gateway."""
+        for name in ("playback.ogg", "recording.ogg"):
+            path = self.artifact(mid, name)
+            if path.is_file():
+                return {"available": True, "reason": "ready", "path": str(path), "bytes": path.stat().st_size,
+                        "original": self.artifact(mid, "recording.mka").is_file()}
         if self.artifact(mid, "recording.mka").is_file():
-            return {"available": False, "reason": "multitrack"}
-        source = self.require(mid).source
-        return {"available": False, "reason": "imported" if source == SOURCE_GOOGLE_MEET else "not_retained"}
+            return {"available": False, "reason": "multitrack", "can_prepare": True, "original": True}
+        meeting = self.require(mid)
+        if meeting.source == SOURCE_GOOGLE_MEET:
+            return {"available": False, "reason": "imported"}
+        if meeting.state.value == "recording":
+            return {"available": False, "reason": "recording"}
+        if meeting.state.value == "empty":
+            return {"available": False, "reason": "empty"}
+        return {"available": False, "reason": "not_retained"}
+
+    def history(self, mid: str) -> list[dict[str, Any]]:
+        """Timeline for the «Processing» tab, newest last: meeting start/end, the job's last attempt,
+        waiting for a destination and every operator command. Built from existing rows (no event log)."""
+        meeting = self.require(mid)
+        events: list[dict[str, Any]] = [{"kind": "started", "at": meeting.started_at.timestamp()}]
+        if meeting.ended_at:
+            events.append({"kind": "ended", "at": meeting.ended_at.timestamp(), "partial": meeting.partial})
+        row = self.repo._x("SELECT created_at, updated_at FROM jobs WHERE meeting_id=?", (mid,)).fetchone()
+        job = self.repo.get_job(mid)
+        if row is not None and job is not None:
+            events.append({"kind": "queued", "at": row["created_at"]})
+            kind = {"done": "processed", "failed": "failed", "running": "running", "queued": "waiting"}.get(job.state,
+                                                                                                             job.state)
+            item: dict[str, Any] = {"kind": kind, "at": row["updated_at"], "stage": job.stage.value,
+                                    "attempts": job.attempts}
+            if job.state == "failed" or (job.error and job.state == "queued"):
+                item["problem"] = problem_kind(job.error or "")
+                item["stage"] = (job.failed_stage or job.stage).value
+            events.append(item)
+        if self.repo.kv_get(WAITING_KV + mid) is not None:
+            events.append({"kind": "waiting_destination", "at": row["updated_at"] if row is not None else None})
+        for c in self.repo._x("SELECT id, body, state, error, created_at, updated_at FROM desktop_commands "
+                              "WHERE meeting_id=? ORDER BY created_at", (mid,)).fetchall():
+            try:
+                body = json.loads(c["body"])
+            except ValueError:
+                body = {}
+            events.append({"kind": "command", "at": c["created_at"], "action": body.get("action"),
+                           "stage": body.get("stage"), "state": c["state"], "updated_at": c["updated_at"]})
+        return sorted(events, key=lambda e: e.get("at") or 0)
 
     def job(self, mid: str) -> Optional[dict[str, Any]]:
         job = self.repo.get_job(mid)
         if job is None:
             return None
+        error = redact(job.error or "")[:2000]
         return {"state": job.state, "stage": job.stage.value, "attempts": job.attempts,
                 "failed_stage": job.failed_stage.value if job.failed_stage else None,
-                "error": redact(job.error or "")[:2000], "next_retry_at": job.next_retry_at,
-                "heartbeat": job.heartbeat}
+                "error": error, "problem": problem_kind(error) if error else None,
+                "next_retry_at": job.next_retry_at, "heartbeat": job.heartbeat}
 
     def last_command(self, mid: str) -> Optional[dict[str, Any]]:
         row = self.repo._x("SELECT id FROM desktop_commands WHERE meeting_id=? ORDER BY created_at DESC LIMIT 1",

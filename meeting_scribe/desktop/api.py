@@ -126,11 +126,13 @@ def _lang(value: str) -> str:
 # -- library --------------------------------------------------------------------------------------
 @router.get("/v1/meetings")
 def list_meetings(request: Request, q: str = Query("", max_length=200), source: str = "", state: str = "",
-                  since: str = "", until: str = "", cursor: str = Query("", max_length=500),
+                  since: str = "", until: str = "", channel: str = Query("", max_length=200),
+                  project: str = Query("", max_length=200), cursor: str = Query("", max_length=500),
                   limit: int = Query(30, ge=1, le=100)) -> dict[str, Any]:
     with _ctx(request) as c:
         lib = _library(c)
-        out = lib.meetings(limit=limit, cursor=cursor, q=q, source=source, state=state, since=since, until=until)
+        out = lib.meetings(limit=limit, cursor=cursor, q=q, source=source, state=state, since=since, until=until,
+                           channel=channel, project=project)
         out["facets"] = lib.facets()
         return out
 
@@ -162,7 +164,10 @@ def get_audio(request: Request, meeting_id: str) -> FileResponse:
     regular, non-symlinked file inside the meeting's folder."""
     with _ctx(request) as c:
         lib = _library(c)
-        path = lib.artifact(_mid(meeting_id), "recording.ogg")
+        mid = _mid(meeting_id)
+        path = lib.artifact(mid, "playback.ogg")  # the listening copy of a multitrack archive
+        if not path.is_file() or path.is_symlink():
+            path = lib.artifact(mid, "recording.ogg")
         if not path.is_file() or path.is_symlink():
             raise HTTPException(404, "no audio for this meeting")
         return FileResponse(path, media_type=mimetypes.guess_type(path.name)[0] or "audio/ogg",
@@ -172,7 +177,8 @@ def get_audio(request: Request, meeting_id: str) -> FileResponse:
 # -- reprocess (queued for the gateway) -----------------------------------------------------------
 @router.post("/v1/meetings/{meeting_id}/commands")
 def submit_command(request: Request, meeting_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """``{"request_id", "action": "reprocess", "stage": "transcribe|analyze|deliver", "confirm": true}``.
+    """``{"request_id", "action": "reprocess", "stage": "transcribe|analyze|deliver", "confirm": true}``
+    or ``{"request_id", "action": "prepare_audio", "confirm": true}`` (write the listening copy).
     ``confirm`` must be literally ``true``: the page asks the operator before sending it."""
     if body.get("confirm") is not True:
         raise HTTPException(400, "confirmation required")

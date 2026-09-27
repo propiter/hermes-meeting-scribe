@@ -109,6 +109,25 @@ def test_audio_streams_with_range_and_refuses_symlinks(env, tmp_path):
     assert c.get(f"{PREFIX}/v1/meetings/{mid}/audio").status_code == 400
 
 
+def test_audio_prefers_the_listening_copy_over_the_multitrack_archive(env):
+    c, mid, folder = env["client"], env["meeting"].id, env["folder"]
+    (folder / "recording.mka").write_bytes(b"\x1aE\xdf\xa3matroska")
+    d = c.get(f"{PREFIX}/v1/meetings/{mid}").json()
+    assert d["audio"]["reason"] == "multitrack" and d["audio"]["can_prepare"] and "stream_path" not in d["audio"]
+    assert c.get(f"{PREFIX}/v1/meetings/{mid}/audio").status_code == 404  # never the .mka
+    (folder / "playback.ogg").write_bytes(b"OggS-listening-copy")
+    d = c.get(f"{PREFIX}/v1/meetings/{mid}").json()["audio"]
+    assert d["available"] and d["original"] and d["path"].endswith("playback.ogg")
+    got = c.get(f"{PREFIX}/v1/meetings/{mid}/audio")
+    assert got.status_code == 200 and got.content == b"OggS-listening-copy"
+
+
+def test_channel_and_project_filters_reach_the_library(env):
+    c = env["client"]
+    page = c.get(f"{PREFIX}/v1/meetings", params={"channel": "nope", "project": "Proyecto Alfa"}).json()
+    assert page["items"] == [] and "channels" in page["facets"] and "projects" in page["facets"]
+
+
 def test_reprocess_requires_confirmation_and_is_only_queued(env):
     c, mid = env["client"], env["meeting"].id
     url = f"{PREFIX}/v1/meetings/{mid}/commands"

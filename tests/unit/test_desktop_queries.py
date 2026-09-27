@@ -138,13 +138,26 @@ def test_audio_availability_reasons(repo, tmp_path, meeting):
     folder.mkdir(parents=True)
     repo.save_meeting(replace(meeting, folder=layout.relative(folder)))
     lib = Library(repo, tmp_path)
+    repo.save_meeting(replace(meeting, folder=layout.relative(folder), state=MeetingState.DONE))
+    assert lib.audio(meeting.id) == {"available": False, "reason": "not_retained"}
     (folder / "recording.mka").write_bytes(b"x")
-    assert lib.audio(meeting.id) == {"available": False, "reason": "multitrack"}
-    (folder / "recording.ogg").write_bytes(b"OggS")
+    # An archive made before listening copies existed: the page offers to prepare one.
+    assert lib.audio(meeting.id) == {"available": False, "reason": "multitrack", "can_prepare": True, "original": True}
+    (folder / "playback.ogg").write_bytes(b"OggS")
     got = lib.audio(meeting.id)
-    assert got["available"] and got["reason"] == "mixed" and got["bytes"] == 4
+    assert got["available"] and got["reason"] == "ready" and got["bytes"] == 4 and got["original"]
+    assert got["path"] == str(folder / "playback.ogg")
+    (folder / "playback.ogg").unlink()
+    (folder / "recording.mka").unlink()
+    (folder / "recording.ogg").write_bytes(b"OggSx")  # mixed retention is already playable
+    got = lib.audio(meeting.id)
+    assert got["available"] and got["bytes"] == 5 and not got["original"]
     repo.save_meeting(replace(meeting, id="g1", source="google_meet"))
     assert lib.audio("g1") == {"available": False, "reason": "imported"}
+    repo.save_meeting(replace(meeting, id="r1", state=MeetingState.RECORDING))
+    assert lib.audio("r1") == {"available": False, "reason": "recording"}
+    repo.save_meeting(replace(meeting, id="e1", state=MeetingState.EMPTY))
+    assert lib.audio("e1") == {"available": False, "reason": "empty"}
 
 
 def test_transcript_is_complete_through_pages(repo, tmp_path, meeting, utterances):
@@ -218,3 +231,50 @@ def test_discarded_recordings_have_their_own_group_not_failed(repo, tmp_path, me
     assert facets["states"]["empty"] == 1 and facets["states"]["failed"] == 1
     assert [m["id"] for m in lib.meetings(state="empty")["items"]] == ["e0"]
     assert [m["id"] for m in lib.meetings(state="failed")["items"]] == ["f0"]
+
+
+def test_channel_and_project_filters_row_summary_and_facets(repo, tmp_path, meeting, utterances, notes):
+    seed(repo, meeting, utterances)
+    repo.save_meeting(replace(meeting, id="c9", channel_id="300", channel_name="Soporte", project="Proyecto Alfa",
+                              state=MeetingState.DONE, started_at=datetime(2026, 9, 25, tzinfo=timezone.utc)))
+    repo.sync_action_items("m1", notes.action_items)
+    repo._x("UPDATE action_items SET data=json_set(data, '$.project', 'Proyecto Beta') WHERE meeting_id='m1'")
+    lib = Library(repo, tmp_path)
+    assert [m["id"] for m in lib.meetings(channel="300")["items"]] == ["c9"]
+    assert [m["id"] for m in lib.meetings(project="proyecto alfa")["items"]] == ["c9"]
+    assert [m["id"] for m in lib.meetings(project="Proyecto Beta")["items"]] == ["m1"]  # through its tasks
+    assert [m["id"] for m in lib.meetings(q="alfa")["items"]] == ["c9"]  # the project name is searchable
+    row = next(m for m in lib.meetings()["items"] if m["id"] == "m1")
+    assert row["people"] == 2 and row["task_count"] == len(notes.action_items)
+    assert row["job_stage"] is None and row["waiting_destination"] is False
+    facets = lib.facets()
+    assert {c["id"]: c["count"] for c in facets["channels"]} == {"200": 3, "300": 1}
+    assert next(c for c in facets["channels"] if c["id"] == "300")["name"] == "Soporte"
+    assert facets["projects"] == [{"name": "Proyecto Alfa", "count": 1}, {"name": "Proyecto Beta", "count": 1}]
+
+
+def test_problem_kind_speaks_the_operator_language():
+    from meeting_scribe.desktop.queries import problem_kind
+    assert problem_kind("FfmpegNotFound: ffmpeg/ffprobe not found") == "ffmpeg"
+    assert problem_kind("RuntimeError: CUDA out of memory") == "model"
+    assert problem_kind("LLMError: the model returned invalid JSON") == "llm"
+    assert problem_kind("Forbidden: Missing Access to channel") == "destination"
+    assert problem_kind("KeyError: 3") == "unknown"
+    assert problem_kind("") == "unknown"
+
+
+def test_history_is_a_readable_timeline(repo, tmp_path, meeting):
+    repo.save_meeting(replace(meeting, state=MeetingState.FAILED))
+    repo.enqueue_job(meeting.id, Stage.ANALYZE, now=datetime.now(timezone.utc))
+    repo._x("UPDATE jobs SET state='failed', error=?, failed_stage='analyze' WHERE meeting_id=?",
+            ("LLMError: timed out", meeting.id))
+    Commands(repo).submit("r" * 16, meeting.id, {"action": "prepare_audio"})
+    d = Library(repo, tmp_path).detail(meeting.id)
+    kinds = [e["kind"] for e in d["history"]]
+    assert kinds[:2] == ["started", "ended"] and "failed" in kinds and kinds.count("command") == 1
+    failed = next(e for e in d["history"] if e["kind"] == "failed")
+    assert failed["problem"] == "llm" and failed["stage"] == "analyze"
+    assert d["job"]["problem"] == "llm"
+    cmd = next(e for e in d["history"] if e["kind"] == "command")
+    assert cmd["action"] == "prepare_audio" and cmd["state"] == "queued"
+    assert d["meeting"]["people"] == 2 and d["projects"] == []
