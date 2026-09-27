@@ -7,3 +7,6 @@ __pycache__/
 build/
 dist/
 !dashboard/dist/
+
+# Desktop copy marker
+desktop/.hermes-package.json
