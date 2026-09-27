@@ -8,7 +8,11 @@ from __future__ import annotations
 import pytest
 
 from meeting_scribe.domain.names import (
-    clean_channel_name, levenshtein_ratio, match_name, rank_names, similarity,
+    clean_channel_name,
+    levenshtein_ratio,
+    match_name,
+    rank_names,
+    similarity,
 )
 
 

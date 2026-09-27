@@ -139,7 +139,7 @@ class DiscordNotesSink:
         got = await self.board(meeting_id)
         if got is None:
             raise LookupError(meeting_id)
-        pub, board = got
+        _pub, board = got
         chan = next((c for c in board.channels if c.id == str(channel_id) and c.kind != "category"), None)
         if chan is None or not chan.can_post:
             raise LookupError(f"channel {channel_id} is not available")

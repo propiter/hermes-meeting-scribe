@@ -95,9 +95,9 @@ async def deliver(env, sink=None):
 
 def thread_of(env, channel):
     """The thread started in a project channel, and its messages."""
-    starter = channel.ordered()[0]
+    anchor = channel.ordered()[0]
     thread = next(c for c in env.bot.channels.values() if c.parent is channel)
-    return starter, thread
+    return anchor, thread
 
 
 def ptr(env, suffix):
@@ -107,8 +107,8 @@ def ptr(env, suffix):
 
 async def test_each_task_is_one_message_with_its_own_buttons_in_its_project_thread(env):
     await deliver(env)
-    starter, thread = thread_of(env, env.orion)
-    assert "Migración SMTP" in starter.content
+    anchor, thread = thread_of(env, env.orion)
+    assert "Migración SMTP" in anchor.content
     [msg] = thread.ordered()
     assert "Landing page" in msg.content and "<@11>" in msg.content
     assert msg.view and all(cid.endswith(":a1") for cid in msg.view) and "mscribe:ok:k3v7q2ab:a1" in msg.view

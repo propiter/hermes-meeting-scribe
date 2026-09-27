@@ -5,7 +5,7 @@ Layout per delivery:
 * meeting chat: the summary (``notes`` pointer, as in 0.1) and, last, the task index with the one
   "📋 My tasks" button (``index`` pointer). Tasks without a project channel go to the meeting chat
   too (into a thread under the summary when ``delivery_discord_thread`` and the channel allows it).
-* each project channel: a starter message + a thread (``thread:<channel>`` pointer; directly in the
+* each project channel: an anchor message + a thread (``thread:<channel>`` pointer; directly in the
   channel when ``delivery_project_threads`` is off or the thread cannot be created), then ONE
   message per task with its own buttons (``task:<item>`` pointer holding the routed ``target``).
 * assignee DMs (``delivery_dm_assignees``, default on): one panel per assignee (``dm:<user>``).
@@ -133,8 +133,8 @@ class TaskPublisher:
             except Exception as exc:
                 log.info("meeting-scribe: project thread gone (%s); starting a new one", exc)
         try:
-            starter = channel.get_partial_message(int(ptr["message"]))
-            thread = await starter.create_thread(name=self._thread_name(meeting), auto_archive_duration=1440)
+            anchor = channel.get_partial_message(int(ptr["message"]))
+            thread = await anchor.create_thread(name=self._thread_name(meeting), auto_archive_duration=1440)
         except Exception as exc:  # permissions changed since the snapshot: post in the channel itself
             log.info("meeting-scribe: cannot start a thread in %s (%s); posting in the channel", channel_id, exc)
             return channel

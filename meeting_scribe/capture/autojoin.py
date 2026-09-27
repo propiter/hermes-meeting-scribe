@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 COOLDOWN_REASONS = frozenset({"stopped", "max_duration"})
 
 
-class Starter(Protocol):
+class Launcher(Protocol):
     async def start_in(self, channel: Any, *, started_by: Optional[str] = None) -> Any: ...
 
     def busy(self, guild: Any) -> bool: ...
@@ -42,9 +42,9 @@ def _matches(channel: Any, entries: tuple[str, ...]) -> bool:
 
 
 class AutoJoiner:
-    def __init__(self, starter: Starter, settings: Callable[[], Settings], *, clock: Callable[[], float] = time.monotonic,
+    def __init__(self, launcher: Launcher, settings: Callable[[], Settings], *, clock: Callable[[], float] = time.monotonic,
                  poll: float = 1.0) -> None:
-        self._starter = starter
+        self._launcher = launcher
         self._settings = settings
         self._clock = clock
         self._poll = poll
@@ -65,7 +65,7 @@ class AutoJoiner:
             if enough:
                 return False
             self._cooldown.discard(channel.id)  # the meeting emptied out: auto-join may fire again
-        return enough and not self._starter.busy(channel.guild)
+        return enough and not self._launcher.busy(channel.guild)
 
     def note_session_end(self, session: Any) -> None:
         """Controller callback: a deliberate stop must not be undone by auto-join."""
@@ -102,7 +102,7 @@ class AutoJoiner:
                     break
                 await asyncio.sleep(self._poll)
             log.info("meeting-scribe: auto-joining %s (%d humans)", channel.name, humans_in(channel))
-            await self._starter.start_in(channel)
+            await self._launcher.start_in(channel)
         except asyncio.CancelledError:
             raise
         except Exception:  # permissions, busy races: log and wait for the next voice event

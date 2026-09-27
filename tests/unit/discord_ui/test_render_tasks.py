@@ -8,7 +8,12 @@ import pytest
 
 from meeting_scribe.discord_ui.render import RenderOptions
 from meeting_scribe.discord_ui.render_tasks import (
-    PANEL_TEXT_LIMIT, TASKS_PER_PAGE, TaskView, render_index, render_panel, render_task,
+    PANEL_TEXT_LIMIT,
+    TASKS_PER_PAGE,
+    TaskView,
+    render_index,
+    render_panel,
+    render_task,
 )
 from meeting_scribe.discord_ui.routing import Route
 from meeting_scribe.domain.models import ActionItem, ActionStatus
