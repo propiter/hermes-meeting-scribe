@@ -75,7 +75,16 @@ CREATE TABLE item_overrides (
   meeting_id TEXT NOT NULL, item_id TEXT NOT NULL, project TEXT, project_key TEXT, updated_at REAL NOT NULL,
   PRIMARY KEY (meeting_id, item_id));
 """
-_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3)
+# v4 (DESIGN §17): meeting source + external id (Google Meet imports are idempotent through the
+# unique index), a small key/value table for integration status and named leases (one poller).
+_V4 = """
+ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'discord';
+ALTER TABLE meetings ADD COLUMN external_id TEXT;
+CREATE UNIQUE INDEX meetings_source_external ON meetings(source, external_id) WHERE external_id IS NOT NULL;
+CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT, updated_at REAL NOT NULL);
+CREATE TABLE leases (name TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at REAL NOT NULL);
+"""
+_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4)
 SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -126,17 +135,93 @@ class Repository(JobsMixin, DeliveriesMixin):
     # -- meetings -------------------------------------------------------------------------------
     def save_meeting(self, meeting: Meeting) -> None:
         self._tx([(
-            "INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,"
+            "INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at,"
+            " source, external_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,"
             " title=excluded.title, folder=excluded.folder, data=excluded.data, updated_at=excluded.updated_at",
             (meeting.id, meeting.guild_id, meeting.channel_id, meeting.state.value,
              meeting.started_at.isoformat(), meeting.title, meeting.folder,
-             json.dumps(meeting.to_dict(), ensure_ascii=False), time.time()),
+             json.dumps(meeting.to_dict(), ensure_ascii=False), time.time(), meeting.source, meeting.external_id),
         )] + [(
             "INSERT INTO speakers (meeting_id, user_id, name, is_bot) VALUES (?,?,?,?)"
             " ON CONFLICT(meeting_id, user_id) DO UPDATE SET name=excluded.name",
             (meeting.id, s.user_id, s.name, int(s.is_bot)),
         ) for s in meeting.speakers])
+
+    def create_imported_meeting(self, meeting: Meeting, utterances: Sequence[Utterance]) -> bool:
+        """Insert an imported meeting (row + speakers + utterances) in ONE transaction.
+
+        ``False`` when ``(source, external_id)`` already exists — another process or an earlier run
+        imported it — and nothing is written. A crash can never leave a row without its transcript.
+        """
+        if not meeting.external_id:
+            raise ValueError("imported meetings need an external_id")
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = self._conn.execute(
+                    "INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at,"
+                    " source, external_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                    (meeting.id, meeting.guild_id, meeting.channel_id, meeting.state.value,
+                     meeting.started_at.isoformat(), meeting.title, meeting.folder,
+                     json.dumps(meeting.to_dict(), ensure_ascii=False), time.time(), meeting.source,
+                     meeting.external_id))
+                if cur.rowcount != 1:
+                    self._conn.execute("ROLLBACK")
+                    return False
+                for s in meeting.speakers:
+                    self._conn.execute("INSERT OR IGNORE INTO speakers (meeting_id, user_id, name, is_bot)"
+                                       " VALUES (?,?,?,?)", (meeting.id, s.user_id, s.name, int(s.is_bot)))
+                for u in utterances:
+                    ucur = self._conn.execute(
+                        "INSERT INTO utterances (meeting_id, t0, t1, speaker_id, speaker, text) VALUES (?,?,?,?,?,?)",
+                        (meeting.id, u.t0, u.t1, u.speaker_id, u.speaker, u.text))
+                    self._conn.execute("INSERT INTO utterances_fts (rowid, text, meeting_id) VALUES (?,?,?)",
+                                       (ucur.lastrowid, u.text, meeting.id))
+                self._conn.execute("COMMIT")
+                return True
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def find_by_external(self, source: str, external_id: str) -> Optional[Meeting]:
+        row = self._x("SELECT data FROM meetings WHERE source=? AND external_id=?", (source, external_id)).fetchone()
+        return Meeting.from_dict(json.loads(row["data"])) if row else None
+
+    def known_external_ids(self, source: str) -> set[str]:
+        rows = self._x("SELECT external_id FROM meetings WHERE source=? AND external_id IS NOT NULL", (source,))
+        return {r["external_id"] for r in rows.fetchall()}
+
+    # -- key/value status & named leases (DESIGN §17) -------------------------------------------
+    def kv_get(self, key: str) -> Optional[str]:
+        row = self._x("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def kv_set(self, key: str, value: Optional[str]) -> None:
+        if value is None:
+            self._x("DELETE FROM kv WHERE key=?", (key,))
+            return
+        self._x("INSERT INTO kv (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
+                " value=excluded.value, updated_at=excluded.updated_at", (key, str(value), time.time()))
+
+    def kv_prefix(self, prefix: str) -> dict[str, str]:
+        rows = self._x("SELECT key, value FROM kv WHERE substr(key, 1, ?)=?", (len(prefix), prefix)).fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+    def acquire_lease(self, name: str, owner: str, *, ttl: float, now: Optional[float] = None) -> bool:
+        """Take or renew lease ``name``; ``False`` while another owner holds an unexpired one."""
+        ts = time.time() if now is None else now
+        cur = self._x("INSERT INTO leases (name, owner, expires_at) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET"
+                      " owner=excluded.owner, expires_at=excluded.expires_at"
+                      " WHERE leases.owner=excluded.owner OR leases.expires_at < ?", (name, owner, ts + ttl, ts))
+        return cur.rowcount == 1
+
+    def release_lease(self, name: str, owner: str) -> None:
+        self._x("DELETE FROM leases WHERE name=? AND owner=?", (name, owner))
+
+    def lease_owner(self, name: str, *, now: Optional[float] = None) -> Optional[str]:
+        ts = time.time() if now is None else now
+        row = self._x("SELECT owner FROM leases WHERE name=? AND expires_at >= ?", (name, ts)).fetchone()
+        return row["owner"] if row else None
 
     def get_meeting(self, meeting_id: str) -> Optional[Meeting]:
         row = self._x("SELECT data FROM meetings WHERE id=?", (meeting_id,)).fetchone()

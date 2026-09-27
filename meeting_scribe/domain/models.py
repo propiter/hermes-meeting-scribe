@@ -111,6 +111,15 @@ def stage_after(state: MeetingState) -> Optional[Stage]:
 
 
 # --------------------------------------------------------------------------------------------
+SOURCE_DISCORD = "discord"
+SOURCE_GOOGLE_MEET = "google_meet"
+
+
+def is_discord_user_id(user_id: Optional[str]) -> bool:
+    """Discord snowflakes are digits; imported speakers (``gmeet:<id>``) are not mentionable/DMable."""
+    return bool(user_id) and str(user_id).isdigit()
+
+
 @dataclass(frozen=True)
 class Speaker:
     user_id: str
@@ -262,6 +271,11 @@ class Meeting:
     project: Optional[str] = None
     started_by: Optional[str] = None
     project_key: Optional[str] = None  # the resolved candidate's key (sink routing, finding 5)
+    # Where the meeting came from (DESIGN §17): ``discord`` (live capture) or ``google_meet`` (an
+    # imported Meet transcript). ``external_id`` is the source's own id (the Meet conference record
+    # name); ``(source, external_id)`` is unique so an import can never be processed twice.
+    source: str = SOURCE_DISCORD
+    external_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         for name in ("started_at", "ended_at"):
