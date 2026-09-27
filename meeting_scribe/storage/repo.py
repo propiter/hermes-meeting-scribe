@@ -89,23 +89,55 @@ SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
+def _statements(script: str) -> list[str]:
+    """Split a migration script into complete SQL statements (``;`` inside literals is respected)."""
+    out: list[str] = []
+    buf = ""
+    for line in script.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            if buf.strip():
+                out.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        raise ValueError(f"incomplete SQL statement in migration: {buf.strip()[:80]}")
+    return out
+
+
 class Repository(JobsMixin, DeliveriesMixin):
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA busy_timeout=5000")  # first: the WAL switch and migrations may wait
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.execute("PRAGMA busy_timeout=5000")
         self._migrate()
 
     # -- plumbing -------------------------------------------------------------------------------
     def _migrate(self) -> None:
+        """Apply pending migrations atomically, safe against processes opening the DB at once.
+
+        ``user_version`` is read INSIDE a ``BEGIN IMMEDIATE`` transaction (the write lock), so a
+        second process waits for the first one's COMMIT and then sees the new version instead of
+        re-running ``ALTER TABLE`` ("duplicate column name"). ``executescript`` is not used: it
+        commits any open transaction first.
+        """
         with self._lock:
-            current = self.user_version()
-            for version, script in enumerate(_MIGRATIONS[current:], start=current + 1):
-                self._conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version={version};\nCOMMIT;")
+            if self.user_version() >= len(_MIGRATIONS):
+                return  # fast path: no write lock taken on an up-to-date database
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                current = self.user_version()
+                for version, script in enumerate(_MIGRATIONS[current:], start=current + 1):
+                    for statement in _statements(script):
+                        self._conn.execute(statement)
+                    self._conn.execute(f"PRAGMA user_version={int(version)}")
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def _x(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Cursor:
         with self._lock:
