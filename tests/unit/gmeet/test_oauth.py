@@ -6,6 +6,7 @@ import hashlib
 import json
 import stat
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -165,15 +166,59 @@ def test_loopback_receiver_captures_code_and_checks_state():
     t.join()
 
 
-def test_loopback_receiver_rejects_wrong_state_and_times_out():
+def _get(url):
+    try:
+        urllib.request.urlopen(url, timeout=5).close()
+    except urllib.error.HTTPError:
+        pass
+
+
+def test_loopback_receiver_ignores_wrong_state_and_keeps_waiting():
+    """A stray/forged redirect must not abort the flow: the real one can still arrive (finding 9)."""
     rx = LoopbackReceiver("s1")
-    t = threading.Thread(target=lambda: urllib.request.urlopen(f"{rx.redirect_uri}/?state=bad&code=x", timeout=5).close())
+
+    def hits():
+        _get(f"{rx.redirect_uri}/?state=bad&code=x")
+        _get(f"{rx.redirect_uri}/?state=bad&error=access_denied")
+        _get(f"{rx.redirect_uri}/?state=s1&code=4/good")
+    t = threading.Thread(target=hits)
     t.start()
-    with pytest.raises(GoogleAuthError, match="state mismatch"):
-        rx.wait(10)
+    assert rx.wait(10) == "4/good"
     t.join()
     with pytest.raises(GoogleAuthError, match="timed out"):
         LoopbackReceiver("s1").wait(0.6)
+
+
+def test_loopback_receiver_is_not_blocked_by_an_idle_connection():
+    import socket
+    import time
+    rx = LoopbackReceiver("s1")
+    port = int(rx.redirect_uri.rsplit(":", 1)[1])
+    idle = socket.create_connection(("127.0.0.1", port))  # a browser pre-connect that never sends
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(GoogleAuthError, match="timed out"):
+            rx.wait(1.0)
+        assert time.monotonic() - t0 < 3
+    finally:
+        idle.close()
+
+
+def test_loopback_receiver_gets_the_code_after_an_idle_connection():
+    import socket
+    import time
+    rx = LoopbackReceiver("s1")
+    port = int(rx.redirect_uri.rsplit(":", 1)[1])
+    idle = socket.create_connection(("127.0.0.1", port))
+    t = threading.Thread(target=lambda: _get(f"{rx.redirect_uri}/?state=s1&code=4/good"))
+    t.start()
+    try:
+        t0 = time.monotonic()
+        assert rx.wait(15) == "4/good"
+        assert time.monotonic() - t0 < 3  # not held up by the idle connection
+    finally:
+        idle.close()
+        t.join()
 
 
 def test_connect_flow_no_browser_paste(files, client_file):

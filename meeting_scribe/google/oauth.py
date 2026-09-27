@@ -35,6 +35,7 @@ AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 REVOKE_URI = "https://oauth2.googleapis.com/revoke"
 REFRESH_MARGIN = 120.0  # refresh this many seconds before expiry
+LOOPBACK_REQUEST_TIMEOUT = 5.0  # a connection that sends nothing (browser pre-connect) is dropped after this
 
 
 class GoogleAuthError(RuntimeError):
@@ -272,16 +273,20 @@ class LoopbackReceiver:
         receiver = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            timeout = LOOPBACK_REQUEST_TIMEOUT  # socket timeout: an idle connection cannot block wait()
+
             def do_GET(self) -> None:  # noqa: N802 - http.server API
                 query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 if not query.get("code") and not query.get("error"):
                     self.send_response(404)
                     self.end_headers()
                     return  # favicon or a stray request: keep waiting
+                if query.get("state", [""])[0] != receiver.expected_state:
+                    self.send_response(400)  # stale tab / forged request: ignore it, keep waiting
+                    self.end_headers()
+                    return
                 if query.get("error"):
                     receiver.error = f"authorization denied: {query['error'][0]}"
-                elif query.get("state", [""])[0] != receiver.expected_state:
-                    receiver.error = "state mismatch"
                 else:
                     receiver.result = query["code"][0]
                 self.send_response(200)
@@ -293,7 +298,11 @@ class LoopbackReceiver:
             def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - the query holds the code: never log
                 return
 
-        self._server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = True  # each connection on its own thread: an idle one never blocks the redirect
+            block_on_close = False
+
+        self._server = Server(("127.0.0.1", port), Handler)
         self._server.timeout = 0.5
 
     @property
