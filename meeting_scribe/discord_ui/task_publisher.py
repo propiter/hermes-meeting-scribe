@@ -282,8 +282,31 @@ class TaskPublisher:
             if not is_missing(exc):
                 log.info("meeting-scribe: transcript attachment skipped: %s", exc)
 
+    async def leave_dm(self, meeting: Meeting, ptrs: Pointers) -> bool:
+        """Notes posted in a DM by an older version (home-channel fallback): delete them there and forget
+        the pointers so this publish reposts in a server channel (DESIGN §19). Task messages move by
+        themselves (their target changes). ``False`` when the notes are not in a DM."""
+        ptr = await ptrs.load("notes")
+        if not ptr or not ptr.get("channel"):
+            return False
+        try:
+            channel = await self.msgs.channel(ptr["channel"])
+        except Exception:  # gone or unreachable: the normal path re-posts
+            return False
+        if getattr(channel, "guild", None) is not None or not self._destination(meeting).targets:
+            return False
+        log.warning("meeting-scribe: meeting %s was posted in a DM; moving it to a server channel", meeting.id)
+        for suffix in ("notes", "index", TRANSCRIPT_SUFFIX):
+            old = await ptrs.load(suffix) or {}
+            ids = list(old.get("messages") or ()) + ([old["message"]] if old.get("message") else [])
+            for mid in ids:
+                await self.msgs.delete(old.get("channel") or ptr["channel"], mid)
+            await ptrs.drop(suffix)
+        return True
+
     async def publish(self, meeting: Meeting, notes: Notes, *, send_dms: bool, attach_transcript: bool = False) -> str:
         ptrs = Pointers(self.repo, meeting.id)
+        await self.leave_dm(meeting, ptrs)
         chat, notes_ptr = await self.header(meeting, notes, ptrs)
         if attach_transcript:
             await self._transcript(meeting, chat, notes_ptr, ptrs)

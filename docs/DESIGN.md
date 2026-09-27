@@ -671,7 +671,9 @@ does not have guild info attached") and nobody else saw it.
   problem: dropping the notes would be worse than waiting). The reason (with the exact
   `config set` command) is stored under `pipeline.waiting_destination.<id>` and shown by `status`
   and `doctor`; `config set` of a destination key re-queues waiting deliveries immediately. A
-  meeting already posted keeps being edited where it is.
+  meeting already posted in a server channel keeps being edited where it is; one posted in a DM by
+  an older version is moved on its next delivery (DM messages deleted, pointers dropped, reposted —
+  `reprocess <id> --from deliver`).
 - **Tasks**: with a project → the project channel (routing of §16, candidates from the server chosen
   above, so Meet tasks route too); without → `delivery_fallback_channel` (id or name; anchor +
   thread like a project channel), else the notes chat as before.

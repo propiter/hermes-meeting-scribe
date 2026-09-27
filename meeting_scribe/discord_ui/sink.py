@@ -120,7 +120,7 @@ class DiscordNotesSink:
             dest = self.destination(meeting)
             await self._save_report(meeting, dest)
             ptr = await self._publisher(meeting).msgs_pointer(meeting)
-            if not dest.targets and not ptr:  # already posted somewhere: keep editing it there
+            if not dest.targets and not ptr:  # already posted in a server channel: keep editing it there
                 raise DestinationPending(dest.problem)
             # the only path that attaches the transcript: the pipeline's DELIVER stage
             return await self._publisher(meeting).publish(meeting, notes, send_dms=True, attach_transcript=True)
