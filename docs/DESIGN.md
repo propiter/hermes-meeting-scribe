@@ -236,6 +236,11 @@ utterances are removed whatever `audio.retention` says. `reprocess` of an `empty
 refused. Schema v7 reclassifies rows an older version parked as `failed` with
 `TranscriptionError: no audio tracks in …` at the transcribe stage (idempotent, data only).
 
+`meetings.source` / `external_id` are written once, at insert, and are authoritative: every read
+takes them from the columns (not the `data` JSON), `save_meeting` never updates them, and the JSON
+and `meta.json` are kept coherent with them. Schema v8 repairs JSON an older (pre-v4) gateway
+rewrote without those fields.
+
 ## 10. Configuration (`plugins.entries.meeting-scribe.settings`)
 
 Declared in `plugin.yaml` `config_schema` (Desktop form for free). Wizard:

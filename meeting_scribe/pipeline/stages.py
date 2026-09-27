@@ -87,6 +87,10 @@ class Stages:
             folder.mkdir(parents=True, exist_ok=True)
             meeting = replace(meeting, folder=self.layout.relative(folder))
         self.repo.save_meeting(meeting)
+        stored = self.repo.get_meeting(meeting.id)
+        if stored is not None and (stored.source, stored.external_id) != (meeting.source, meeting.external_id):
+            # the row's source is fixed at insert: a stale copy never rewrites it (DB nor meta.json)
+            meeting = replace(meeting, source=stored.source, external_id=stored.external_id)
         write_meta(folder, meeting)
         return meeting
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
 from ..domain.text import fold
-from ..domain.models import ActionItem, ActionStatus, Meeting, MeetingState, Speaker, Utterance
+from ..domain.models import SOURCE_DISCORD, ActionItem, ActionStatus, Meeting, MeetingState, Speaker, Utterance
 from .deliveries import Claim, DeliveriesMixin
 from .jobs import Job, JobsMixin
 
@@ -106,9 +106,33 @@ UPDATE meetings SET state='empty', data=json_set(data, '$.state', 'empty')
 UPDATE jobs SET state='done', error=NULL, failed_stage=NULL, next_retry_at=NULL, owner=NULL, heartbeat=NULL
   WHERE state='failed' AND meeting_id IN (SELECT id FROM meetings WHERE state='empty');
 """
-_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7)
+# v8: the ``source``/``external_id`` columns are authoritative (they are written once, at insert).
+# A gateway running pre-v4 code rewrote the JSON of imported meetings without those fields, so
+# ``data`` said ``discord``/null while the columns kept ``google_meet`` + the record. Reads already
+# prefer the columns; this makes the stored JSON coherent again. Data only, idempotent.
+_V8 = """
+UPDATE meetings SET data=json_set(data, '$.source', source, '$.external_id', external_id)
+  WHERE json_extract(data, '$.source') IS NOT source OR json_extract(data, '$.external_id') IS NOT external_id;
+"""
+_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)
 SCHEMA_VERSION = len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+_MEETING_COLS = "data, source, external_id"
+
+
+def meeting_from_row(row: sqlite3.Row) -> Meeting:
+    """A meeting from its index row: ``source``/``external_id`` come from the COLUMNS, never the JSON
+    (an older gateway may have rewritten ``data`` without them)."""
+    return Meeting.from_dict(meeting_dict_from_row(row))
+
+
+def meeting_dict_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    data = json.loads(row["data"])
+    data["source"] = row["source"] or SOURCE_DISCORD
+    data["external_id"] = row["external_id"]
+    return data
 
 
 def _statements(script: str) -> list[str]:
@@ -203,7 +227,10 @@ class Repository(JobsMixin, DeliveriesMixin):
         self._tx([(
             "INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at,"
             " source, external_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,"
-            " title=excluded.title, folder=excluded.folder, data=excluded.data, updated_at=excluded.updated_at",
+            " title=excluded.title, folder=excluded.folder, updated_at=excluded.updated_at,"
+            # source/external_id are fixed at insert: a stale copy (older code, old in-memory
+            # object) can never turn an import into a Discord meeting; the JSON follows the columns.
+            " data=json_set(excluded.data, '$.source', meetings.source, '$.external_id', meetings.external_id)",
             (meeting.id, meeting.guild_id, meeting.channel_id, meeting.state.value,
              meeting.started_at.isoformat(), meeting.title, meeting.folder,
              json.dumps(meeting.to_dict(), ensure_ascii=False), time.time(), meeting.source, meeting.external_id),
@@ -250,8 +277,9 @@ class Repository(JobsMixin, DeliveriesMixin):
                 raise
 
     def find_by_external(self, source: str, external_id: str) -> Optional[Meeting]:
-        row = self._x("SELECT data FROM meetings WHERE source=? AND external_id=?", (source, external_id)).fetchone()
-        return Meeting.from_dict(json.loads(row["data"])) if row else None
+        row = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE source=? AND external_id=?",
+                      (source, external_id)).fetchone()
+        return meeting_from_row(row) if row else None
 
     def known_external_ids(self, source: str) -> set[str]:
         rows = self._x("SELECT external_id FROM meetings WHERE source=? AND external_id IS NOT NULL", (source,))
@@ -290,8 +318,8 @@ class Repository(JobsMixin, DeliveriesMixin):
         return row["owner"] if row else None
 
     def get_meeting(self, meeting_id: str) -> Optional[Meeting]:
-        row = self._x("SELECT data FROM meetings WHERE id=?", (meeting_id,)).fetchone()
-        return Meeting.from_dict(json.loads(row["data"])) if row else None
+        row = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+        return meeting_from_row(row) if row else None
 
     def find_meeting(self, id_or_prefix: str) -> Optional[Meeting]:
         """Exact id, else a *unique* prefix match (users type the first few chars)."""
@@ -301,9 +329,9 @@ class Repository(JobsMixin, DeliveriesMixin):
         exact = self.get_meeting(needle)
         if exact:
             return exact
-        rows = self._x("SELECT data FROM meetings WHERE id LIKE ? ESCAPE '\\' LIMIT 2",
+        rows = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE id LIKE ? ESCAPE '\\' LIMIT 2",
                        (needle.replace("%", "\\%").replace("_", "\\_") + "%",)).fetchall()
-        return Meeting.from_dict(json.loads(rows[0]["data"])) if len(rows) == 1 else None
+        return meeting_from_row(rows[0]) if len(rows) == 1 else None
 
     def meetings_without_job(self, states: Iterable[MeetingState], *, updated_before: float) -> list[str]:
         """Ids of meetings in ``states`` with no job row, whose row was last written before the cutoff."""
@@ -320,9 +348,9 @@ class Repository(JobsMixin, DeliveriesMixin):
         if wanted is not None and not wanted:
             return []
         where = f"WHERE state IN ({','.join('?' * len(wanted))})" if wanted else ""
-        rows = self._x(f"SELECT data FROM meetings {where} ORDER BY started_at DESC LIMIT ?",
+        rows = self._x(f"SELECT {_MEETING_COLS} FROM meetings {where} ORDER BY started_at DESC LIMIT ?",
                        (*(wanted or ()), int(limit))).fetchall()
-        return [Meeting.from_dict(json.loads(r["data"])) for r in rows]
+        return [meeting_from_row(r) for r in rows]
 
     def set_capture_owner(self, meeting_id: str, owner: Optional[str]) -> None:
         """The process whose capture writes this recording (only it — or a successor after it died —

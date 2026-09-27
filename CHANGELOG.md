@@ -81,6 +81,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Imported meetings no longer turn into Discord meetings after an older gateway rewrote them.**
+  A gateway running pre-v4 code saved a Google Meet import's JSON without `source`/`external_id`;
+  the columns kept `google_meet` and the record, but every read used the JSON, so `reprocess`
+  would try to transcribe audio that never existed and the Desktop page showed "audio not kept"
+  and offered "Transcription". Reads now take `source`/`external_id` from the columns, a save never
+  changes them on an existing row (a stale copy cannot degrade it; the JSON and `meta.json` follow
+  the columns), and schema v8 repairs stored JSON that disagrees with its columns (idempotent,
+  data only). An affected `meta.json` is rewritten the next time the meeting is saved.
+
 - **A recording in which nobody spoke is discarded, not failed.** When someone joined and left
   before speaking (auto-join), the pipeline raised `no audio tracks`, retried three times and left
   the meeting `failed`, cluttering `status`, `/meeting list`, doctor and the Desktop page. Now the

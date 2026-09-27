@@ -20,7 +20,7 @@ from typing import Any, Optional
 from ..domain.models import KV_DM_NOTES, SOURCE_DISCORD, SOURCE_GOOGLE_MEET, MeetingState
 from ..llm_config import redact, safe_url
 from ..storage.layout import Layout
-from ..storage.repo import Repository
+from ..storage.repo import Repository, meeting_dict_from_row
 from .control import HEARTBEAT_KV
 
 SOURCES = (SOURCE_DISCORD, SOURCE_GOOGLE_MEET)
@@ -125,12 +125,12 @@ class Library:
         if after:
             where.append("(started_at, id) < (?, ?)")
             params.extend(after)
-        rows = self.repo._x("SELECT data, started_at, id FROM meetings WHERE " + " AND ".join(where) +
+        rows = self.repo._x("SELECT data, source, external_id, started_at, id FROM meetings WHERE " + " AND ".join(where) +
                             " ORDER BY started_at DESC, id DESC LIMIT ?", (*params, limit + 1)).fetchall()
         page = rows[:limit]
         items = []
         for r in page:
-            data = public_meeting(json.loads(r["data"]))
+            data = public_meeting(meeting_dict_from_row(r))  # source from the column (authoritative)
             job = self.repo.get_job(r["id"])
             data["job_state"] = job.state if job else None
             items.append(data)
