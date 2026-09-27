@@ -123,6 +123,9 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
                 answers["google_meet_enabled"] = True
                 if "google_meet_discord_channel" not in answers:
                     raw = input(f"google_meet_discord_channel [{current.google_meet_discord_channel}]: ").strip()
+                    if not raw and not _meet_channel_set(current, answers):
+                        _print(t("cli.meet_channel_missing", lang))
+                        raw = input("google_meet_discord_channel []: ").strip()
                     if raw:
                         answers["google_meet_discord_channel"] = raw
     if "transcribe_language" in answers and str(answers["transcribe_language"]) != "auto":
@@ -138,7 +141,20 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
     for key, value in validated.items():
         rt.set_config(key, value)
     _print(t("cli.setup_saved", rt.settings().ui_language, count=len(validated)))
+    _warn_meet_channel(rt)
     return 0
+
+
+def _meet_channel_set(settings: Settings, pending: dict[str, Any]) -> bool:
+    return any(str(pending.get(k) or getattr(settings, k) or "").strip()
+               for k in ("google_meet_discord_channel", "delivery_discord_channel"))
+
+
+def _warn_meet_channel(rt: CliRuntime) -> None:
+    """Meet import on without any notes channel: notes (and full transcripts) go to the home channel."""
+    s = rt.settings()
+    if s.google_meet_enabled and not _meet_channel_set(s, {}):
+        _print(t("cli.meet_channel_missing", s.ui_language))
 
 
 def _doctor(args: argparse.Namespace, rt: CliRuntime) -> int:
@@ -244,6 +260,8 @@ def _config(args: argparse.Namespace, rt: CliRuntime) -> int:
         except ValueError as exc:
             _print(str(exc))
             return 2
+        if canonical_key(args.key) in ("google_meet_enabled", "google_meet_discord_channel", "delivery_discord_channel"):
+            _warn_meet_channel(rt)
         return 0
     key = getattr(args, "key", None)
     if key:

@@ -347,7 +347,7 @@ Every installation uses its **own** Google Cloud OAuth client; the plugin ships 
 ```text
 hermes meeting-scribe google connect --client-secret ~/Downloads/client_secret_XXXX.json [--no-browser]
 hermes meeting-scribe config set google_meet_enabled true
-hermes meeting-scribe config set google_meet_discord_channel <text channel id>   # optional
+hermes meeting-scribe config set google_meet_discord_channel <text channel id>   # recommended
 # restart the gateway so its poller starts
 hermes meeting-scribe google status [--json]
 hermes meeting-scribe google sync [--since 2026-09-01T00:00:00Z | --days N] [--dry-run] [--json]
@@ -368,8 +368,11 @@ hermes meeting-scribe google disconnect
 - A conference is imported once, ever (unique on its Meet record name), even across restarts or two
   processes. A transcript still being generated (`ENDED`) is retried on the next poll.
 - Notes go to `google_meet_discord_channel`, else `delivery_discord_channel`, else the gateway's
-  home channel. With none, the meeting is still processed (CLI, agent tools, files, Kanban) and the
-  Discord delivery is skipped.
+  home channel. Falling back to the home channel is allowed but flagged: `setup`, `config set` and
+  `doctor` warn when the import is on without a notes channel, since the full transcript would be
+  posted there. Channel ids must be numeric (`<#id>` is accepted and unwrapped); other values are
+  rejected by `config set` and reported by `doctor`. With no channel at all, the meeting is still
+  processed (CLI, agent tools, files, Kanban) and the Discord delivery is skipped.
 - Meet participants are not Discord users: tasks show their name, without mentions or DMs.
 - `invalid_grant` (revoked or expired access) shows as "disconnected" in `google status` and
   `doctor`; run `connect` again.

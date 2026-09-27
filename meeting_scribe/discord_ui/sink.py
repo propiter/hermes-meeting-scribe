@@ -96,7 +96,10 @@ class DiscordNotesSink:
             order = (s.delivery_discord_channel, meeting.text_channel_id, meeting.channel_id, home)
         out: list[str] = []
         for cid in order:
-            if cid and str(cid).isdigit() and str(cid) not in out:
+            if cid and not str(cid).isdigit():
+                log.warning("meeting-scribe: ignoring non-numeric Discord channel id %r (run doctor)", cid)
+                continue
+            if cid and str(cid) not in out:
                 out.append(str(cid))
         return out
 

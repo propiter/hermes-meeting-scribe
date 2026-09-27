@@ -359,7 +359,7 @@ Cada instalación usa **su propio** cliente OAuth de Google Cloud; el plugin no 
 ```text
 hermes meeting-scribe google connect --client-secret ~/Descargas/client_secret_XXXX.json [--no-browser]
 hermes meeting-scribe config set google_meet_enabled true
-hermes meeting-scribe config set google_meet_discord_channel <id del canal de texto>   # opcional
+hermes meeting-scribe config set google_meet_discord_channel <id del canal de texto>   # recomendado
 # reinicia el gateway para que arranque su sondeo
 hermes meeting-scribe google status [--json]
 hermes meeting-scribe google sync [--since 2026-09-01T00:00:00Z | --days N] [--dry-run] [--json]
@@ -381,8 +381,12 @@ hermes meeting-scribe google disconnect
   reinicios o dos procesos. Si la transcripción aún se está generando (`ENDED`) se reintenta en el
   siguiente sondeo.
 - Las notas van a `google_meet_discord_channel`; si está vacío, a `delivery_discord_channel`; si no,
-  al canal home del gateway. Sin ninguno, la reunión se procesa igual (CLI, herramientas del agente,
-  archivos, Kanban) y la entrega en Discord se omite.
+  al canal home del gateway. Ese último recurso está permitido pero se avisa: `setup`, `config set` y
+  `doctor` advierten si la importación está activa sin canal de notas, porque la transcripción
+  completa se publicaría allí. Los ids de canal deben ser numéricos (`<#id>` se acepta y se
+  desenvuelve); otros valores los rechaza `config set` y los señala `doctor`. Sin ningún canal, la
+  reunión se procesa igual (CLI, herramientas del agente, archivos, Kanban) y la entrega en Discord
+  se omite.
 - Los participantes de Meet no son usuarios de Discord: las tareas muestran su nombre, sin menciones
   ni DMs.
 - `invalid_grant` (acceso revocado o caducado) aparece como "desconectado" en `google status` y

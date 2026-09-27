@@ -18,6 +18,7 @@ Getter = Callable[..., Any]
 PRIMARY_COMMAND = "meeting"
 MODES = ("approve", "auto", "off")
 _ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+_SNOWFLAKE_WRAP_RE = re.compile(r"^<[#@][!&]?(\d+)>$")
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class Opt:
     choices: tuple[str, ...] = ()
     minimum: Optional[float] = None
     maximum: Optional[float] = None
+    snowflake: bool = False  # a Discord id: empty or digits (``<#id>`` / ``<@id>`` are unwrapped)
 
     @property
     def yaml_type(self) -> str:
@@ -66,7 +68,8 @@ SPEC: dict[str, Opt] = {
     "projects_min_confidence": Opt("float", 0.6, "Minimum confidence to auto-assign a project.",
                                    minimum=0.0, maximum=1.0),
     "delivery_discord_enabled": Opt("bool", True, "Post notes to Discord."),
-    "delivery_discord_channel": Opt("str", "", "Notes channel id (empty = voice text chat, then home)."),
+    "delivery_discord_channel": Opt("str", "", "Notes channel id (empty = voice text chat, then home).",
+                                    snowflake=True),
     "delivery_discord_thread": Opt("bool", True, "Post notes in a thread when possible."),
     "delivery_project_threads": Opt("bool", True, "Post each task in a thread of its project's channel."),
     "delivery_dm_assignees": Opt("bool", True, "DM each assignee their tasks with buttons after delivery."),
@@ -74,7 +77,7 @@ SPEC: dict[str, Opt] = {
     "google_meet_enabled": Opt("bool", False, "Import Google Meet transcripts (needs `google connect`)."),
     "google_meet_poll_minutes": Opt("int", 5, "Minutes between Google Meet polls.", minimum=2, maximum=1440),
     "google_meet_discord_channel": Opt("str", "", "Discord text channel id for Google Meet notes "
-                                       "(empty = delivery_discord_channel, then home)."),
+                                       "(empty = delivery_discord_channel, then home).", snowflake=True),
     "project_channels": Opt("list", (), "Explicit project to channel map, entries like 'Project name=channel_id'."),
     "project_match_min_score": Opt("float", 0.8, "Minimum fuzzy score to route a task to a channel by name.",
                                    minimum=0.0, maximum=1.0),
@@ -146,6 +149,10 @@ def _coerce(opt: Opt, raw: Any) -> Any:
         items = raw.split(",") if isinstance(raw, str) else raw if isinstance(raw, (list, tuple)) else [raw]
         return tuple(str(i).strip() for i in items if str(i).strip())
     value_s = "" if raw is None else str(raw)
+    if opt.snowflake:
+        value_s = _SNOWFLAKE_WRAP_RE.sub(r"\1", value_s.strip())
+        if value_s and not value_s.isdigit():
+            raise ValueError("expected a numeric Discord channel id (Developer Mode → Copy Channel ID)")
     if opt.choices and value_s not in opt.choices:
         raise ValueError(f"expected one of {', '.join(opt.choices)}")
     return value_s

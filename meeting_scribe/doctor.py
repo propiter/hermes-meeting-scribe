@@ -207,6 +207,9 @@ def check_google_meet(env: Any) -> Check:
         return Check.warn(f"token refresh failed: {exc}")
     channel = s.google_meet_discord_channel or s.delivery_discord_channel
     parts = ["token OK", f"notes channel: {channel or 'home channel (if configured) / none: Discord delivery skipped'}"]
+    no_channel = None if channel else (
+        "no notes channel set: Meet notes and full transcripts go to the Discord home channel; set "
+        "`google_meet_discord_channel` (or `delivery_discord_channel`)")
     try:
         st = env.meet_importer().status()
     except Exception:  # storage issues are reported by the storage check
@@ -218,6 +221,8 @@ def check_google_meet(env: Any) -> Check:
     if st.get("records_given_up"):
         return Check.warn("; ".join(parts + [f"{st['records_given_up']} conference(s) skipped after repeated errors "
                                              f"({st.get('records_given_up_last', '')})"]))
+    if no_channel:
+        return Check.warn("; ".join(parts + [no_channel]))
     return Check.ok("; ".join(parts))
 
 

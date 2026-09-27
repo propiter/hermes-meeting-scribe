@@ -144,9 +144,14 @@ def test_doctor_check(grt, client_file, capsys, monkeypatch):
     assert check_google_meet(grt).status == "fail"  # no client
     connect(grt, client_file, capsys, monkeypatch)
     res = check_google_meet(grt)
-    assert res.status == "ok" and "token OK" in res.detail and "none: Discord delivery skipped" in res.detail
+    # finding 16: no notes channel -> warn (Meet notes would land in the home channel)
+    assert res.status == "warn" and "token OK" in res.detail and "google_meet_discord_channel" in res.detail
     grt.cfg["google_meet_discord_channel"] = "4242"
-    assert "4242" in check_google_meet(grt).detail
+    res = check_google_meet(grt)
+    assert res.status == "ok" and "4242" in res.detail
+    grt.cfg["google_meet_discord_channel"] = ""
+    grt.cfg["delivery_discord_channel"] = "77"
+    assert check_google_meet(grt).status == "ok"
 
 
 def test_sync_never_prints_a_traceback(grt, client_file, capsys, monkeypatch):
@@ -180,3 +185,44 @@ def test_reconnect_says_the_window_is_kept(grt, client_file, capsys, monkeypatch
     code, out = connect(grt, client_file, capsys, monkeypatch)
     assert code == 0 and "reconnected" in out
     assert json.loads(grt.google_files().token_path.read_text())["connected_at"] == first
+
+
+# -- finding 16: enabling Meet without a notes channel is flagged ------------------------------------
+def test_setup_enabling_google_without_channel_warns(grt, capsys):
+    code, out = run(grt, ["setup", "--non-interactive", "--google-meet"], capsys)
+    assert code == 0 and grt.cfg["google_meet_enabled"] is True
+    assert "google_meet_discord_channel" in out and "home" in out
+
+
+def test_setup_interactive_asks_for_the_meet_channel_again_when_left_empty(grt, capsys, monkeypatch):
+    answers = iter([""] * 10 + ["y", "", "5555"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers, ""))
+    code, out = run(grt, ["setup"], capsys)
+    assert code == 0 and grt.cfg["google_meet_discord_channel"] == "5555"
+
+
+def test_config_set_enable_without_channel_warns(grt, capsys):
+    code, out = run(grt, ["config", "set", "google_meet_enabled", "true"], capsys)
+    assert code == 0 and "google_meet_discord_channel" in out
+    grt.cfg["delivery_discord_channel"] = "77"
+    code, out = run(grt, ["config", "set", "google_meet_enabled", "true"], capsys)
+    assert code == 0 and "google_meet_discord_channel" not in out
+
+
+# -- finding 18: channel ids are validated instead of silently ignored -------------------------------
+@pytest.mark.parametrize("key", ["google_meet_discord_channel", "delivery_discord_channel"])
+def test_config_set_rejects_non_numeric_channel(grt, capsys, key):
+    code, out = run(grt, ["config", "set", key, "general"], capsys)
+    assert code == 2 and key in out and key not in grt.cfg
+
+
+def test_config_set_accepts_a_channel_mention_and_stores_the_id(grt, capsys):
+    code, _ = run(grt, ["config", "set", "google_meet_discord_channel", "<#123456789012345678>"], capsys)
+    assert code == 0 and grt.cfg["google_meet_discord_channel"] == "123456789012345678"
+
+
+def test_doctor_warns_about_a_non_numeric_channel_in_config():
+    from meeting_scribe.config import settings_from_mapping
+    s = settings_from_mapping({"google_meet_discord_channel": "meet-notes"})
+    assert s.google_meet_discord_channel == ""
+    assert any("google_meet_discord_channel" in w for w in s.warnings)

@@ -24,6 +24,7 @@
   "capture.target_not_voice": "#{channel} is not a voice channel.",
   "capture.timeout": "Discord did not answer in time; check `/meeting status`.",
   "cli.exported": "Exported to {path}",
+  "cli.meet_channel_missing": "⚠️ Google Meet import is on but no notes channel is set: Meet notes and full transcripts will be posted in the Discord home channel. Set google_meet_discord_channel (a channel id) to keep them in a dedicated channel.",
   "cli.model_estimate": "{model}: ~{factor}× real time on {threads} CPU threads (estimate).",
   "cli.no_meetings": "No meetings.",
   "cli.reprocess_done": "Meeting {id} reprocessed from {stage}: {state}.",
