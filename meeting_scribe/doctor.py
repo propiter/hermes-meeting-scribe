@@ -197,6 +197,7 @@ def check_delivery(env: Any) -> Check:
         parts.append(f"{source}: server {where} ({g.get('source') or '-'}), notes channel {target}")
         problems += [st["detail"] for st in rep.get("steps") or () if st.get("detail")
                      and st.get("status") not in ("ok", "unset", "none")]
+        problems += [w for w in rep.get("warnings") or () if isinstance(w, str) and w]
     if not parts:
         parts.append("nothing delivered yet (channels are resolved on the first delivery)")
     if waiting:

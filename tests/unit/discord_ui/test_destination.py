@@ -140,3 +140,65 @@ def test_non_ascii_digits_in_channel_or_guild_do_not_crash(meet, value):
     assert "google_meet_discord_channel" in [s.key for s in d.steps]
     guild, _source, problem = pick_guild(bot, value)
     assert guild is None and problem
+
+
+# -- review I3: a Discord meeting whose server is not in the cache never searches other servers ----
+def test_discord_meeting_with_uncached_server_waits_instead_of_searching_every_server(meeting):
+    bot = bot_with("general")
+    bot.add_guild(300, "Other Co")
+    bot.add(3001, "notes", guild_id=300)
+    m = replace(meeting, guild_id="555", text_channel_id=None, channel_id="200")
+    d = resolve(bot, m, settings_from_mapping({"delivery_discord_channel": "notes"}))
+    assert d.targets == [] and d.guild is None
+    assert "555" in d.problem and "config set" in d.problem
+
+
+def test_unresolvable_guild_setting_never_falls_back_to_a_global_name_search(meet):
+    bot = bot_with("general")
+    bot.add_guild(300, "Other Co")
+    bot.add(3001, "meet-notes", guild_id=300)
+    d = resolve(bot, meet, settings_from_mapping({"delivery_discord_guild": "Typo Team",
+                                                  "google_meet_discord_channel": "meet-notes"}))
+    assert d.targets == [] and "Typo Team" in d.problem
+
+
+# -- review M1: configured ids in another server or a DM are ignored (and reported) ---------------
+def test_channel_ids_in_another_server_or_a_dm_are_ignored(meeting):
+    bot = bot_with("general")
+    bot.add_guild(300, "Other Co")
+    bot.add(3001, "their-backlog", guild_id=300)
+    dm = bot.user(42).dm
+    m = replace(meeting, text_channel_id=None, channel_id="200")
+    d = resolve(bot, m, settings_from_mapping({"delivery_discord_channel": str(dm.id),
+                                               "delivery_fallback_channel": "3001"}))
+    assert str(dm.id) not in d.targets and d.fallback_channel is None
+    status = {s.key: s.status for s in d.steps}
+    assert status["delivery_discord_channel"] == "not_in_server"
+    assert status["delivery_fallback_channel"] == "other_guild"
+
+
+# -- review M2: the automatic choice never picks NSFW or private channels ---------------------------
+def test_automatic_choice_skips_nsfw_and_private_channels(meet):
+    bot = bot_with("general", "notes", "meetings", system=300)
+    bot.channels[300].nsfw = True
+    bot.channels[301].public = False
+    assert resolve(bot, meet, settings_from_mapping({})).targets == ["302"]
+    bot.channels[302].public = False
+    d = resolve(bot, meet, settings_from_mapping({}))
+    assert d.targets == [] and "private" in d.problem
+
+
+def test_explicit_private_channel_is_used_but_reported(meet):
+    bot = bot_with("🔒┃notes")
+    bot.channels[300].public = False
+    d = resolve(bot, meet, settings_from_mapping({"google_meet_discord_channel": "notes"}))
+    assert d.targets[0] == "300"
+    assert any("@everyone" in w for w in d.warnings) and d.report()["warnings"]
+
+
+# -- review M3: without the bot's member cached nothing is chosen automatically ---------------------
+def test_no_automatic_channel_while_the_server_is_not_loaded(meet):
+    bot = bot_with("general", system=300)
+    bot.guild.me = None
+    d = resolve(bot, meet, settings_from_mapping({}))
+    assert d.targets == [] and "not loaded" in d.problem

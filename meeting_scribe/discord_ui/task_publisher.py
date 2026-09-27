@@ -25,7 +25,7 @@ from ..config import Settings
 from ..domain.models import Meeting, Notes, is_discord_user_id
 from ..i18n import t
 from .board import Board, build_board
-from .destination import Destination
+from .destination import Destination, same_guild
 from .guild import snapshot_channels
 from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
@@ -67,12 +67,24 @@ class TaskPublisher:
             except Exception as exc:  # deleted channel, missing access: try the next fallback
                 log.info("meeting-scribe: notes channel %s unavailable: %s", cid, exc)
                 continue
-            if getattr(channel, "guild", None) is None:  # never a DM: nobody else would see it
-                log.warning("meeting-scribe: channel %s is not in a server; skipped", cid)
+            if not self._in_server(channel, dest):
                 continue
             return channel
         raise LookupError("no reachable Discord channel for notes "
                           f"({dest.problem or 'every candidate channel is unavailable'})")
+
+    @staticmethod
+    def _in_server(channel: Any, dest: Destination) -> bool:
+        """Never a DM (nobody else would see it) and never another server than the meeting's (review M1)."""
+        guild = getattr(channel, "guild", None)
+        if guild is None:
+            log.warning("meeting-scribe: channel %s is not in a server; skipped", getattr(channel, "id", "?"))
+            return False
+        if dest.guild is not None and not same_guild(guild, dest.guild):
+            log.warning("meeting-scribe: channel %s is in server %s, not %s; skipped", getattr(channel, "id", "?"),
+                        getattr(guild, "id", "?"), getattr(dest.guild, "id", "?"))
+            return False
+        return True
 
     async def header(self, meeting: Meeting, notes: Notes, ptrs: Pointers) -> tuple[Any, dict]:
         """Post/edit the summary parts; returns the chat channel and the ``notes`` pointer."""
@@ -176,10 +188,13 @@ class TaskPublisher:
 
     async def _fallback_target(self, meeting: Meeting, notes: Notes, chat: Any, count: int, ptrs: Pointers) -> Any:
         """``delivery_fallback_channel`` for tasks without a project channel (None = the notes chat)."""
-        fallback = self._destination(meeting).fallback_channel
+        dest = self._destination(meeting)
+        fallback = dest.fallback_channel
         if not fallback or str(fallback) == str(chat.id):
             return None
         try:
+            if not self._in_server(await self.msgs.channel(fallback), dest):
+                return None
             return await self.project_target(fallback, meeting, notes, count, ptrs)
         except Exception as exc:  # deleted / no access: the notes chat, as before
             log.info("meeting-scribe: fallback channel %s unavailable (%s)", fallback, exc)

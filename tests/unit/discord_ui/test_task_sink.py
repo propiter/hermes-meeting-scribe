@@ -411,3 +411,21 @@ async def test_notes_posted_in_a_dm_by_an_older_version_move_to_a_server_channel
     assert dm.ordered() == []  # cleaned
     assert "Migración SMTP" in notes_ch.ordered()[0].content
     assert ptr(env, "notes")["channel"] == 650 and ptr(env, "index")["channel"] == 650
+
+
+# -- review M1: the publisher re-checks what the cache could not (channels fetched from the API) ----
+async def test_publisher_never_posts_notes_or_fallback_tasks_in_another_server(env):
+    from meeting_scribe.discord_ui.destination import Destination
+
+    env.bot.add_guild(300, "Other Co")
+    foreign = env.bot.add(3001, "their-notes", guild_id=300)
+    backlog = env.bot.add(3002, "their-backlog", guild_id=300)
+    env.state["loop"] = asyncio.get_running_loop()
+    sink = env.make()
+    sink.destination = lambda m: Destination(targets=["3001", "200"], guild=env.bot.guild, guild_source="meeting",
+                                             fallback_channel="3002")
+    res = await asyncio.to_thread(sink.deliver, env.meeting, env.notes, env.svc.folder(env.meeting))
+    assert res.ok, res.errors
+    assert foreign.ordered() == [] and backlog.ordered() == []
+    assert "Migración SMTP" in env.chat.ordered()[0].content
+    assert any("Budget" in m.content for m in env.chat.ordered())

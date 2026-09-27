@@ -54,18 +54,42 @@ def is_text(channel: Any) -> bool:
 
 
 def _perms(channel: Any, member: Any) -> Any:
+    if member is None:
+        return None
     try:
         return channel.permissions_for(member)
-    except Exception:  # uncached member / partial object: let Discord decide
+    except Exception:  # uncached member / partial object
         return None
 
 
 def can_send(channel: Any, member: Any, *, attach: bool = False) -> bool:
+    """Known to be allowed. Unknown permissions (member not cached) are NOT a yes: the automatic
+    choice must not guess (review M3); explicit settings do not go through this check."""
     p = _perms(channel, member)
     if p is None:
-        return True
+        return False
     ok = bool(getattr(p, "view_channel", False) and getattr(p, "send_messages", False))
     return ok and (not attach or bool(getattr(p, "attach_files", False)))
+
+
+def is_public(channel: Any) -> bool:
+    """``@everyone`` can see it. Unknown (no default role cached) counts as visible: nothing to warn."""
+    role = getattr(getattr(channel, "guild", None), "default_role", None)
+    if role is None:
+        return True
+    try:
+        p = channel.permissions_for(role)
+    except Exception:
+        return True
+    return bool(getattr(p, "view_channel", True))
+
+
+def is_nsfw(channel: Any) -> bool:
+    return bool(getattr(channel, "nsfw", False))
+
+
+def _guild_label(guild: Any) -> str:
+    return str(getattr(guild, "name", "") or getattr(guild, "id", ""))
 
 
 @dataclass(frozen=True)
@@ -73,7 +97,7 @@ class Resolved:
     """One setting (or step) of the resolution, for logs, ``doctor`` and ``config list``."""
     key: str
     value: str
-    status: str  # ok | missing | ambiguous | no_guild | not_text | unset | none
+    status: str  # ok | missing | ambiguous | no_guild | not_text | not_in_server | other_guild | not_loaded | unset | none
     channel_id: Optional[str] = None
     channel_name: str = ""
     detail: str = ""
@@ -90,6 +114,7 @@ class Destination:
     steps: list[Resolved] = field(default_factory=list)
     fallback_channel: Optional[str] = None  # tasks without project (None = the notes channel)
     problem: str = ""  # why nothing is usable (pending)
+    warnings: list[str] = field(default_factory=list)  # usable but worth a look (doctor)
 
     def report(self) -> dict[str, Any]:
         g = self.guild
@@ -97,7 +122,8 @@ class Destination:
                 "guild": {"id": str(getattr(g, "id", "")) if g is not None else "", "name": getattr(g, "name", "") or "",
                           "source": self.guild_source},
                 "steps": [s.to_dict() for s in self.steps], "targets": list(self.targets),
-                "fallback_channel": self.fallback_channel or "", "problem": self.problem}
+                "fallback_channel": self.fallback_channel or "", "problem": self.problem,
+                "warnings": list(self.warnings)}
 
 
 def _guilds(client: Any) -> list[Any]:
@@ -163,33 +189,91 @@ def resolve_setting(client: Any, key: str, value: str, guild: Any) -> Resolved:
 
 
 def auto_channel(guild: Any, names: Sequence[str]) -> Resolved:
+    """The AUTOMATIC notes channel: never NSFW, never a channel ``@everyone`` cannot see (a private
+    channel is used only when configured explicitly), and only where the bot is KNOWN to be able to
+    post — with its member not cached yet nothing is chosen (review M2/M3)."""
     if guild is None:
         return Resolved("auto", "", "no_guild")
     me = getattr(guild, "me", None)
+    if me is None:
+        return Resolved("auto", "", "not_loaded",
+                        detail=f"server {_guild_label(guild)} is not loaded yet (the bot's member is not cached)")
+    skipped: list[str] = []
+
+    def usable(ch: Any, *, attach: bool = False) -> bool:
+        if not is_text(ch) or not can_send(ch, me, attach=attach):
+            return False
+        if is_nsfw(ch) or not is_public(ch):
+            skipped.append(f"#{getattr(ch, 'name', '')}")
+            return False
+        return True
     system = getattr(guild, "system_channel", None)
-    if system is not None and is_text(system) and can_send(system, me, attach=True):
+    if system is not None and usable(system, attach=True):
         return Resolved("auto", "system_channel", "ok", str(system.id), str(getattr(system, "name", "")))
     wanted = [norm_name(n) for n in names if norm_name(n)]
     best: Optional[tuple[int, int, Any]] = None
     for ch in list(getattr(guild, "channels", None) or ()):
         n = norm_name(getattr(ch, "name", ""))
-        if n not in wanted or not is_text(ch) or not can_send(ch, me):
+        if n not in wanted or not usable(ch):
             continue
         rank = (wanted.index(n), int(getattr(ch, "position", 0) or 0))
         if best is None or rank < best[:2]:
             best = (*rank, ch)
     if best is None:
-        return Resolved("auto", ", ".join(names), "none",
-                        detail="no system channel the bot can post in and no channel named "
-                               + ", ".join(f"#{n}" for n in names))
+        detail = ("no system channel the bot can post in and no channel named "
+                  + ", ".join(f"#{n}" for n in names))
+        if skipped:
+            detail += (f" (skipped as private or NSFW: {', '.join(dict.fromkeys(skipped))}; "
+                       "configure one explicitly to use it)")
+        return Resolved("auto", ", ".join(names), "none", detail=detail)
     ch = best[2]
     return Resolved("auto", str(getattr(ch, "name", "")), "ok", str(ch.id), str(getattr(ch, "name", "")))
 
 
-def _guild_of_channel(client: Any, cid: str) -> Any:
+def _cached_channel(client: Any, cid: str) -> Any:
     get_channel = getattr(client, "get_channel", None)
-    ch = get_channel(int(cid)) if callable(get_channel) and is_ascii_digits(cid) else None
-    return getattr(ch, "guild", None)
+    try:
+        return get_channel(int(cid)) if callable(get_channel) and is_ascii_digits(cid) else None
+    except Exception:
+        return None
+
+
+def _guild_of_channel(client: Any, cid: str) -> Any:
+    return getattr(_cached_channel(client, cid), "guild", None)
+
+
+def same_guild(a: Any, b: Any) -> bool:
+    return a is not None and b is not None and str(getattr(a, "id", "")) == str(getattr(b, "id", ""))
+
+
+def _check_id(client: Any, step: Resolved, guild: Any) -> Resolved:
+    """A configured channel ID must be a server channel of ``guild`` (never a DM, never another server)."""
+    if step.status != "ok" or not step.channel_id:
+        return step
+    ch = _cached_channel(client, step.channel_id)
+    if ch is None:
+        return step  # not cached: the publisher checks it again when it opens the channel
+    ch_guild = getattr(ch, "guild", None)
+    if ch_guild is None:
+        return Resolved(step.key, step.value, "not_in_server",
+                        detail=f"{step.key}={step.value} is a direct message, not a server channel; ignored")
+    if guild is not None and not same_guild(ch_guild, guild):
+        return Resolved(step.key, step.value, "other_guild",
+                        detail=f"{step.key}={step.value} is in server {_guild_label(ch_guild)}, not in "
+                               f"{_guild_label(guild)}; ignored")
+    return Resolved(step.key, step.value, "ok", step.channel_id, str(getattr(ch, "name", "") or step.channel_name))
+
+
+def _explicit_warnings(client: Any, step: Resolved) -> list[str]:
+    ch = _cached_channel(client, step.channel_id or "")
+    if ch is None:
+        return []
+    out = []
+    if not is_public(ch):
+        out.append(f"{step.key}: #{getattr(ch, 'name', '')} is not visible to @everyone; only its members see the notes")
+    if is_nsfw(ch):
+        out.append(f"{step.key}: #{getattr(ch, 'name', '')} is marked NSFW")
+    return out
 
 
 def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
@@ -199,13 +283,21 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
     keys = (("google_meet_discord_channel", s.google_meet_discord_channel),) if meeting.source == SOURCE_GOOGLE_MEET else ()
     keys += (("delivery_discord_channel", s.delivery_discord_channel),)
     guild = None
+    search_everywhere = False  # a name may be looked up across servers only when nothing fixes the server
     if not imported:
         getter = getattr(client, "get_guild", None)
         try:
-            guild = getter(int(meeting.guild_id)) if callable(getter) else None
+            guild = getter(int(meeting.guild_id)) if callable(getter) and is_ascii_digits(meeting.guild_id) else None
         except (TypeError, ValueError):
             guild = None
-        d.guild_source = "meeting" if guild is not None else "none"
+        if guild is None:  # never look in other servers for a meeting of this one (review I3)
+            d.guild_source = "none"
+            d.steps.append(Resolved("guild", meeting.guild_id, "no_guild",
+                                    detail=f"the meeting's server {meeting.guild_id} is not available to the bot "
+                                           "(not loaded yet, or the bot left it)"))
+            d.problem = pending_reason(meeting, d)
+            return d
+        d.guild_source = "meeting"
     else:
         for _key, value in keys:  # a configured channel id fixes the server
             kind, ref = channel_ref(value)
@@ -218,13 +310,19 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
             guild, d.guild_source, problem = pick_guild(client, s.delivery_discord_guild)
             if problem:
                 d.steps.append(Resolved("delivery_discord_guild", s.delivery_discord_guild, "no_guild", detail=problem))
+                if (s.delivery_discord_guild or "").strip():  # configured but wrong: never search globally
+                    d.problem = pending_reason(meeting, d)
+                    return d
+                search_everywhere = True
     d.guild = guild
     for key, value in keys:
-        step = resolve_setting(client, key, value, guild)
+        step = resolve_setting(client, key, value, guild if not search_everywhere else None)
+        step = _check_id(client, step, guild)
         if step.status != "unset":
             d.steps.append(step)
         if step.channel_id and step.channel_id not in d.targets:
             d.targets.append(step.channel_id)
+            d.warnings += _explicit_warnings(client, step)
             if guild is None:  # a name found in exactly one server: that server
                 guild = d.guild = _guild_of_channel(client, step.channel_id)
                 d.guild_source = "channel" if guild is not None else d.guild_source
@@ -236,7 +334,8 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
     d.steps.append(auto)
     if auto.channel_id and auto.channel_id not in d.targets:
         d.targets.append(auto.channel_id)
-    fb = resolve_setting(client, "delivery_fallback_channel", s.delivery_fallback_channel, guild)
+    fb = _check_id(client, resolve_setting(client, "delivery_fallback_channel", s.delivery_fallback_channel, guild),
+                   guild)
     if fb.status != "unset":
         d.steps.append(fb)
     d.fallback_channel = fb.channel_id

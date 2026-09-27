@@ -50,7 +50,7 @@ class FakeChannel:
     def __init__(self, cid: int, name: str, *, parent: Optional["FakeChannel"] = None, bot: Any = None,
                  threads_ok: bool = True, kind: str = "text", category_id: Optional[int] = None,
                  position: int = 0, can_post: bool = True, guild_id: Optional[int] = None,
-                 can_attach: bool = True) -> None:
+                 can_attach: bool = True, public: bool = True, nsfw: bool = False) -> None:
         self.id = cid
         self.name = name
         self.parent = parent
@@ -65,6 +65,8 @@ class FakeChannel:
         self.category_id = category_id
         self.position = position
         self.can_post = can_post
+        self.public = public  # visible to @everyone
+        self.nsfw = nsfw
         self.fail_sends = 0
 
     @property
@@ -76,6 +78,8 @@ class FakeChannel:
         return self._guild_stub
 
     def permissions_for(self, member: Any) -> SimpleNamespace:
+        if getattr(member, "name", None) == "@everyone":
+            return SimpleNamespace(view_channel=self.public, send_messages=self.public)
         ok = self.can_post
         return SimpleNamespace(view_channel=ok, send_messages=ok, create_public_threads=ok and self.threads_ok,
                                send_messages_in_threads=ok, attach_files=ok and self.can_attach)
@@ -138,6 +142,7 @@ class FakeGuild:
         self.name = name
         self.bot = bot
         self.me = SimpleNamespace(id=1)
+        self.default_role = SimpleNamespace(id=gid, name="@everyone")
         self.system_channel_id: Optional[int] = None
 
     @property

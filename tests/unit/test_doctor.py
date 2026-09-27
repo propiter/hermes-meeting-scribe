@@ -163,3 +163,23 @@ def test_delivery_check_reports_waiting_meetings_and_bad_names(tmp_path):
     res = check_delivery(e)
     assert res.status == "warn" and "1 meeting(s) waiting" in res.detail and "config set" in res.detail
     repo.close()
+
+
+def test_delivery_check_shows_destination_warnings(tmp_path):
+    """Review M2: a private notes channel is used when configured, but doctor says who cannot see it."""
+    import json
+
+    from meeting_scribe.discord_ui.destination import REPORT_KV
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {})
+    e = env(tmp_path)
+    e.service = lambda: svc
+    repo.kv_set(f"{REPORT_KV}.google_meet", json.dumps({
+        "guild": {"id": "100", "name": "Example Team", "source": "only"}, "targets": ["300"], "steps": [],
+        "warnings": ["google_meet_discord_channel: #notes is not visible to @everyone; only its members see the notes"]}))
+    res = check_delivery(e)
+    assert res.status == "warn" and "@everyone" in res.detail
+    repo.close()
