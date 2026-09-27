@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence
 
@@ -53,6 +54,21 @@ class TaskPanel:
     pages: int
 
 
+_MD_SPECIAL = re.compile(r"([\\*_`~|>\[\]()#:-])")
+
+
+def safe_name(name: str) -> str:
+    """A display name as inert Discord text: no mentions, no Markdown, one line.
+
+    Google Meet names are typed by the participants themselves (anonymous guests included), so a
+    name like ``<@123>`` or ``**x**`` must never ping or format anything. Every ``@`` gets a
+    zero-width space (stricter than ``discord.utils.escape_mentions``, which only catches 17-20
+    digit ids) and Markdown characters are backslash-escaped (``escape_markdown``).
+    """
+    one_line = " ".join(str(name or "").split())
+    return _MD_SPECIAL.sub(r"\\\1", one_line).replace("@", "@\u200b")
+
+
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:max(0, limit - 1)].rstrip() + "…"
 
@@ -61,8 +77,8 @@ def _who(item: ActionItem, lang: str) -> str:
     if not item.owner_speaker_id:
         return f"_{t('notes.unassigned', lang)}_"
     if not is_discord_user_id(item.owner_speaker_id):  # imported speaker (Google Meet): no mention
-        return f"**{item.owner_name or item.owner_speaker_id}**"
-    return f"<@{item.owner_speaker_id}>" + (f" ({item.owner_name})" if item.owner_name else "")
+        return f"**{safe_name(item.owner_name or item.owner_speaker_id)}**"
+    return f"<@{item.owner_speaker_id}>" + (f" ({safe_name(item.owner_name)})" if item.owner_name else "")
 
 
 def _result(view: TaskView, lang: str) -> list[str]:
@@ -143,7 +159,7 @@ def _person_lines(views: Sequence[TaskView], lang: str) -> list[str]:
         people[v.item.owner_speaker_id or None] = people.get(v.item.owner_speaker_id or None, 0) + 1
         if v.item.owner_speaker_id and v.item.owner_name:
             names.setdefault(v.item.owner_speaker_id, v.item.owner_name)
-    lines = [f"- <@{uid}> — {n}" if is_discord_user_id(uid) else f"- **{names.get(uid, uid)}** — {n}"
+    lines = [f"- <@{uid}> — {n}" if is_discord_user_id(uid) else f"- **{safe_name(names.get(uid, uid))}** — {n}"
              for uid, n in people.items() if uid]
     if None in people:
         lines.append(f"- {t('notes.unassigned', lang)} — {people[None]}")

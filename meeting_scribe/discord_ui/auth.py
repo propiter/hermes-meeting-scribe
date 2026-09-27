@@ -16,6 +16,7 @@ from typing import Optional
 
 from ..domain.models import ActionItem, is_discord_user_id
 from ..i18n import t
+from .render_tasks import safe_name
 
 TASK_ACTIONS = frozenset({"ok", "lin", "no", "prj", "tsel"})
 OPEN_ACTIONS = frozenset({"mine", "pg"})
@@ -45,6 +46,6 @@ def check_task(action: str, item: Optional[ActionItem], user_id: str, owners: fr
         return Verdict(True)
     if assignee is None:
         return Verdict(False, t("tasks.owners_only_unassigned", lang))
-    who = f"<@{assignee}>" if is_discord_user_id(assignee) else (item.owner_name or assignee)
+    who = f"<@{assignee}>" if is_discord_user_id(assignee) else safe_name(item.owner_name or assignee)
     return Verdict(False, t("tasks.belongs_to", lang, user=who))
 
