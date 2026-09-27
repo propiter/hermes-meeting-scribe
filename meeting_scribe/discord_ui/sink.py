@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..config import Settings
-from ..domain.models import Meeting, Notes, SinkResult, is_discord_user_id
+from ..domain.models import KV_MOVE_FROM_DM, Meeting, Notes, SinkResult, is_discord_user_id
 from ..domain.names import clean_channel_name
 from ..storage.artifacts import read_notes, read_transcript, render_transcript_md
 from .board import Board, move_options
@@ -122,8 +122,13 @@ class DiscordNotesSink:
             ptr = await self._publisher(meeting).msgs_pointer(meeting)
             if not dest.targets and not ptr:  # already posted in a server channel: keep editing it there
                 raise DestinationPending(dest.problem)
-            # the only path that attaches the transcript: the pipeline's DELIVER stage
-            return await self._publisher(meeting).publish(meeting, notes, send_dms=True, attach_transcript=True)
+            # the only path that attaches the transcript (and may move notes out of a DM): DELIVER
+            move = await asyncio.to_thread(self._service().repo.kv_get, KV_MOVE_FROM_DM + meeting.id)
+            url = await self._publisher(meeting).publish(meeting, notes, send_dms=True, attach_transcript=True,
+                                                         move_from_dm=bool(move))
+            if move:  # done (moved, refused or nothing to move): a later delivery never moves by itself
+                await asyncio.to_thread(self._service().repo.kv_set, KV_MOVE_FROM_DM + meeting.id, None)
+            return url
 
     async def _load(self, meeting_id: str) -> Optional[tuple[Meeting, Notes]]:
         svc = self._service()

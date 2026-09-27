@@ -200,9 +200,13 @@ def check_delivery(env: Any) -> Check:
         problems += [w for w in rep.get("warnings") or () if isinstance(w, str) and w]
     if not parts:
         parts.append("nothing delivered yet (channels are resolved on the first delivery)")
+    dm_getter = getattr(svc, "dm_notes", None)
+    dm_notes = dm_getter() if callable(dm_getter) else {}
+    if dm_notes:
+        problems.append(f"{len(dm_notes)} meeting(s) still in a direct message: {next(iter(dm_notes.values()))}")
     if waiting:
         first = next(iter(waiting.values()))
-        return Check.warn("; ".join(parts + [f"{len(waiting)} meeting(s) waiting for a channel: {first}"]))
+        return Check.warn("; ".join(parts + [f"{len(waiting)} meeting(s) waiting for a channel: {first}"] + problems))
     if problems:
         return Check.warn("; ".join(parts + problems))
     return Check.ok("; ".join(parts))

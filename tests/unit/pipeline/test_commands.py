@@ -97,3 +97,39 @@ def test_handler_never_raises(prepo, layout, settings, clock):
     cmds, service, _ = make(prepo, layout, settings, clock)
     service.search = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db gone"))
     assert "db gone" in cmds.handle("search x", CALLER, "meeting")
+
+
+def test_only_a_reprocess_from_deliver_asks_to_move_notes_out_of_a_dm(prepo, layout, settings, clock, meeting):
+    """DESIGN §19: the move out of a DM is explicit — ``reprocess <id> --from deliver`` (or from=deliver)."""
+    from meeting_scribe.domain.models import KV_MOVE_FROM_DM
+
+    cmds, service, runner = make(prepo, layout, settings, clock)
+    mid = processed(service, runner, meeting)
+    cmds.handle(f"reprocess {mid} from=analyze", CALLER, "meeting")
+    assert prepo.kv_get(KV_MOVE_FROM_DM + mid) is None
+    drain(runner)
+    cmds.handle(f"reprocess {mid} from=deliver", CALLER, "meeting")
+    assert prepo.kv_get(KV_MOVE_FROM_DM + mid) == "1"
+
+
+def test_a_reprocess_that_finally_fails_forgets_the_move_request(prepo, layout, settings, clock, meeting):
+    from meeting_scribe.domain.models import KV_MOVE_FROM_DM
+
+    cmds, service, runner = make(prepo, layout, settings, clock)
+    mid = processed(service, runner, meeting)
+    runner.max_attempts = 1
+    service.reprocess(mid, Stage.DELIVER)
+    runner.stages.deliver = lambda m: (_ for _ in ()).throw(RuntimeError("cannot move"))
+    drain(runner)
+    assert prepo.get_meeting(mid).state is MeetingState.FAILED
+    assert prepo.kv_get(KV_MOVE_FROM_DM + mid) is None  # a later automatic retry never moves by itself
+
+
+def test_reprocess_reply_repeats_how_to_move_notes_left_in_a_dm(prepo, layout, settings, clock, meeting):
+    from meeting_scribe.domain.models import KV_DM_NOTES
+
+    cmds, service, runner = make(prepo, layout, settings, clock)
+    mid = processed(service, runner, meeting)
+    prepo.kv_set(KV_DM_NOTES + mid, "no notes channel is configured. Run `hermes meeting-scribe config set x`")
+    out = cmds.handle(f"reprocess {mid} from=deliver", CALLER, "meeting")
+    assert "config set" in out and "deliver" in out

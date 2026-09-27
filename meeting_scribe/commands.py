@@ -152,7 +152,9 @@ class MeetingCommands:
         used = self.service.effective_stage(meeting, stage)
         self.service.reprocess(meeting.id, stage)
         reply = t("cmd.reprocess_queued", lang, id=meeting.id, stage=used.value)
-        return reply + ("\n" + t("cmd.reprocess_no_audio", lang) if used is not stage else "")
+        reply += "\n" + t("cmd.reprocess_no_audio", lang) if used is not stage else ""
+        hint = self.service.dm_notes().get(meeting.id) if hasattr(self.service, "dm_notes") else None
+        return reply + (f"\n⚠️ {hint}" if hint else "")
 
     def _cmd_project(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         if len(args) < 2:

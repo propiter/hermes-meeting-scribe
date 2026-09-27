@@ -236,3 +236,14 @@ def test_llm_show_set_fallback_and_test(lrt, capsys):
 def test_llm_without_hermes_config_says_so(rt, capsys):
     code, out = run(rt, ["llm", "show"], capsys)
     assert code == 1 and "not available" in out
+
+
+def test_status_and_doctor_explain_notes_left_in_a_dm(rt, capsys):
+    from meeting_scribe.domain.models import KV_DM_NOTES
+
+    hint = f"notes in a direct message; run `hermes meeting-scribe reprocess {rt.mid} --from deliver`"
+    rt.service().repo.kv_set(KV_DM_NOTES + rt.mid, hint)
+    code, out = run(rt, ["status"], capsys)
+    assert f"! {rt.mid}: {hint}" in out
+    code, out = run(rt, ["status", "--json"], capsys)
+    assert json.loads(out)["dm_notes"] == {rt.mid: hint}

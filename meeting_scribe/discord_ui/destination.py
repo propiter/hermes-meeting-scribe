@@ -36,6 +36,7 @@ from ..domain.text import fold, is_ascii_digits
 
 REPORT_KV = "discord.destination_report"
 TEXT_KINDS = frozenset({"text", "news"})
+EXPLICIT_KEYS = ("google_meet_discord_channel", "delivery_discord_channel")
 _SEP_RE = re.compile(r"[-_\s]+")
 
 
@@ -344,9 +345,19 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
     return d
 
 
+def channel_key(meeting: Meeting) -> str:
+    """The setting that names the notes channel of this kind of meeting explicitly."""
+    return "google_meet_discord_channel" if meeting.source == SOURCE_GOOGLE_MEET else "delivery_discord_channel"
+
+
+def explicit_channel(d: Destination) -> Optional[Resolved]:
+    """The first notes channel that comes from a CONFIGURED setting (never the automatic one)."""
+    return next((st for st in d.steps if st.key in EXPLICIT_KEYS and st.status == "ok" and st.channel_id), None)
+
+
 def pending_reason(meeting: Meeting, d: Destination) -> str:
     """The exact instruction shown by ``status``/``doctor`` while a delivery waits for a channel."""
-    key = "google_meet_discord_channel" if meeting.source == SOURCE_GOOGLE_MEET else "delivery_discord_channel"
+    key = channel_key(meeting)
     problems = "; ".join(st.detail for st in d.steps if st.detail and st.status not in ("ok", "unset"))
     hint = f"`hermes meeting-scribe config set {key} \"#channel-name\"` (or a channel id)"
     return f"waiting for a Discord channel: {problems or 'no notes channel could be resolved'}. Set one with {hint}"

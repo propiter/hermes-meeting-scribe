@@ -22,10 +22,10 @@ import logging
 from typing import Any, Callable, Optional, Sequence
 
 from ..config import Settings
-from ..domain.models import Meeting, Notes, is_discord_user_id
+from ..domain.models import KV_DM_NOTES, KV_MOVE_FROM_DM, Meeting, Notes, is_discord_user_id
 from ..i18n import t
 from .board import Board, build_board
-from .destination import Destination, same_guild
+from .destination import Destination, channel_key, explicit_channel, same_guild
 from .guild import snapshot_channels
 from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
@@ -33,6 +33,11 @@ from .render_tasks import TaskView, render_index, render_panel, render_task
 from .transcript_file import SUFFIX as TRANSCRIPT_SUFFIX, mark_legacy, publish_transcript
 
 log = logging.getLogger(__name__)
+MOVE_SUFFIX = "dm_move"  # a move out of a DM in progress: {from, channel, key, attach, old: {suffix: ptr}}
+
+
+class DmMoveError(RuntimeError):
+    """The server channel a DM meeting should move to cannot be used; nothing in the DM was touched."""
 
 
 class TaskPublisher:
@@ -86,8 +91,10 @@ class TaskPublisher:
             return False
         return True
 
-    async def header(self, meeting: Meeting, notes: Notes, ptrs: Pointers) -> tuple[Any, dict]:
-        """Post/edit the summary parts; returns the chat channel and the ``notes`` pointer."""
+    async def header(self, meeting: Meeting, notes: Notes, ptrs: Pointers, *, chat: Any = None,
+                     attach: Optional[bool] = None) -> tuple[Any, dict]:
+        """Post/edit the summary parts; returns the chat channel and the ``notes`` pointer. ``chat`` forces
+        where a NEW summary goes and ``attach`` its transcript intent (a move out of a DM keeps both)."""
         specs = render_header(meeting, notes, self.o.lang)
         ptr = await ptrs.load("notes")
         channel = None
@@ -101,11 +108,11 @@ class TaskPublisher:
                 log.info("meeting-scribe: stored notes message gone (%s); re-posting", exc)
                 channel, ptr = None, None
         if channel is None or ptr is None:
-            channel = await self._chat_channel(meeting)
+            channel = chat if chat is not None else await self._chat_channel(meeting)
             first = await self.msgs.send(channel, spec=specs[0])
             ptr = {"v": 2, "channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url,
                    # the transcript may be attached to THIS summary (set once, when it is first posted)
-                   "attach": bool(self.settings.delivery_discord_transcript)}
+                   "attach": bool(self.settings.delivery_discord_transcript) if attach is None else bool(attach)}
             await ptrs.save("notes", ptr, first.jump_url)
         if ptr.get("v") != 2:
             ptr = await self._migrate_legacy(channel, ptr, ptrs)
@@ -297,32 +304,131 @@ class TaskPublisher:
             if not is_missing(exc):
                 log.info("meeting-scribe: transcript attachment skipped: %s", exc)
 
-    async def leave_dm(self, meeting: Meeting, ptrs: Pointers) -> bool:
-        """Notes posted in a DM by an older version (home-channel fallback): delete them there and forget
-        the pointers so this publish reposts in a server channel (DESIGN §19). Task messages move by
-        themselves (their target changes). ``False`` when the notes are not in a DM."""
-        ptr = await ptrs.load("notes")
+    # -- notes an older version posted in a DM (DESIGN §19) ---------------------------------------
+    async def _kv(self, key: str, value: Optional[str]) -> None:
+        await asyncio.to_thread(self.repo.kv_set, key, value)
+
+    async def _dm_of(self, ptr: Optional[dict]) -> Any:
+        """The DM channel holding ``ptr``'s message, ``None`` when it is a server channel (or unknown)."""
         if not ptr or not ptr.get("channel"):
-            return False
+            return None
         try:
             channel = await self.msgs.channel(ptr["channel"])
-        except Exception:  # gone or unreachable: the normal path re-posts
-            return False
-        if getattr(channel, "guild", None) is not None or not self._destination(meeting).targets:
-            return False
-        log.warning("meeting-scribe: meeting %s was posted in a DM; moving it to a server channel", meeting.id)
-        for suffix in ("notes", "index", TRANSCRIPT_SUFFIX):
-            old = await ptrs.load(suffix) or {}
-            ids = list(old.get("messages") or ()) + ([old["message"]] if old.get("message") else [])
-            for mid in ids:
-                await self.msgs.delete(old.get("channel") or ptr["channel"], mid)
-            await ptrs.drop(suffix)
-        return True
+        except Exception as exc:
+            if is_missing(exc):  # the DM is gone: the normal path re-posts
+                return None
+            raise  # transient: retry later rather than guess
+        return channel if getattr(channel, "guild", None) is None else None
 
-    async def publish(self, meeting: Meeting, notes: Notes, *, send_dms: bool, attach_transcript: bool = False) -> str:
+    def _dm_hint(self, meeting: Meeting, target: str = "") -> str:
+        cmd = f"`hermes meeting-scribe reprocess {meeting.id} --from deliver`"
+        if target:
+            return (f"the notes of meeting {meeting.id} are in a direct message (posted by an older version); "
+                    f"run {cmd} to move them to {target}")
+        key = channel_key(meeting)
+        return (f"the notes of meeting {meeting.id} are in a direct message (posted by an older version) and stay "
+                f"there: no notes channel is configured. Run `hermes meeting-scribe config set {key} "
+                f"\"#channel-name\"` (or a channel id), then {cmd}")
+
+    async def _open_target(self, meeting: Meeting, cid: Any, key: str) -> Any:
+        """Open and check the server channel BEFORE anything in the DM changes."""
+        try:
+            channel = await self.msgs.channel(cid)
+        except Exception as exc:
+            raise DmMoveError(f"cannot move meeting {meeting.id} out of the DM: channel {cid} ({key}) is not "
+                              f"reachable ({type(exc).__name__}: {exc}); the DM copy is kept") from exc
+        if not self._in_server(channel, self._destination(meeting)):
+            raise DmMoveError(f"cannot move meeting {meeting.id} out of the DM: channel {cid} ({key}) is not a "
+                              "channel of the meeting's server; the DM copy is kept")
+        return channel
+
+    async def _start_move(self, meeting: Meeting, dm: Any, ptrs: Pointers) -> Optional[dict]:
+        """Only for an explicit ``reprocess --from deliver`` and a CONFIGURED channel (never the automatic
+        one: a private DM must not end up in #general). Returns the move, ``None`` when refused."""
+        step = explicit_channel(self._destination(meeting))
+        if step is None:
+            log.warning("meeting-scribe: meeting %s stays in a DM: no notes channel configured", meeting.id)
+            await self._kv(KV_DM_NOTES + meeting.id, self._dm_hint(meeting))
+            await self._kv(KV_MOVE_FROM_DM + meeting.id, None)
+            return None
+        target = await self._open_target(meeting, step.channel_id, step.key)
+        notes_ptr = await ptrs.load("notes") or {}
+        old: dict[str, dict] = {}
+        for suffix in ("notes", "index", TRANSCRIPT_SUFFIX):
+            p = await ptrs.load(suffix)
+            if p and str(p.get("channel")) == str(dm.id):  # the legacy marker has no channel: it stays
+                old[suffix] = p
+        for item, p in (await ptrs.with_prefix("task:")).items():
+            if str(p.get("channel")) == str(dm.id):
+                old[f"task:{item}"] = p
+        move = {"from": dm.id, "channel": target.id, "key": step.key, "attach": bool(notes_ptr.get("attach")),
+                "old": old}
+        await ptrs.save(MOVE_SUFFIX, move)  # first: an interrupted move resumes from here
+        for suffix in old:  # the DM messages stay until the new ones exist (their ids live in ``move``)
+            await ptrs.drop(suffix)
+        log.warning("meeting-scribe: moving meeting %s from a DM to channel %s", meeting.id, target.id)
+        return move
+
+    async def _finish_move(self, meeting: Meeting, move: dict, ptrs: Pointers) -> None:
+        """Last step, after the new summary, tasks and index exist and their pointers are saved."""
+        for p in (move.get("old") or {}).values():
+            ids = list(p.get("messages") or ()) + ([p["message"]] if p.get("message") else [])
+            for mid in ids:
+                await self.msgs.delete(p.get("channel") or move.get("from"), mid)
+        await ptrs.drop(MOVE_SUFFIX)
+        await self._kv(KV_MOVE_FROM_DM + meeting.id, None)
+        await self._kv(KV_DM_NOTES + meeting.id, None)
+        log.warning("meeting-scribe: meeting %s moved out of the DM", meeting.id)
+
+    async def _rollback_move(self, meeting: Meeting, move: dict, ptrs: Pointers) -> None:
+        """Back to "lives in the DM" (its messages were never deleted): nothing new was posted yet."""
+        for suffix, p in (move.get("old") or {}).items():
+            await ptrs.save(suffix, p, p.get("url", "") if suffix == "notes" else "")
+        await ptrs.drop(MOVE_SUFFIX)
+        log.warning("meeting-scribe: move of meeting %s out of the DM rolled back; the DM copy is kept", meeting.id)
+
+    async def _move_target(self, meeting: Meeting, move: dict, ptrs: Pointers, *, deliver: bool) -> Any:
+        """The server channel of a move in progress, or ``None`` after rolling it back (a button refresh
+        before the new summary exists, or an unreachable channel) — the DM keeps working meanwhile."""
+        posted = await ptrs.load("notes") is not None
+        if not posted and not deliver:
+            await self._rollback_move(meeting, move, ptrs)
+            return None
+        try:
+            return await self._open_target(meeting, move["channel"], move.get("key", ""))
+        except DmMoveError:
+            if not posted:
+                await self._rollback_move(meeting, move, ptrs)
+            raise
+
+    async def _dm_state(self, meeting: Meeting, ptrs: Pointers, *, move_from_dm: bool) -> Optional[dict]:
+        """The move to carry on (started now or earlier), else ``None`` (the meeting is edited in place)."""
+        move = await ptrs.load(MOVE_SUFFIX)
+        if move is not None:
+            return move
+        dm = await self._dm_of(await ptrs.load("notes"))
+        if dm is None:
+            await self._kv(KV_DM_NOTES + meeting.id, None)
+            return None
+        if move_from_dm:
+            return await self._start_move(meeting, dm, ptrs)
+        step = explicit_channel(self._destination(meeting))
+        await self._kv(KV_DM_NOTES + meeting.id,
+                       self._dm_hint(meeting, f"<#{step.channel_id}>" if step is not None else ""))
+        return None
+
+    async def publish(self, meeting: Meeting, notes: Notes, *, send_dms: bool, attach_transcript: bool = False,
+                      move_from_dm: bool = False) -> str:
+        """``attach_transcript`` marks the pipeline's DELIVER; ``move_from_dm`` an explicit
+        ``reprocess --from deliver`` (the only way a meeting leaves a DM). A move is finished — DM
+        messages deleted — only by a DELIVER, after everything new was posted."""
         ptrs = Pointers(self.repo, meeting.id)
-        await self.leave_dm(meeting, ptrs)
-        chat, notes_ptr = await self.header(meeting, notes, ptrs)
+        move = await self._dm_state(meeting, ptrs, move_from_dm=move_from_dm and attach_transcript)
+        chat = await self._move_target(meeting, move, ptrs, deliver=attach_transcript) if move else None
+        if move is not None and chat is None:
+            move = None
+        chat, notes_ptr = await self.header(meeting, notes, ptrs, chat=chat,
+                                            attach=move.get("attach") if move else None)
         if attach_transcript:
             await self._transcript(meeting, chat, notes_ptr, ptrs)
         board = await self.board(meeting, notes)
@@ -357,4 +463,6 @@ class TaskPublisher:
             if uid not in assignees:
                 await self.dm(board, uid, ptrs, send=False)
         await self.index(board, chat, threads, dm_failed, ptrs)
+        if move is not None and attach_transcript:
+            await self._finish_move(meeting, move, ptrs)
         return str(notes_ptr.get("url") or "")

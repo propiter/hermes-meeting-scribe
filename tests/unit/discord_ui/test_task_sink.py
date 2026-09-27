@@ -392,27 +392,6 @@ async def test_pending_meet_delivery_publishes_once_a_channel_is_named(env):
     assert env.bot.channels[640].ordered()
 
 
-async def test_notes_posted_in_a_dm_by_an_older_version_move_to_a_server_channel(env):
-    """Production case: the home channel was a DM. A redelivery reposts in the server and cleans the DM."""
-    as_meet(env)
-    user = env.bot.user(42)
-    dm = user.dm
-    old = await dm.send("old summary")
-    old_index = await dm.send("old index")
-    ptrs = env.svc.repo
-    ptrs.upsert_delivery(env.meeting.id, "discord", f"mtg:{env.meeting.id}:notes", url="",
-                         external_id=json.dumps({"v": 2, "channel": dm.id, "thread": None, "messages": [old.id],
-                                                 "url": old.jump_url, "attach": True}))
-    ptrs.upsert_delivery(env.meeting.id, "discord", f"mtg:{env.meeting.id}:index", url="",
-                         external_id=json.dumps({"channel": dm.id, "message": old_index.id}))
-    notes_ch = env.bot.add(650, "meet-notes")
-    env.cfg["google_meet_discord_channel"] = "meet-notes"
-    await deliver(env)
-    assert dm.ordered() == []  # cleaned
-    assert "Migración SMTP" in notes_ch.ordered()[0].content
-    assert ptr(env, "notes")["channel"] == 650 and ptr(env, "index")["channel"] == 650
-
-
 # -- review M1: the publisher re-checks what the cache could not (channels fetched from the API) ----
 async def test_publisher_never_posts_notes_or_fallback_tasks_in_another_server(env):
     from meeting_scribe.discord_ui.destination import Destination

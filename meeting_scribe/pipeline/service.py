@@ -75,7 +75,7 @@ class MeetingService:
             if row["id"] in waiting:
                 row["delivery"] = {"state": "waiting_destination", "reason": waiting[row["id"]]}
         return {"queued": self.repo.pending_job_count(), "worker_running": self.runner.running, "recent": rows,
-                "waiting_destination": waiting}
+                "waiting_destination": waiting, "dm_notes": self.dm_notes()}
 
     def retry_waiting(self) -> int:
         """Re-queue now every delivery waiting for a destination (a channel setting changed)."""
@@ -88,6 +88,12 @@ class MeetingService:
         if n:
             self.runner._wake.set()
         return n
+
+    def dm_notes(self) -> dict[str, str]:
+        """Meetings whose notes an older version posted in a DM (DESIGN §19): id -> how to move them."""
+        from ..domain.models import KV_DM_NOTES
+
+        return {k[len(KV_DM_NOTES):]: v for k, v in self.repo.kv_prefix(KV_DM_NOTES).items()}
 
     def waiting_destination(self) -> dict[str, str]:
         """Meetings whose delivery waits for a Discord channel (DESIGN §19): id -> instruction."""

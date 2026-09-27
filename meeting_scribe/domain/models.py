@@ -115,6 +115,11 @@ def stage_after(state: MeetingState) -> Optional[Stage]:
 # --------------------------------------------------------------------------------------------
 SOURCE_DISCORD = "discord"
 SOURCE_GOOGLE_MEET = "google_meet"
+# Notes an older version posted in a DM (DESIGN §19). ``KV_MOVE_FROM_DM + id``: set by
+# ``reprocess <id> --from deliver`` — the only thing that may move them to a server channel.
+# ``KV_DM_NOTES + id``: why they are still in a DM and the exact commands to move them.
+KV_MOVE_FROM_DM = "discord.move_from_dm."
+KV_DM_NOTES = "discord.dm_notes."
 
 
 def is_discord_user_id(user_id: Optional[str]) -> bool:

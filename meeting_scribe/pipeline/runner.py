@@ -22,7 +22,7 @@ from datetime import timedelta
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ..domain.models import (
-    SOURCE_DISCORD, STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
+    KV_MOVE_FROM_DM, SOURCE_DISCORD, STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
 )
 from ..domain.ports import Clock
 from ..storage.owner import owner_alive, owner_dead, process_owner_id
@@ -136,6 +136,8 @@ class PipelineRunner:
         if job is not None and job.state == "running":
             raise ValueError("meeting is being processed right now")
         stage = effective_stage(meeting, stage)
+        # Only an explicit re-delivery may move notes an older version posted in a DM (DESIGN §19).
+        self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, "1" if stage is Stage.DELIVER else None)
         self.stages.persist(meeting.with_state(rewind_target(stage), rewind=True))
         self.enqueue(meeting_id, stage)
         return stage
@@ -314,6 +316,7 @@ class PipelineRunner:
         self.repo.kv_set(WAITING_KV + meeting_id, None)
         if attempts + 1 >= self.max_attempts:
             self.repo.kv_set(_DEFER_KV + meeting_id, None)
+            self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, None)  # a later retry must be asked for again
             self.repo.fail_job(job_id, stage, error, retry_at=None)
             self.stages.persist(meeting.with_state(MeetingState.FAILED))
             self._emit(meeting_id, "failed", {"stage": stage.value, "error": error})

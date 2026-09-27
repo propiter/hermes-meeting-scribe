@@ -183,3 +183,17 @@ def test_delivery_check_shows_destination_warnings(tmp_path):
     res = check_delivery(e)
     assert res.status == "warn" and "@everyone" in res.detail
     repo.close()
+
+
+def test_delivery_check_lists_meetings_left_in_a_dm(tmp_path):
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {},
+                          dm_notes=lambda: {"m1": "run `hermes meeting-scribe reprocess m1 --from deliver`"})
+    e = env(tmp_path)
+    e.service = lambda: svc
+    res = check_delivery(e)
+    assert res.status == "warn" and "1 meeting(s)" in res.detail and "--from deliver" in res.detail
+    repo.close()

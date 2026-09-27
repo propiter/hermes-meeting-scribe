@@ -215,6 +215,8 @@ def _status(args: argparse.Namespace, rt: CliRuntime) -> int:
         _print(f"  {row['id']}  {row['state']:<12} {row['title']}{extra}")
     for mid, reason in (st.get("waiting_destination") or {}).items():
         _print(f"! {mid}: {reason}")
+    for mid, reason in (st.get("dm_notes") or {}).items():
+        _print(f"! {mid}: {reason}")
     return 0
 
 
@@ -261,6 +263,9 @@ def _reprocess(args: argparse.Namespace, rt: CliRuntime) -> int:
             pass
     state = service.repo.get_meeting(meeting.id).state.value  # type: ignore[union-attr]
     _print(t("cli.reprocess_done", rt.settings().ui_language, id=meeting.id, stage=stage.value, state=state))
+    hint = service.dm_notes().get(meeting.id)
+    if hint:  # notes still in a DM (older version): what is missing to move them (DESIGN §19)
+        _print(f"! {hint}")
     return 0
 
 
