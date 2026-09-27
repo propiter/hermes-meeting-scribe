@@ -179,6 +179,8 @@ class ActionItem:
     quote: str = ""
     t0: Optional[float] = None
     status: ActionStatus = ActionStatus.PENDING
+    project_key: Optional[str] = None   # resolved candidate key (DESIGN §16: per-task routing)
+    project_hint: Optional[str] = None  # the name as spoken when it is not a known candidate
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "project_confidence", min(1.0, max(0.0, float(self.project_confidence))))
@@ -193,7 +195,8 @@ class ActionItem:
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "ActionItem":
-        kw = {k: d.get(k) for k in ("owner_speaker_id", "owner_name", "due", "project", "t0")}
+        kw = {k: d.get(k) for k in ("owner_speaker_id", "owner_name", "due", "project", "t0", "project_key",
+                                    "project_hint")}
         return cls(id=str(d["id"]), title=str(d["title"]), description=str(d.get("description") or ""),
                    project_confidence=float(d.get("project_confidence") or 0.0),
                    quote=str(d.get("quote") or ""),

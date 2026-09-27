@@ -23,6 +23,7 @@ _ACTION_ITEM: dict[str, Any] = {
         "due": _NULLABLE_STR,
         "project": _NULLABLE_STR,
         "project_confidence": _NULLABLE_NUM,
+        "project_hint": _NULLABLE_STR,
         "quote": _NULLABLE_STR,
         "t0": _NULLABLE_NUM,
     },

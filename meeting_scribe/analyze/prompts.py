@@ -21,7 +21,11 @@ _RULES = (
     "invent dates; a stated day without a year (\"el 30 de septiembre\", \"Sept 30\") is explicit: resolve it to the "
     "next such date on or after <meeting_date>. Relative words like \"Friday\" are not dates: keep them in the "
     "description. project must be exactly one of the candidate project names (the name only, without the "
-    "source in parentheses) or null, with project_confidence 0..1. decisions lists every agreement the "
+    "source in parentheses) or null, with project_confidence 0..1. Decide the project for each action item "
+    "separately: one meeting often covers several projects. Candidates with source (discord) are the "
+    "server's channels and categories. Transcription may misspell a project name; when a task clearly "
+    "belongs to a named project that is not an exact candidate, set project to the closest candidate if "
+    "you are confident, otherwise null, and always put the name as spoken in project_hint. decisions lists every agreement the "
     "meeting reached and open_questions every question left unresolved (empty lists only when there were "
     "none). quote is a short verbatim excerpt; t0 its start time in seconds. Keep "
     "decisions and open questions short. Do not invent content that was not said."
@@ -45,7 +49,8 @@ def candidates_block(candidates: Sequence[Candidate], hints: Sequence[str], meet
 # models simply OMIT optional keys (E2E run: owner_name, quote, t0, decisions and open_questions all
 # vanished). Spelling the full shape out in the instructions works on every provider.
 _ITEM_SHAPE = ('{"title": str, "description": str, "owner_speaker_id": str|null, "owner_name": str|null, '
-               '"due": "YYYY-MM-DD"|null, "project": str|null, "project_confidence": number, "quote": str, '
+               '"due": "YYYY-MM-DD"|null, "project": str|null, "project_confidence": number, '
+               '"project_hint": str|null, "quote": str, '
                '"t0": number}')
 _NOTES_SHAPE = ('Return one JSON object: {"meeting_title": str, "tldr": str, "summary": str, '
                 '"topics": [{"title": str, "points": [str]}], "decisions": [str], "open_questions": [str], '

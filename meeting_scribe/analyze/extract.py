@@ -97,16 +97,23 @@ class LlmAnalyzer:
         self._settings = settings
 
     # -- normalisation --------------------------------------------------------------------------
-    def _candidate(self, value: Any, confidence: float, candidates: Sequence[Candidate],
-                   min_conf: float) -> Optional[str]:
+    @staticmethod
+    def _spoken(value: Any) -> Optional[str]:
+        # Models echo the candidate line format ("Website (hermes)"); the E2E run hit exactly that.
+        text = _SOURCE_SUFFIX_RE.sub("", value).strip() if isinstance(value, str) else ""
+        return text or None
+
+    def _pick(self, value: Any, confidence: float, candidates: Sequence[Candidate],
+              min_conf: float) -> Optional[Candidate]:
         if not isinstance(value, str) or confidence < min_conf:
             return None
-        # Models echo the candidate line format ("Chatio (hermes)"); the E2E run hit exactly that.
         wanted = {_norm(value), _norm(_SOURCE_SUFFIX_RE.sub("", value))}
-        for c in candidates:
-            if wanted & {_norm(c.name), _norm(c.key)}:
-                return c.name
-        return None
+        return next((c for c in candidates if wanted & {_norm(c.name), _norm(c.key)}), None)
+
+    def _candidate(self, value: Any, confidence: float, candidates: Sequence[Candidate],
+                   min_conf: float) -> Optional[str]:
+        chosen = self._pick(value, confidence, candidates, min_conf)
+        return chosen.name if chosen else None
 
     def _items(self, raw: Any, speakers: Sequence[Speaker], candidates: Sequence[Candidate],
                min_conf: float) -> tuple[ActionItem, ...]:
@@ -117,6 +124,8 @@ class LlmAnalyzer:
             owner = match_owner(it.get("owner_speaker_id"), it.get("owner_name"), speakers)
             conf = _conf(it.get("project_confidence"))
             title = " ".join(str(it["title"]).split())
+            chosen = self._pick(it.get("project"), conf, candidates, min_conf)
+            hint = None if chosen else (self._spoken(it.get("project_hint")) or self._spoken(it.get("project")))
             item = ActionItem(
                 id=action_item_id(title, owner.user_id if owner else None), title=title,
                 description=str(it.get("description") or "").strip(),
@@ -124,8 +133,8 @@ class LlmAnalyzer:
                 owner_name=owner.name if owner else (str(it.get("owner_name")).strip() or None
                                                      if it.get("owner_name") else None),
                 due=_iso_date(it.get("due")),
-                project=self._candidate(it.get("project"), conf, candidates, min_conf),
-                project_confidence=conf, quote=str(it.get("quote") or "").strip(),
+                project=chosen.name if chosen else None, project_key=chosen.key if chosen else None,
+                project_hint=hint, project_confidence=conf, quote=str(it.get("quote") or "").strip(),
                 t0=_seconds(it.get("t0")))
             out.setdefault(item.id, item)
         return tuple(out.values())
