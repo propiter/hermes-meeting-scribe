@@ -644,6 +644,37 @@ The plugin helps you do this:
 - To delete a meeting, remove its folder. `audio_retention: none` deletes the audio once processing
   finishes.
 
+## Hermes Desktop: the Meetings page
+
+The plugin ships a **Meetings** page for Hermes Desktop (`desktop/plugin.js`, with its API in
+`dashboard/`). It is optional: recording and Discord work the same without it.
+
+**Turn it on.** Install the plugin as usual (the Python half) and restart Hermes so the page's API is
+mounted. Then open **Capabilities → Plugins** in Desktop and switch on **Meetings** (off by
+default). A **Meetings** row appears in the sidebar and in the command palette.
+
+**What it shows.**
+
+- **Library**: every meeting, newest first, with search over titles and what was said, filters by
+  source, status and dates, and pages of 30.
+- **Meeting**: summary, topics, decisions, open questions, tasks (owner, project and where each one
+  went: Discord, Kanban, Linear, with links), the transcript (loaded in pages, with a search box) and
+  the recording when a mixed track was kept. **Reprocess…** asks which step to redo, queues it and
+  follows it until the bot finishes.
+- **Status**: whether the bot is online (it checks in every ~20 s), the processing queue, meetings
+  waiting for a channel, Google Meet (connected, or the commands to connect it) and **Diagnostics**.
+- **Settings**: every plugin setting, grouped, with its label in English or Spanish, validation and
+  whether it is the default, a custom value or invalid; and **Models** (main model plus ordered
+  backups you can add, remove and reorder).
+
+The page reads the profile's own files and database and never starts a recording or a pipeline:
+**Reprocess** is carried out by the gateway's worker, so the gateway must be running. Settings are
+written with the same rules as `hermes meeting-scribe config set` and `llm set`.
+
+**Not verified yet:** the page is covered by Node render tests and Hermes' `plugins validate`, but it
+has not been exercised in a running Hermes Desktop. Audio playback relies on Desktop's media stream
+for `recording.ogg` and is unproven there; multitrack (`.mka`) recordings cannot be played.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -678,6 +709,7 @@ uv venv -p 3.12 .venv && uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest -q -m slow         # real faster-whisper (downloads the tiny model)
 scripts/test-integration.sh -q                # against a real Hermes checkout (HERMES_SRC, HERMES_PYTHON)
 hermes plugins validate .                     # manifest, capability probe, security scan
+node tests/desktop/run.mjs                    # Desktop page (Node >= 20.6; React from the Hermes checkout)
 .venv/bin/python scripts/gen_manifest.py      # regenerate plugin.yaml after changing config.py
 ```
 

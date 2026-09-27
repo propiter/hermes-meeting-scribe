@@ -11,7 +11,17 @@ its transcript attachment, and a check of `ENDED` → `FILE_GENERATED` timing.
 
 ## Future release — Native Hermes Desktop meeting library
 
-**Status:** researched and deferred by the maintainer. No implementation or production deployment authorized by this roadmap. Version number to be chosen when scheduled.
+**Status:** a first version is implemented on `feat/desktop-meetings` (unreleased): read-only
+library and detail, reprocess, status/diagnostics and settings (see README «Hermes Desktop» and
+DESIGN §21).
+
+- **Verified:** unit and Hermes integration tests of the API, Node render tests of the page, and
+  `hermes plugins validate` (desktop surface).
+- **Pending:** a smoke test in a running Hermes Desktop (local and remote gateway), audio playback
+  and seek through `hermes-media://`, task actions from the page (approve, dismiss, move project),
+  multitrack download, and the catalog submission below.
+
+This roadmap does not authorize any production deployment.
 
 ### Goal
 

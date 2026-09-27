@@ -771,3 +771,59 @@ give-up, whisper hallucination filters and merge gaps, status emojis and thread 
 not configuration), fuzzy-matching internals (the user-facing thresholds are settings). Each is
 either imposed by an external system or an internal safety margin a user cannot tune meaningfully.
 
+
+## 21. Hermes Desktop Meetings page (unreleased)
+
+**Frontend.** `desktop/plugin.js` is one ESM file the runtime loads without a build. The UI is
+written as `jsx()` calls and imports only `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`: the
+loader refuses anything else, and `plugins validate` checks the desktop surface. The file registers
+one exact route (`/meeting-scribe`), a sidebar row and a palette command. The router has no params,
+so the tab and the selected meeting live in module atoms. Styling uses only the host's CSS variables
+(`--ui-*`), injected as a `<style>` that is removed on dispose; no host Tailwind class is assumed.
+The page's texts are its own `ctx.i18n.register({en, es})` bundles, separate from the bot's
+`meeting_scribe/i18n` catalogs. Field labels come from the schema (`/v1/settings?lang=`).
+
+**Data.** Every call goes through `ctx.rest` (profile-aware, namespace-scoped) and the SDK's React
+Query. Query keys carry the connection and profile, and switching either closes the open meeting.
+Updates come from polling, not events (`broadcast_plugin_event` is process-local): the library every
+30 s, status every 15 s, an unfinished meeting every 10 s, and a pending command every 2 s until it
+is `done`, `failed` or `unknown`. Reprocess sends a client-generated `request_id` with
+`confirm: true` after the `ConfirmDialog`, so a retried POST has no effect.
+
+**Transcript.** The first page (200 lines) comes through the cache. `Load more` and
+`Load everything` then follow the cursor, 500 lines per request. The search box filters the loaded
+lines and says when the result is partial.
+
+**Audio.** Shown only when `audio.available` (`recording.ogg`). The `<audio>` element tries
+`hermes-media://stream/<path>` (local backend) first, then
+`hermes-media://remote/<path>?connectionId&profile` (remote gateway, proxied to
+`/api/files/stream`). If both fail, it explains that the file stays on the Hermes machine.
+Multitrack `.mka`, imported Meet meetings and `audio_retention: none` show a plain reason instead.
+`/v1/meetings/{id}/audio` (Range) exists for a future direct fetch, but the page does not use it:
+`<audio src>` cannot carry Desktop's auth headers.
+
+**Settings.** The form is drawn from `schema.fields`, plugin storage only; the `llm` group becomes
+the Models editor. Each type maps to a control:
+
+- bool: a switch, saved on toggle
+- choices: a select, saved on change
+- int/float: a number input, with the schema bounds checked client-side
+- list: a textarea, one item per line
+- str: a text input
+
+Each field saves on its own (`PUT /v1/settings/{key}`) and shows the server's validation message
+under it. The origin badge comes from `values[key].origin`. Models saves with `PUT /v1/llm`, sending
+the primary and the whole ordered chain.
+
+**Tests.** `tests/desktop/run.mjs` (node:test) loads the real module with a stub SDK and renders each
+view with react-dom/server. React comes from `MS_REACT_DIR` or the Hermes checkout's
+`node_modules`; without React only the structural tests run. `tests/unit/test_desktop_plugin_js.py`
+runs `node --check` and the Node suite, and checks that every SDK import exists in the Hermes SDK
+index.
+
+**Needs a live check.**
+
+- Rendering inside Desktop: theme, focus rings, ConfirmDialog, SearchField.
+- The Capabilities toggle.
+- hermes-media playback and seek of `recording.ogg`, locally and on a remote gateway.
+- Reprocess end to end with a running gateway.

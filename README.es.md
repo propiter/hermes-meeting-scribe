@@ -664,6 +664,38 @@ El plugin te ayuda a hacerlo:
 - Para borrar una reunión, elimina su carpeta. `audio_retention: none` borra el audio cuando termina
   el procesamiento.
 
+## Hermes Desktop: la página Reuniones
+
+El plugin incluye una página **Reuniones** para Hermes Desktop (`desktop/plugin.js`, con su API en
+`dashboard/`). Es opcional: la grabación y Discord funcionan igual sin ella.
+
+**Activarla.** Instala el plugin como siempre (la parte de Python) y reinicia Hermes para que se
+monte la API de la página. Luego abre **Capabilities → Plugins** en Desktop y activa **Meetings**
+(viene desactivado). Aparece una fila **Reuniones** en la barra lateral y en la paleta de comandos.
+
+**Qué muestra.**
+
+- **Biblioteca**: todas las reuniones, de la más reciente a la más antigua, con búsqueda en títulos
+  y en lo que se dijo, filtros por origen, estado y fechas, y páginas de 30.
+- **Reunión**: resumen, temas, decisiones, preguntas abiertas, tareas (responsable, proyecto y a
+  dónde fue cada una: Discord, Kanban, Linear, con enlaces), la transcripción (cargada por páginas,
+  con buscador) y la grabación si se guardó una pista mezclada. **Reprocesar…** pregunta qué paso
+  repetir, lo pone en cola y lo sigue hasta que el bot termina.
+- **Estado**: si el bot está en línea (da señales cada ~20 s), la cola de proceso, las reuniones que
+  esperan un canal, Google Meet (conectado, o los comandos para conectarlo) y **Diagnóstico**.
+- **Ajustes**: todos los ajustes del plugin, agrupados, con su etiqueta en español o inglés,
+  validación y si el valor es el predeterminado, uno personalizado o no válido; y **Modelos**
+  (modelo principal y respaldos en orden, que puedes añadir, quitar y reordenar).
+
+La página lee los archivos y la base de datos del perfil y nunca inicia una grabación ni un proceso:
+**Reprocesar** lo ejecuta el worker del gateway, así que el gateway debe estar corriendo. Los ajustes
+se guardan con las mismas reglas que `hermes meeting-scribe config set` y `llm set`.
+
+**Pendiente de verificar:** la página está cubierta por tests de render en Node y por `plugins
+validate` de Hermes, pero no se ha probado en un Hermes Desktop real. La reproducción de audio usa
+el stream de medios de Desktop para `recording.ogg` y no está comprobada allí; las grabaciones
+multipista (`.mka`) no se pueden reproducir.
+
 ## Solución de problemas
 
 | Síntoma | Solución |
@@ -701,6 +733,7 @@ uv venv -p 3.12 .venv && uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest -q -m slow         # faster-whisper real (descarga el modelo tiny)
 scripts/test-integration.sh -q                # contra una copia real de Hermes (HERMES_SRC, HERMES_PYTHON)
 hermes plugins validate .                     # manifiesto, prueba de capacidades, análisis de seguridad
+node tests/desktop/run.mjs                    # Desktop page (Node >= 20.6; React from the Hermes checkout)
 .venv/bin/python scripts/gen_manifest.py      # regenera plugin.yaml tras cambiar config.py
 ```
 

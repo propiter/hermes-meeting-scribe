@@ -43,6 +43,17 @@ All notable changes to this project are documented here. The format follows
   versioned form description including the LLM settings. New settings `delivery_transcript_max_mb`
   and `pipeline_max_attempts`. `plugin.yaml` and the README tables are generated from the settings.
 
+- **Meetings page for Hermes Desktop** (`desktop/plugin.js`, off by default in Capabilities →
+  Plugins): library with search, source/status/date filters and cursor pages; meeting detail with
+  notes, tasks and their per-destination state and links, paged searchable transcript, recording
+  when a mixed track exists, and **Reprocess** (confirmation dialog, queued for the gateway worker,
+  followed by polling); status (worker heartbeat, queue, meetings waiting for a channel, Google Meet
+  and diagnostics); settings generated from the config schema (groups, en/es labels, validation,
+  per-field errors, value origin) and a **Models** editor (main model and ordered fallbacks). Backed
+  by a versioned REST API under `/api/plugins/meeting-scribe/v1` (`dashboard/plugin_api.py`) that
+  reads SQLite/files and never starts capture or a pipeline. Covered by Node render tests
+  (`tests/desktop`) and `plugins validate`; **not yet exercised in a running Desktop**.
+
 ### Changed
 
 - **Notes are never posted to Hermes' home channel any more**: it is often a DM with the owner, where
