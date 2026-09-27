@@ -29,6 +29,7 @@ class FakeCtx:
 
     def register_auxiliary_task(self, key, *, display_name, description, defaults=None):
         self.aux[key] = display_name
+        self.aux_defaults = {**getattr(self, "aux_defaults", {}), key: defaults}
 
     def register_tool(self, name, toolset, schema, handler, **kw):
         self.tools[name] = (toolset, schema, handler)
@@ -197,3 +198,19 @@ def test_cli_register_starts_nothing(ctx, monkeypatch):
     monkeypatch.setattr(plugin.hermes_adapters, "is_gateway_process", lambda: False)
     rt = plugin.register(ctx, ROOT)
     assert not rt.pipeline_running() and not rt.meet_poller_running
+
+
+def test_aux_task_defaults_do_not_impose_a_provider(ctx):
+    plugin.register(ctx, ROOT)
+    defaults = ctx.aux_defaults["meeting_scribe"]
+    assert defaults["provider"] == "auto" and defaults["model"] == "" and "fallback_chain" not in defaults
+
+
+def test_aux_task_registration_works_on_hosts_without_defaults(ctx, monkeypatch):
+    seen = {}
+
+    def old_api(key, *, display_name, description):
+        seen[key] = display_name
+    monkeypatch.setattr(ctx, "register_auxiliary_task", old_api)
+    plugin.register(ctx, ROOT)
+    assert seen == {"meeting_scribe": "Meeting Scribe"}

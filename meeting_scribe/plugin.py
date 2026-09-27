@@ -102,9 +102,22 @@ def _command_handler(commands: MeetingCommands, runtime: Runtime, name: str) -> 
     return handler
 
 
+def _register_aux_task(ctx: Any) -> None:
+    """Declare our auxiliary slot with neutral defaults (``auto`` = Hermes' main model, 600 s timeout).
+
+    The user's ``auxiliary.meeting_scribe`` block always wins (Hermes layers these defaults under it);
+    older Hermes without ``defaults=`` gets the bare registration."""
+    from .llm_config import TASK_DEFAULTS
+
+    kw = dict(display_name="Meeting Scribe", description="Meeting notes, decisions and action items from transcripts")
+    try:
+        ctx.register_auxiliary_task(hermes_adapters.AUX_TASK, defaults=dict(TASK_DEFAULTS), **kw)
+    except TypeError:
+        ctx.register_auxiliary_task(hermes_adapters.AUX_TASK, **kw)
+
+
 def register(ctx: Any, plugin_root: Path) -> Runtime:
-    ctx.register_auxiliary_task(hermes_adapters.AUX_TASK, display_name="Meeting Scribe",
-                                description="Meeting notes, decisions and action items from transcripts")
+    _register_aux_task(ctx)
     runtime = Runtime(build_host(ctx))
     RUNTIMES[id(ctx)] = runtime
     on_unload = getattr(ctx, "on_unload", None)

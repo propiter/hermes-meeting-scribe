@@ -165,7 +165,9 @@ class Runtime:
             if path not in self._services:
                 stages = Stages(repo=repo, layout=self.layout(), settings=self.settings,
                                 transcriber=SubprocessTranscriber(self.settings, self.ffmpeg),
-                                analyzer=LlmAnalyzer(HermesStructuredLLM(self.host.llm), self.settings),
+                                analyzer=LlmAnalyzer(HermesStructuredLLM(
+                                    self.host.llm, timeout=lambda: self.settings().analysis_timeout_seconds,
+                                    max_tokens=lambda: self.settings().analysis_max_tokens), self.settings),
                                 catalogs=self.catalogs, sinks=self.sinks,
                                 archiver=make_archiver(self.settings, self.ffmpeg))
                 runner = PipelineRunner(repo, stages, clock=self.clock, spawner=self.host.spawner,
