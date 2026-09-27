@@ -17,7 +17,7 @@ policy; not retried until the next poll); 429/5xx/network → :class:`MeetRetryL
 from __future__ import annotations
 
 import urllib.parse
-from typing import Any, Iterator, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping, Optional
 
 from .http import Response, Transport, TransportError, UrllibTransport
 from .oauth import GoogleCredentials
@@ -30,6 +30,10 @@ class MeetApiError(RuntimeError):
     def __init__(self, message: str, *, status: int = 0) -> None:
         super().__init__(message)
         self.status = status
+
+
+class SyncStopped(Exception):
+    """The caller asked to stop (plugin unload): abandon the pass between two requests."""
 
 
 class MeetAuthError(MeetApiError):
@@ -62,6 +66,7 @@ class MeetClient:
         self.creds = creds
         self.transport = transport or creds.transport or UrllibTransport()
         self.base_url = base_url.rstrip("/") + "/"
+        self.should_stop: Callable[[], bool] = lambda: False  # checked before every page request
 
     # -- plumbing -----------------------------------------------------------------------------
     def _url(self, path: str, params: Optional[Mapping[str, Any]] = None) -> str:
@@ -100,6 +105,8 @@ class MeetClient:
     def paged(self, path: str, key: str, params: Optional[Mapping[str, Any]] = None) -> Iterator[dict[str, Any]]:
         token: Optional[str] = None
         for _ in range(MAX_PAGES):
+            if self.should_stop():
+                raise SyncStopped(path)
             data = self.get(path, {**dict(params or {}), "pageToken": token})
             yield from (x for x in data.get(key) or () if isinstance(x, dict))
             token = data.get("nextPageToken")

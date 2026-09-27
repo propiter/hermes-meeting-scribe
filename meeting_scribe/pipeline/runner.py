@@ -68,6 +68,7 @@ class PipelineRunner:
     LEASE_SECONDS = 180.0
     HEARTBEAT_SECONDS = 30.0
     RECLAIM_SECONDS = 60.0  # how often the worker loop re-checks for expired/orphaned leases
+    STRAGGLER_AGE_SECONDS = 600.0  # a resumable row without a job, untouched this long, is re-queued
 
     def __init__(self, repo: Repository, stages: Stages, *, clock: Clock, spawner: Spawner = _thread_spawner,
                  max_attempts: int = 3, backoff: Sequence[float] = (60, 300, 900),
@@ -196,6 +197,27 @@ class PipelineRunner:
             if meeting is not None and meeting.state in _IN_PROGRESS:
                 self.stages.persist(_in_progress_rewind(meeting))
             log.warning("meeting-scribe: took back abandoned job for meeting %s", meeting_id)
+        self._requeue_stragglers(time.time())  # meetings.updated_at is wall-clock time
+
+    def _requeue_stragglers(self, now: float) -> None:
+        """Rows waiting for a stage that have NO job at all (a crash between an import's commit and
+        its enqueue, or a job row lost otherwise): queue the next stage. Light: one indexed query for
+        the handful of non-terminal rows; rows touched recently are left alone (may be mid-write)."""
+        waiting = (MeetingState.CAPTURED, MeetingState.TRANSCRIBED, MeetingState.ANALYZED)
+        try:
+            active = {j.meeting_id for j in self.repo.list_jobs(("queued", "running"))}
+            for meeting_id in self.repo.meetings_without_job(waiting, updated_before=now - self.STRAGGLER_AGE_SECONDS):
+                if meeting_id in active:
+                    continue
+                meeting = self.repo.get_meeting(meeting_id)
+                stage = stage_after(meeting.state) if meeting is not None else None
+                if stage is None:
+                    continue
+                self.repo.enqueue_job(meeting_id, effective_stage(meeting, stage), now=self.clock.now())
+                log.warning("meeting-scribe: re-queued meeting %s (%s) that had no job", meeting_id,
+                            meeting.state.value)
+        except Exception:  # never let housekeeping break the worker
+            log.exception("meeting-scribe: straggler sweep failed")
 
     def _heartbeat(self, job_id: int, stop: threading.Event) -> None:
         """Keep our lease fresh while a (possibly hours-long) stage runs."""

@@ -10,7 +10,9 @@ Phase B buttons call ``approve_item`` / ``dismiss_item`` / ``approve_all`` / ``s
 """
 from __future__ import annotations
 
+import logging
 import shutil
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
@@ -18,14 +20,16 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from ..analyze.projects import find_candidate, gather_candidates
 from ..config import Settings
 from ..domain.models import (
-    ActionItem, ActionStatus, Candidate, Meeting, MeetingState, SinkResult, Speaker, Stage, Utterance,
+    SOURCE_DISCORD, ActionItem, ActionStatus, Candidate, Meeting, MeetingState, SinkResult, Speaker, Stage, Utterance,
 )
 from ..domain.ports import Clock, ProjectCatalog
-from ..storage.artifacts import read_notes, write_meta, write_notes, write_transcript, write_transcript_md
+from ..storage.artifacts import read_meta, read_notes, write_meta, write_notes, write_transcript, write_transcript_md
 from ..storage.layout import Layout
 from ..storage.repo import Repository
 from .runner import PipelineRunner, effective_stage
 from .task_moves import apply_move
+
+log = logging.getLogger(__name__)
 
 
 class MeetingService:
@@ -109,14 +113,42 @@ class MeetingService:
         folder = self.layout.meeting_folder(meeting)
         folder.mkdir(parents=True, exist_ok=True)
         meeting = replace(meeting, folder=self.layout.relative(folder))
+        write_meta(folder, meeting)  # FIRST: a crash leftover is recognisable (clean_import_leftovers)
         write_transcript(folder, utterances)
         write_transcript_md(folder, meeting, utterances, meeting.language or self.settings().ui_language)
-        write_meta(folder, meeting)  # before the row: a committed row always has its files
+        # all files exist before the row: a committed row always has its transcript
         if not self.repo.create_imported_meeting(meeting, utterances):
             shutil.rmtree(folder, ignore_errors=True)
             return None
         self.runner.enqueue(meeting.id, Stage.ANALYZE)
         return meeting
+
+    def clean_import_leftovers(self, *, older_than: float = 3600.0) -> int:
+        """Remove folders of imports that crashed after writing files but before committing the row.
+
+        Only folders whose ``meta.json`` says ``source != discord`` and whose meeting id has no row
+        are touched, and only when older than ``older_than`` seconds (another process may be
+        importing right now). Returns how many were removed.
+        """
+        root = self.layout.meetings_dir()
+        if not root.is_dir():
+            return 0
+        cutoff = time.time() - older_than
+        removed = 0
+        for meta_path in root.glob("*/*/*/meta.json"):
+            folder = meta_path.parent
+            try:
+                if folder.stat().st_mtime > cutoff:
+                    continue
+                meta = read_meta(folder)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if meta is None or meta.source == SOURCE_DISCORD or self.repo.get_meeting(meta.id) is not None:
+                continue
+            shutil.rmtree(folder, ignore_errors=True)
+            removed += 1
+            log.info("meeting-scribe: removed leftover of an interrupted import: %s", folder)
+        return removed
 
     # -- processing control -------------------------------------------------------------------
     def effective_stage(self, meeting: Meeting, stage: Stage) -> Stage:

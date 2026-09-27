@@ -540,7 +540,15 @@ releases the lease. The poller never runs on the Discord asyncio loop.
   transaction and returns False on conflict. Two pollers, a manual `google sync` and a restart can
   race freely: exactly one insert wins, losers delete the files they wrote.
 - **Single poller**: `leases` table (`google-meet-poll`, owner = the runner's process owner id,
-  TTL = 3 × interval), renewed every tick; released on stop.
+  TTL = 3 × interval), renewed every tick. `stop()` sets a flag checked between records and before
+  every page request (`SyncStopped`: nothing half-imported, no status written); the poller THREAD
+  releases the lease on exit, on the repository it leased (never through the runtime's factory,
+  whose lock `close()` holds), so a stop that times out never leaves a thread using a closed repo.
+- **Crash leftovers**: `import_transcript` writes `meta.json` first, then the transcript, then the
+  row. Each tick removes folders with a non-discord `meta.json`, no row and older than 1 h
+  (`MeetingService.clean_import_leftovers`). A committed row whose job was never enqueued is
+  re-queued by the worker's periodic sweep (every `RECLAIM_SECONDS`, rows in
+  captured/transcribed/analyzed with no job row and untouched for 10 min), not only at start-up.
 - **Window**: automatic polls import only conferences whose `end_time >= connected_at` (never floods
   Discord with history); `google sync --since/--days` backfills explicitly; always clamped to the
   30-day retention.

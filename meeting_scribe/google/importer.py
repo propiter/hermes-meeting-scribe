@@ -29,7 +29,7 @@ from typing import Any, Callable, Optional
 from ..domain.ids import short_id
 from ..domain.models import SOURCE_GOOGLE_MEET, Meeting, MeetingState
 from . import convert
-from .meet_api import MeetApiError, MeetAuthError, MeetClient, MeetForbidden, MeetRetryLater
+from .meet_api import MeetApiError, MeetAuthError, MeetClient, MeetForbidden, MeetRetryLater, SyncStopped
 from .oauth import GoogleAuthError, GoogleDisconnected
 
 log = logging.getLogger(__name__)
@@ -57,6 +57,7 @@ class SyncReport:
     errors: list[str] = field(default_factory=list)
     would_import: list[str] = field(default_factory=list)   # dry-run
     dry_run: bool = False
+    stopped: bool = False                                   # interrupted by stop(): nothing half-imported
 
     def as_dict(self) -> dict[str, Any]:
         return {"listed": self.listed, "imported": self.imported, "already_imported": self.already,
@@ -100,6 +101,10 @@ class MeetImporter:
 
     def now(self) -> datetime:
         return self._clock()
+
+    def clean_leftovers(self, *, older_than: float) -> int:
+        clean = getattr(self._service(), "clean_import_leftovers", None)
+        return int(clean(older_than=older_than)) if callable(clean) else 0
 
     def backoff_until(self) -> Optional[datetime]:
         """End of a ``Retry-After`` pause requested by Google (429), if one is pending."""
@@ -152,13 +157,15 @@ class MeetImporter:
             self._sync(report, ended_after, dry_run, should_stop)
         except _AbortPass:
             pass
+        except SyncStopped:  # unloading: the record in flight is simply retried by the next process/poll
+            report.stopped = True
         except (GoogleDisconnected, GoogleAuthError, MeetApiError) as exc:
             report.errors.append(_describe(exc))
         except Exception as exc:  # storage locked, a bug in conversion...: reported, never raised
             log.exception("meeting-scribe: Google Meet sync failed")
             report.errors.append(f"{type(exc).__name__}: {exc}")
         finally:
-            if record_status and not dry_run:
+            if record_status and not dry_run and not report.stopped:
                 self._write_status(report)
         return report
 
@@ -194,6 +201,7 @@ class MeetImporter:
             repo.kv_set(KV + "retry_after_until", None)
         for rec in sorted(records, key=lambda r: str(r.get("endTime") or "")):
             if should_stop():
+                report.stopped = True
                 return
             name = str(rec.get("name") or "")
             if not name:
@@ -308,7 +316,15 @@ def _describe(exc: BaseException) -> str:
 
 
 class MeetPoller:
-    """Daemon thread; one per runtime. Only the lease holder syncs."""
+    """Daemon thread; one per runtime. Only the lease holder syncs.
+
+    ``stop()`` sets a flag checked between records and before every page request, so the pass ends
+    at the next request boundary; the THREAD releases the lease when it exits (after its last DB
+    access), never the caller while the thread may still be using the repository.
+    """
+
+    FIRST_DELAY = 5.0  # first poll shortly after start, not in the middle of startup
+    LEFTOVER_AGE_SECONDS = 3600.0  # import folders without a row older than this are crash leftovers
 
     def __init__(self, *, importer: Callable[[], Optional[MeetImporter]], repo: Callable[[], Any],
                  settings: Callable[[], Any], connected_at: Callable[[], Optional[float]], owner: str,
@@ -322,6 +338,7 @@ class MeetPoller:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self._leased_repo: Any = None  # the repository the lease was taken on (released on that one)
 
     @property
     def running(self) -> bool:
@@ -346,8 +363,18 @@ class MeetPoller:
             thread, self._thread = self._thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout)
+            if thread.is_alive():  # finishing its in-flight request; it releases the lease itself
+                log.info("meeting-scribe: Google Meet poller still finishing a request; it will exit on its own")
+                return
+        self._release()
+
+    def _release(self) -> None:
+        # Never call the ``repo`` factory here: on unload the runtime holds its lock while stopping us.
+        repo, self._leased_repo = self._leased_repo, None
+        if repo is None:
+            return
         try:
-            self._repo().release_lease(LEASE, self.owner)
+            repo.release_lease(LEASE, self.owner)
         except Exception:  # repo already closed on unload
             pass
 
@@ -358,6 +385,7 @@ class MeetPoller:
         repo = self._repo()
         if not repo.acquire_lease(LEASE, self.owner, ttl=self.interval() * 3):
             return None
+        self._leased_repo = repo
         importer = self._importer()
         if importer is None:
             return None
@@ -365,11 +393,21 @@ class MeetPoller:
         if pause is not None and pause > importer.now():
             log.info("meeting-scribe: Google asked to retry after %s; skipping this poll", pause.isoformat())
             return None
+        try:  # crash leftovers of an earlier import (files written, row never committed)
+            importer.clean_leftovers(older_than=self.LEFTOVER_AGE_SECONDS)
+        except Exception as exc:
+            log.info("meeting-scribe: import leftover cleanup skipped: %s", exc)
         start = importer.window_start(connected_at=self._connected_at())
-        return importer.sync(ended_after=start)
+        return importer.sync(ended_after=start, should_stop=self._stop.is_set)
 
     def _loop(self) -> None:
-        delay = 5.0  # first poll shortly after connect, not in the middle of startup
+        try:
+            self._poll_forever()
+        finally:
+            self._release()
+
+    def _poll_forever(self) -> None:
+        delay = self.FIRST_DELAY
         while not self._stop.wait(delay):
             delay = self.interval()
             try:

@@ -271,6 +271,16 @@ class Repository(JobsMixin, DeliveriesMixin):
                        (needle.replace("%", "\\%").replace("_", "\\_") + "%",)).fetchall()
         return Meeting.from_dict(json.loads(rows[0]["data"])) if len(rows) == 1 else None
 
+    def meetings_without_job(self, states: Iterable[MeetingState], *, updated_before: float) -> list[str]:
+        """Ids of meetings in ``states`` with no job row, whose row was last written before the cutoff."""
+        wanted = [s.value for s in states]
+        if not wanted:
+            return []
+        rows = self._x(f"SELECT m.id FROM meetings m LEFT JOIN jobs j ON j.meeting_id = m.id"
+                       f" WHERE m.state IN ({','.join('?' * len(wanted))}) AND j.id IS NULL AND m.updated_at < ?",
+                       (*wanted, float(updated_before))).fetchall()
+        return [r["id"] for r in rows]
+
     def list_meetings(self, limit: int = 20, states: Optional[Iterable[MeetingState]] = None) -> list[Meeting]:
         wanted = [s.value for s in states] if states is not None else None
         if wanted is not None and not wanted:
