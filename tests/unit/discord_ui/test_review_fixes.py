@@ -101,10 +101,9 @@ async def test_retry_after_partial_post_does_not_duplicate_messages(sink_env, mo
     assert len(json.loads(row["external_id"])["messages"]) == 1  # the header is remembered
     r2 = await asyncio.to_thread(sink.deliver, env.meeting, env.notes, folder)
     assert r2.ok, r2.errors
-    specs = sink.render(env.meeting, env.notes)
-    assert len(env.ch.ordered()) == len(specs)  # no orphan duplicate header
+    assert len(env.ch.ordered()) == 1 + len(env.notes.action_items) + 1  # summary, tasks, index: no duplicate
     ptr = json.loads(env.svc.repo.get_delivery("discord", "mtg:k3v7q2ab:notes")["external_id"])
-    assert ptr["messages"] == [m.id for m in env.ch.ordered()]
+    assert ptr["messages"] == [env.ch.ordered()[0].id]
 
 
 # -- S1 / S2 ------------------------------------------------------------------------------------

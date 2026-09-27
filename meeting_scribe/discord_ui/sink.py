@@ -1,41 +1,36 @@
-"""Discord notes sink (DESIGN §8; satisfies :class:`meeting_scribe.sinks.base.DiscordNotesSink`).
+"""Discord notes sink (DESIGN §8, §16; satisfies :class:`meeting_scribe.sinks.base.DiscordNotesSink`).
 
-``deliver`` runs on the pipeline thread: it renders synchronously (SQLite reads, candidate lookup),
-then runs the publishing coroutine on the gateway loop with ``run_coroutine_threadsafe`` and waits
-with a timeout. The result is a mutable pointer ``(sink="discord", key="mtg:<id>:notes")`` holding
-``{"channel", "thread", "messages"}``: a reprocess (or a button click via :meth:`refresh`) edits
-those messages in place, posts extras, deletes surplus, and re-posts only if they were deleted.
+``deliver`` runs on the pipeline thread and hands the publishing coroutine to the gateway loop
+(``run_coroutine_threadsafe``) with a timeout. The layout (summary + task index in the meeting chat,
+one message per task in its project's channel thread, assignee DMs) is built by
+:class:`~meeting_scribe.discord_ui.task_publisher.TaskPublisher`; every message has a pointer in
+``deliveries`` so reprocesses and button clicks edit in place.
 
-Target: ``delivery_discord_channel`` → the voice channel's text chat → Hermes home channel. The
-header goes in the channel; with ``delivery_discord_thread`` the rest goes in a thread started from
-it (voice text chats cannot host threads, so there everything stays in the channel).
-
-Partial posts (review W8): the pointer is persisted after EVERY message sent, so when part N fails
-(429, missing permission, timeout) the retry edits parts 1..N-1 in place and continues with the
-rest instead of posting a duplicate header whose buttons would never be refreshed.
+Loop-side entry points used by the buttons: :meth:`refresh_item` (after an action: that task's
+message, its assignee's DM and the index counts), :meth:`task_panel` (📋 My tasks), :meth:`move_options`
+and :meth:`move_item` (📁).
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Sequence
+from typing import Any, Callable, Optional
 
 from ..config import Settings
-from ..domain.ids import idempotency_key
-from ..domain.models import ActionItem, Meeting, Notes, SinkResult
+from ..domain.models import Meeting, Notes, SinkResult
+from ..domain.names import clean_channel_name
 from ..storage.artifacts import read_notes
-from .render import ButtonSpec, MessageSpec, RenderOptions, render_notes
+from .board import Board, move_options
+from .publisher import Pointers, ViewFactory
+from .render import RenderOptions
+from .render_tasks import render_panel
+from .task_publisher import TaskPublisher
 
 log = logging.getLogger(__name__)
 SINK = "discord"
 
-
-class ViewFactory(Protocol):
-    def view(self, buttons: Sequence[ButtonSpec]) -> Any: ...
-
-    def send_kwargs(self) -> dict[str, Any]: ...
+__all__ = ["DiscordNotesSink", "ViewFactory", "SINK"]
 
 
 class DiscordNotesSink:
@@ -56,17 +51,11 @@ class DiscordNotesSink:
         return self._settings().delivery_discord_enabled
 
     # -- pipeline thread -----------------------------------------------------------------------
-    def render(self, meeting: Meeting, notes: Notes) -> list[MessageSpec]:
-        stored = {a.id: a for a in self._service().repo.list_action_items(meeting.id)}
-        items: list[ActionItem] = [stored.get(a.id, a) for a in notes.action_items]
-        return render_notes(meeting, notes, items, self._options(meeting))
-
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
         adapter, loop = self._adapter(), self._loop()
         if adapter is None or loop is None or loop.is_closed():
             return SinkResult(SINK, False, errors=("discord not connected yet; will retry",))
-        specs = self.render(meeting, notes)
-        fut = asyncio.run_coroutine_threadsafe(self.publish(meeting, specs), loop)
+        fut = asyncio.run_coroutine_threadsafe(self.publish(meeting, notes), loop)
         try:
             url = fut.result(self._timeout)
         except Exception as exc:  # timeout, permissions, unknown channel: reported, the job retries
@@ -75,19 +64,15 @@ class DiscordNotesSink:
         return SinkResult(SINK, True, (url,))
 
     # -- gateway loop ---------------------------------------------------------------------------
-    async def refresh(self, meeting_id: str) -> None:
-        """Re-render after a button action (status icons, remaining buttons) — runs on the loop."""
-        svc = self._service()
-        meeting = await asyncio.to_thread(svc.repo.get_meeting, meeting_id)
-        if meeting is None:
-            return
-        notes = await asyncio.to_thread(read_notes, svc.folder(meeting))
-        if notes is None:
-            return
-        specs = await asyncio.to_thread(self.render, meeting, notes)
-        await self.publish(meeting, specs)
+    def _publisher(self, meeting: Meeting) -> TaskPublisher:
+        adapter = self._adapter()
+        if adapter is None:
+            raise ConnectionError("discord not connected")
+        return TaskPublisher(adapter=adapter, views=self._views, settings=self._settings(),
+                             repo=self._service().repo, options=self._options(meeting), targets=self._targets)
 
-    def _targets(self, meeting: Meeting, adapter: Any) -> list[str]:
+    def _targets(self, meeting: Meeting) -> list[str]:
+        adapter = self._adapter()
         home = getattr(getattr(getattr(adapter, "config", None), "home_channel", None), "chat_id", None)
         out: list[str] = []
         for cid in (self._settings().delivery_discord_channel, meeting.text_channel_id, meeting.channel_id, home):
@@ -95,88 +80,70 @@ class DiscordNotesSink:
                 out.append(str(cid))
         return out
 
-    async def _resolve_target(self, meeting: Meeting, adapter: Any) -> Any:
-        for cid in self._targets(meeting, adapter):
-            try:
-                return await adapter._resolve_channel(cid)
-            except Exception as exc:  # deleted channel, missing access: try the next fallback
-                log.info("meeting-scribe: notes channel %s unavailable: %s", cid, exc)
-        raise LookupError("no reachable Discord channel for notes (delivery_discord_channel / voice chat / home)")
+    async def publish(self, meeting: Meeting, notes: Notes) -> str:
+        return await self._publisher(meeting).publish(meeting, notes, send_dms=True)
 
-    async def publish(self, meeting: Meeting, specs: Sequence[MessageSpec]) -> str:
-        adapter = self._adapter()
-        if adapter is None:
-            raise ConnectionError("discord not connected")
-        key = idempotency_key(meeting.id, "notes")
+    async def _load(self, meeting_id: str) -> Optional[tuple[Meeting, Notes]]:
         svc = self._service()
-        row = await asyncio.to_thread(svc.repo.get_delivery, SINK, key)
-        pointer = json.loads(row["external_id"]) if row and row.get("external_id") else None
-
-        async def save(ptr: dict, url: str) -> None:
-            await asyncio.to_thread(svc.repo.upsert_delivery, meeting.id, SINK, key,
-                                    external_id=json.dumps(ptr), url=url)
-
-        result = await self._edit(adapter, pointer, specs, save) if pointer else None
-        if result is None:
-            result = await self._post(meeting, adapter, specs, save)
-        ptr, url = result
-        await save(ptr, url)
-        return url
-
-    async def _post(self, meeting: Meeting, adapter: Any, specs: Sequence[MessageSpec],
-                    save: Callable[[dict, str], Any]) -> tuple[dict, str]:
-        channel = await self._resolve_target(meeting, adapter)
-        first = await channel.send(specs[0].content, view=self._views.view(specs[0].buttons),
-                                   **self._views.send_kwargs())
-        await save({"channel": channel.id, "thread": None, "messages": [first.id]}, first.jump_url)
-        target, thread_id = channel, None
-        if len(specs) > 1 and self._settings().delivery_discord_thread:
-            try:
-                title = (meeting.title or meeting.channel_name or "meeting")[:90]
-                thread = await first.create_thread(name=f"🎙️ {title}", auto_archive_duration=1440)
-                target, thread_id = thread, thread.id
-                await save({"channel": channel.id, "thread": thread_id, "messages": [first.id]}, first.jump_url)
-            except Exception as exc:  # voice text chats / missing Create Public Threads: stay in channel
-                log.info("meeting-scribe: no thread for notes (%s); posting in channel", exc)
-        ids = [first.id]
-        for spec in specs[1:]:
-            msg = await target.send(spec.content, view=self._views.view(spec.buttons), **self._views.send_kwargs())
-            ids.append(msg.id)
-            await save({"channel": channel.id, "thread": thread_id, "messages": list(ids)}, first.jump_url)
-        return {"channel": channel.id, "thread": thread_id, "messages": ids}, first.jump_url
-
-    async def _edit(self, adapter: Any, ptr: dict, specs: Sequence[MessageSpec],
-                    save: Callable[[dict, str], Any]) -> Optional[tuple[dict, str]]:
-        """Edit the stored messages in place; ``None`` means "gone, post again"."""
-        try:
-            channel = await adapter._resolve_channel(ptr["channel"])
-            thread = await adapter._resolve_channel(ptr["thread"]) if ptr.get("thread") else channel
-            ids: list[int] = list(ptr.get("messages") or [])
-            if not ids:
-                return None
-            first = channel.get_partial_message(ids[0])
-            await first.edit(content=specs[0].content, view=self._views.view(specs[0].buttons))
-        except Exception as exc:  # message/channel deleted: publish a fresh copy
-            log.info("meeting-scribe: stored notes message unavailable (%s); re-posting", exc)
+        meeting = await asyncio.to_thread(svc.repo.get_meeting, meeting_id)
+        if meeting is None:
             return None
-        kept = [ids[0]]
-        url = getattr(first, "jump_url", "") or ""
-        for i, spec in enumerate(specs[1:], start=1):
-            view = self._views.view(spec.buttons)
-            if i < len(ids):
-                try:
-                    await thread.get_partial_message(ids[i]).edit(content=spec.content, view=view)
-                    kept.append(ids[i])
-                    continue
-                except Exception as exc:
-                    log.info("meeting-scribe: notes part %s gone (%s); sending a new one", ids[i], exc)
-            msg = await thread.send(spec.content, view=view, **self._views.send_kwargs())
-            kept.append(msg.id)
-            await save({"channel": ptr["channel"], "thread": ptr.get("thread"),
-                        "messages": kept + ids[i + 1:]}, url)
-        for surplus in ids[len(specs):]:
-            try:
-                await thread.get_partial_message(surplus).delete()
-            except Exception as exc:
-                log.info("meeting-scribe: could not delete surplus notes message %s: %s", surplus, exc)
-        return {"channel": ptr["channel"], "thread": ptr.get("thread"), "messages": kept}, url
+        notes = await asyncio.to_thread(read_notes, svc.folder(meeting))
+        return (meeting, notes) if notes is not None else None
+
+    async def board(self, meeting_id: str) -> Optional[tuple[TaskPublisher, Board]]:
+        loaded = await self._load(meeting_id)
+        if loaded is None:
+            return None
+        pub = self._publisher(loaded[0])
+        return pub, await pub.board(*loaded)
+
+    async def refresh(self, meeting_id: str) -> None:
+        """Re-render everything of a meeting in place (edits; nothing new is DMed)."""
+        loaded = await self._load(meeting_id)
+        if loaded is not None:
+            await self._publisher(loaded[0]).publish(*loaded, send_dms=False)
+
+    async def refresh_item(self, meeting_id: str, item_id: str) -> None:
+        """After a button action: that task's message, its assignee's DM panel and the index counts."""
+        got = await self.board(meeting_id)
+        if got is None:
+            return
+        pub, board = got
+        view = board.view(item_id)
+        ptrs = Pointers(pub.repo, meeting_id)
+        if view is None or not await pub.edit_task(board.meeting, view, ptrs):
+            await self.refresh(meeting_id)
+            return
+        if view.item.owner_speaker_id and pub.settings.delivery_dm_assignees:
+            await pub.dm(board, view.item.owner_speaker_id, ptrs, send=False)
+        await pub.refresh_index(board, ptrs)
+
+    async def task_panel(self, meeting_id: str, user_id: str, scope: str, page: int, *, is_owner: bool) -> Any:
+        got = await self.board(meeting_id)
+        if got is None:
+            raise LookupError(meeting_id)
+        pub, board = got
+        panel = render_panel(board.meeting, board.views, user_id=user_id, scope=scope, page=page, o=pub.o,
+                             is_owner=is_owner)
+        return self._views.panel_view(panel)
+
+    async def move_options(self, meeting_id: str, item_id: str) -> list[tuple[str, str]]:
+        got = await self.board(meeting_id)
+        if got is None:
+            raise LookupError(meeting_id)
+        return move_options(got[1], item_id, self._settings().channel_name_ignore_prefixes)
+
+    async def move_item(self, meeting_id: str, item_id: str, channel_id: str) -> str:
+        """📁: file the task under ``channel_id`` (learned), re-post it there, delete the old message."""
+        got = await self.board(meeting_id)
+        if got is None:
+            raise LookupError(meeting_id)
+        pub, board = got
+        chan = next((c for c in board.channels if c.id == str(channel_id) and c.kind != "category"), None)
+        if chan is None or not chan.can_post:
+            raise LookupError(f"channel {channel_id} is not available")
+        name = clean_channel_name(chan.name, self._settings().channel_name_ignore_prefixes) or chan.name
+        await asyncio.to_thread(self._service().move_item, meeting_id, item_id, chan.id, name)
+        await self.refresh(meeting_id)
+        return f"<#{chan.id}>"

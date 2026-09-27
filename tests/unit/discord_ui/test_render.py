@@ -6,16 +6,8 @@ from dataclasses import replace
 import pytest
 
 from meeting_scribe.discord_ui.render import (
-    EMBED_LIMIT, MESSAGE_LIMIT, RenderOptions, custom_id, parse_custom_id, render_notes, split_text,
+    EMBED_LIMIT, MESSAGE_LIMIT, custom_id, parse_custom_id, render_header, split_text,
 )
-from meeting_scribe.domain.models import ActionItem, ActionStatus
-
-
-def opts(**kw):
-    base = dict(lang="en", kanban_on=True, linear_on=False, is_owner_item=lambda i: i.owner_speaker_id == "11",
-                has_candidates=True)
-    base.update(kw)
-    return RenderOptions(**base)
 
 
 def test_split_text_respects_limit_and_keeps_all_content():
@@ -49,70 +41,38 @@ def test_custom_id_roundtrip_and_rejects_garbage():
 
 
 def test_summary_message_has_tldr_decisions_questions(meeting, notes):
-    msgs = render_notes(meeting, notes, list(notes.action_items), opts())
+    msgs = render_header(meeting, notes, "en")
     head = msgs[0].content
     assert "Migración SMTP" in head and "Migrar a SES." in head
     assert "Usar SES" in head and "¿Presupuesto?" in head
-    assert all(len(m.content) <= MESSAGE_LIMIT for m in msgs)
+    assert all(len(m.content) <= MESSAGE_LIMIT and m.buttons == () for m in msgs)
 
 
-def test_action_items_grouped_by_person_with_mentions(meeting, notes):
-    msgs = render_notes(meeting, notes, list(notes.action_items), opts())
-    body = "\n".join(m.content for m in msgs)
-    assert "<@11>" in body and "Enviar credenciales" in body
-    assert body.index("<@11>") < body.index("Enviar credenciales") < body.index("Unassigned") < body.index(
-        "Revisar costos")
+def test_summary_no_longer_lists_tasks_or_button_rows(meeting, notes):
+    """0.1 appended every task and then all button rows; tasks now get one message each (§16)."""
+    body = "\n".join(m.content for m in render_header(meeting, notes, "en"))
+    assert "Enviar credenciales" not in body and "Revisar costos" not in body
 
 
-def test_buttons_per_item_owner_kanban_only_and_linear_when_active(meeting, notes):
-    msgs = render_notes(meeting, notes, list(notes.action_items), opts(linear_on=True))
-    ids = [b.custom_id for m in msgs for b in m.buttons]
-    assert "mscribe:ok:k3v7q2ab:a0000000001" in ids      # owner item → Kanban
-    assert "mscribe:ok:k3v7q2ab:a0000000002" not in ids  # not owner → no Kanban button
-    assert "mscribe:lin:k3v7q2ab:a0000000002" in ids and "mscribe:no:k3v7q2ab:a0000000002" in ids
-    bulk = msgs[-1]
-    assert {b.custom_id for b in bulk.buttons} == {"mscribe:allk:k3v7q2ab:all", "mscribe:alll:k3v7q2ab:all",
-                                                   "mscribe:prj:k3v7q2ab:all"}
-
-
-def test_no_linear_buttons_when_inactive_and_no_kanban_when_off(meeting, notes):
-    msgs = render_notes(meeting, notes, list(notes.action_items), opts(kanban_on=False))
-    ids = " ".join(b.custom_id for m in msgs for b in m.buttons)
-    assert ":lin:" not in ids and ":alll:" not in ids and ":ok:" not in ids and ":allk:" not in ids
-    assert ":no:" in ids
-
-
-def test_status_is_shown_and_finished_items_have_no_buttons(meeting, notes):
-    items = [replace(notes.action_items[0], status=ActionStatus.DELIVERED),
-             replace(notes.action_items[1], status=ActionStatus.DISMISSED)]
-    msgs = render_notes(meeting, notes, items, opts(linear_on=True))
-    body = "\n".join(m.content for m in msgs)
-    assert "✅" in body and "~~Revisar costos~~" in body
-    per_item = [b for m in msgs[:-1] for b in m.buttons]
-    assert per_item == []
-
-
-def test_many_items_split_into_messages_with_at_most_five_rows(meeting, notes):
-    items = tuple(ActionItem(id=f"a{i:010d}", title=f"Task {i} " + "d" * 150, owner_speaker_id="11",
-                             owner_name="Luis") for i in range(23))
-    n = replace(notes, action_items=items)
-    msgs = render_notes(meeting, n, list(items), opts(linear_on=True))
-    for m in msgs:
-        assert len(m.content) <= MESSAGE_LIMIT
-        assert len({b.row for b in m.buttons}) <= 5 and len(m.buttons) <= 25
-    ids = [b.custom_id for m in msgs for b in m.buttons if b.custom_id.startswith("mscribe:no:")]
-    assert len(ids) == 23
+def test_long_summary_is_split_under_the_limit(meeting, notes):
+    n = replace(notes, decisions=tuple(f"Decision {i} " + "x" * 150 for i in range(40)))
+    msgs = render_header(meeting, n, "en")
+    assert len(msgs) > 1 and all(len(m.content) <= MESSAGE_LIMIT for m in msgs)
 
 
 def test_partial_meeting_and_empty_sections(meeting, notes):
     n = replace(notes, decisions=(), open_questions=(), action_items=())
-    msgs = render_notes(replace(meeting, partial=True), n, [], opts())
-    body = "\n".join(m.content for m in msgs)
+    body = "\n".join(m.content for m in render_header(replace(meeting, partial=True), n, "en"))
     assert "interrupted" in body and "None." in body
-    assert all(":allk:" not in b.custom_id for m in msgs for b in m.buttons)
+
+
+def test_custom_ids_of_the_new_actions_fit_discord_limits():
+    for action, item in (("mine", "all"), ("pg", "m12"), ("pg", "a0"), ("tsel", "a0123456789")):
+        cid = custom_id(action, "k3v7q2ab", item)
+        assert parse_custom_id(cid) == (action, "k3v7q2ab", item) and len(cid) < 100
 
 
 @pytest.mark.parametrize("lang", ["en", "es"])
 def test_language(meeting, notes, lang):
-    msgs = render_notes(meeting, notes, list(notes.action_items), opts(lang=lang))
+    msgs = render_header(meeting, notes, lang)
     assert ("Decisiones" in msgs[0].content) == (lang == "es")

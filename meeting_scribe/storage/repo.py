@@ -233,6 +233,11 @@ class Repository(JobsMixin, DeliveriesMixin):
         row = self._x("SELECT * FROM action_items WHERE meeting_id=? AND id=?", (meeting_id, item_id)).fetchone()
         return self._item(row) if row else None
 
+    def update_action_item(self, meeting_id: str, item: ActionItem) -> None:
+        """Replace an item's data (e.g. a 📁 move) without touching its human decision (status)."""
+        self._x("UPDATE action_items SET data=? WHERE meeting_id=? AND id=?",
+                (json.dumps(item.to_dict(), ensure_ascii=False), meeting_id, item.id))
+
     def set_action_status(self, meeting_id: str, item_id: str, status: ActionStatus) -> None:
         self._x("UPDATE action_items SET status=? WHERE meeting_id=? AND id=?", (status.value, meeting_id, item_id))
 

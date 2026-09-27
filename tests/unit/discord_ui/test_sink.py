@@ -74,10 +74,12 @@ async def test_posts_in_voice_text_chat_without_thread_and_records_pointer(env):
     assert res.ok, res.errors
     msgs = env["voice"].ordered()
     assert "Migración SMTP" in msgs[0].content and any("<@11>" in m.content for m in msgs)
-    assert "mscribe:ok:k3v7q2ab:a0000000001" in msgs[1].view
+    task = next(m for m in msgs if "Enviar credenciales" in m.content)
+    assert "mscribe:ok:k3v7q2ab:a0000000001" in task.view and all(c.endswith("a0000000001") for c in task.view)
+    assert msgs[-1].view == ("mscribe:mine:k3v7q2ab:all",)  # the index closes the meeting chat
     row = env["svc"].repo.get_delivery("discord", "mtg:k3v7q2ab:notes")
     ptr = json.loads(row["external_id"])
-    assert ptr["channel"] == 200 and ptr["thread"] is None and len(ptr["messages"]) == len(msgs)
+    assert ptr["channel"] == 200 and ptr["thread"] is None and ptr["messages"] == [msgs[0].id]
     assert row["url"] == msgs[0].jump_url
 
 
@@ -85,9 +87,9 @@ async def test_configured_channel_gets_header_plus_thread(env):
     env["cfg"]["delivery_discord_channel"] = "300"
     res = await deliver(env)
     assert res.ok
-    assert len(env["notes_ch"].ordered()) == 1  # header in channel, details in its thread
+    assert len(env["notes_ch"].ordered()) == 2  # summary + index in the channel, tasks in its thread
     threads = [c for c in env["adapter"]._client.channels.values() if c.parent is env["notes_ch"]]
-    assert len(threads) == 1 and len(threads[0].ordered()) >= 1
+    assert len(threads) == 1 and len(threads[0].ordered()) == 2
     assert json.loads(env["svc"].repo.get_delivery("discord", "mtg:k3v7q2ab:notes")["external_id"])["thread"] == threads[0].id
 
 
@@ -122,7 +124,9 @@ async def test_reprocess_with_fewer_messages_deletes_surplus(env):
         env["svc"].repo.set_action_status(env["meeting"].id, item.id, item.status)
     env["svc"].repo.sync_action_items(env["meeting"].id, ())
     await deliver(env)
-    assert len(env["voice"].ordered()) < before
+    after = env["voice"].ordered()
+    assert len(after) == before - 2 and not any("Enviar credenciales" in m.content for m in after)
+    assert env["svc"].repo.list_deliveries(env["meeting"].id, sink="discord", prefix="mtg:k3v7q2ab:task:") == []
 
 
 async def test_deleted_messages_are_reposted(env):
