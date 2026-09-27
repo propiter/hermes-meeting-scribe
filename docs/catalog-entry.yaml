@@ -1,0 +1,24 @@
+# Draft entry for NousResearch/hermes-agent → plugin-catalog/meeting-scribe.yaml
+# Schema: plugin-catalog/README.md ("Entry schema"). Before opening the catalog PR, replace `sha`
+# with the full 40-character commit of the release (git rev-parse v0.1.0^{commit}) and re-run
+# `hermes plugins validate` on a clone checked out at that commit.
+name: meeting-scribe
+repo: https://github.com/propiter/hermes-meeting-scribe
+sha: "0000000000000000000000000000000000000000"  # TODO: pin the pushed release commit
+description: "Disclosure — records Discord voice audio per speaker and stores it locally (never uploaded); downloads the chosen faster-whisper model from Hugging Face on first use; sends transcript text to your configured Hermes LLM; optional Linear API calls (LINEAR_API_KEY or an allowlisted linear MCP server); writes tasks to your Hermes Kanban board; optionally copies notes into an Obsidian vault. Records Discord meetings per speaker, transcribes locally and turns them into notes, decisions and tasks."
+maintainer: propiter
+tier: community
+category: voice
+requires_hermes: ">=0.21"
+docs_url: https://github.com/propiter/hermes-meeting-scribe#readme
+version: "0.1.0"
+platforms:
+- linux
+- macos
+capabilities:
+  provides_tools:
+  - meeting_search
+  - meeting_get
+  provides_hooks: []
+  provides_middleware: []
+  requires_env: []
