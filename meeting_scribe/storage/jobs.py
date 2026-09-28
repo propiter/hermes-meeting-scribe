@@ -102,9 +102,14 @@ class JobsMixin:
         row = self._x("SELECT * FROM jobs WHERE meeting_id=?", (meeting_id,)).fetchone()
         return self._job(row) if row else None
 
-    def list_jobs(self, states: Sequence[str] = ("queued", "running", "failed")) -> list[Job]:
-        rows = self._x(f"SELECT * FROM jobs WHERE state IN ({','.join('?' * len(states))}) ORDER BY id",
-                       tuple(states)).fetchall()
+    def list_jobs(self, states: Sequence[str] = ("queued", "running", "failed"), *,
+                  space: Optional[str] = None) -> list[Job]:
+        """Jobs in ``states``; with ``space``, only that space's meetings (the queue itself is shared)."""
+        where, params = f"state IN ({','.join('?' * len(states))})", list(states)
+        if space is not None:
+            where += " AND meeting_id IN (SELECT id FROM meetings WHERE space=?)"
+            params.append(space)
+        rows = self._x(f"SELECT * FROM jobs WHERE {where} ORDER BY id", tuple(params)).fetchall()
         return [self._job(r) for r in rows]
 
     def claim_job(self, job_id: int, *, now: datetime, owner: Optional[str] = None) -> bool:
@@ -172,5 +177,8 @@ class JobsMixin:
         return self._x("UPDATE jobs SET state='queued', owner=NULL, heartbeat=NULL, next_retry_at=NULL"
                        " WHERE state='running'").rowcount
 
-    def pending_job_count(self) -> int:
-        return int(self._x("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0])
+    def pending_job_count(self, space: Optional[str] = None) -> int:
+        if space is None:
+            return int(self._x("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0])
+        return int(self._x("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running') AND meeting_id IN"
+                           " (SELECT id FROM meetings WHERE space=?)", (space,)).fetchone()[0])

@@ -29,6 +29,14 @@ class SpaceError(ValueError):
     """A space operation that cannot be done (unknown slug, taken server, not empty...)."""
 
 
+class SpaceAmbiguous(SpaceError):
+    """Several spaces exist and the request did not say which one (nothing is shown by default)."""
+
+
+class GuildUnassigned(SpaceError):
+    """A Discord server that belongs to no space: nothing is recorded, published or shown for it."""
+
+
 def check_slug(slug: str) -> str:
     value = (slug or "").strip().lower()
     if not SLUG_RE.match(value):
@@ -104,12 +112,22 @@ class Spaces:
             return spaces[0]
         if not spaces:
             raise SpaceError("no space exists yet")
-        raise SpaceError("several spaces exist; choose one with --space (" +
+        raise SpaceAmbiguous("several spaces exist; choose one (" +
                          ", ".join(s.slug for s in spaces) + ")")
 
     def for_guild(self, guild_id: Any) -> Optional[Space]:
         slug = self.repo.space_of_guild(str(guild_id)) if guild_id not in (None, "") else None
         return self.get(slug) if slug else None
+
+    def claim_guild(self, guild_id: Any, name: str = "") -> Optional[str]:
+        """The space that owns server ``guild_id``. A server nobody owns yet joins the ONLY space of an
+        install with one space (a single-team setup keeps recording every server the bot is in, as
+        before spaces); with several spaces it stays unowned (``None``) and is never recorded until
+        an operator assigns it."""
+        gid = str(guild_id or "").strip()
+        if not gid.isdigit():
+            return None
+        return self.repo.claim_guild(gid, name)
 
     def settings(self, space: Optional[str] = None) -> Settings:
         """The global settings, with ``space``'s overrides on top (``None``/"": the global values)."""

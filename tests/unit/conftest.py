@@ -40,7 +40,8 @@ def meeting() -> Meeting:
                    ended_at=datetime(2026, 9, 26, 15, 34, tzinfo=timezone.utc),
                    state=MeetingState.CAPTURED, title="Daily Sync", guild_name="Acme",
                    category_name="Engineering",
-                   speakers=(Speaker("10", "Ana"), Speaker("11", "Luis")))
+                   speakers=(Speaker("10", "Ana"), Speaker("11", "Luis")),
+                   space="main")  # the space bootstrap creates (DESIGN §23)
 
 
 @pytest.fixture

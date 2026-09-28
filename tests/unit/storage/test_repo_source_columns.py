@@ -12,7 +12,6 @@ import pytest
 
 from meeting_scribe.desktop.queries import Library
 from meeting_scribe.domain.models import SOURCE_DISCORD, SOURCE_GOOGLE_MEET, MeetingState
-from meeting_scribe.storage import repo as repo_mod
 from meeting_scribe.storage.repo import Repository
 
 REC = "conferenceRecords/abc-123"
@@ -47,7 +46,7 @@ def test_every_read_takes_source_and_external_id_from_the_columns(imported):
     row = repo._x("SELECT source, external_id, json_extract(data, '$.source') AS js FROM meetings").fetchone()
     assert (row["source"], row["external_id"]) == (SOURCE_GOOGLE_MEET, REC)  # the exact production case
     for got in (repo.get_meeting(m.id), repo.find_meeting(m.id), repo.find_meeting("g"),
-                repo.find_by_external(SOURCE_GOOGLE_MEET, REC), repo.list_meetings()[0],
+                repo.find_by_external("main", SOURCE_GOOGLE_MEET, REC), repo.list_meetings()[0],
                 repo.list_meetings(states=[MeetingState.DONE])[0]):
         assert (got.source, got.external_id) == (SOURCE_GOOGLE_MEET, REC)
 
@@ -78,27 +77,6 @@ def test_desktop_library_and_detail_show_the_column_source(imported, tmp_path):
     assert [x["source"] for x in lib.meetings()["items"]] == [SOURCE_GOOGLE_MEET]
     assert [x["id"] for x in lib.meetings(source=SOURCE_GOOGLE_MEET)["items"]] == [m.id]
     assert lib.audio(m.id)["reason"] == "imported"
-
-
-def test_migration_repairs_stale_json_idempotently(tmp_path, meeting):
-    path = tmp_path / "index.sqlite"
-    conn = sqlite3.connect(str(path), isolation_level=None)
-    for version, script in enumerate(repo_mod._MIGRATIONS[:7], start=1):
-        conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version={version};\nCOMMIT;")
-    stale = json.dumps(replace(meeting, id="g1").to_dict())  # source=discord, external_id=None
-    conn.execute("INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at,"
-                 " source, external_id) VALUES ('g1', '1', '2', 'done', '2026-09-01T00:00:00+00:00', 't', '', ?, 0,"
-                 " 'google_meet', ?)", (stale, REC))
-    conn.execute("INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at)"
-                 " VALUES ('d1', '1', '2', 'done', '2026-09-02T00:00:00+00:00', 't', '', ?, 0)",
-                 (json.dumps(replace(meeting, id="d1").to_dict()),))
-    conn.close()
-    for _ in range(2):
-        r = Repository(path)
-        raw = {row["id"]: json.loads(row["data"]) for row in r._x("SELECT id, data FROM meetings").fetchall()}
-        assert (raw["g1"]["source"], raw["g1"]["external_id"]) == (SOURCE_GOOGLE_MEET, REC)
-        assert (raw["d1"]["source"], raw["d1"]["external_id"]) == (SOURCE_DISCORD, None)
-        r.close()
 
 
 def test_persist_writes_meta_json_with_the_column_source(imported, tmp_path):

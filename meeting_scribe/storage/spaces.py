@@ -78,6 +78,23 @@ class SpacesMixin:
                     (str(guild_id), slug, name))
             return None
 
+    def claim_guild(self, guild_id: str, name: str = "") -> Optional[str]:
+        """Owner of ``guild_id``; an unowned server is given to the only space (checked and written in
+        one transaction, so a space created meanwhile can never be bypassed). ``None``: unowned."""
+        owner = self.space_of_guild(guild_id)  # fast path, no write lock: voice events call this often
+        if owner is not None:
+            return owner
+        with self.transaction():
+            owner = self.space_of_guild(guild_id)
+            if owner is not None:
+                return owner
+            rows = self._x("SELECT slug FROM spaces LIMIT 2").fetchall()
+            if len(rows) != 1:
+                return None
+            slug = str(rows[0]["slug"])
+            self._x("INSERT INTO space_guilds (guild_id, space, name) VALUES (?,?,?)", (str(guild_id), slug, name))
+            return slug
+
     def release_guild(self, slug: str, guild_id: str) -> bool:
         return self._x("DELETE FROM space_guilds WHERE guild_id=? AND space=?", (str(guild_id), slug)).rowcount == 1
 
@@ -85,6 +102,8 @@ class SpacesMixin:
         """One-time adoption for a space created from an existing setup: take every listed server no
         other space owns, then clear the flag. The ids taken."""
         taken: list[str] = []
+        if not guilds:  # the bot's servers are not loaded yet: keep the flag for the next connect
+            return taken
         with self.transaction():
             row = self._x("SELECT adopt_guilds FROM spaces WHERE slug=?", (slug,)).fetchone()
             if row is None or not row["adopt_guilds"]:

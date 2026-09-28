@@ -41,19 +41,19 @@ def test_find_by_prefix(repo, meeting):
 def test_fts_search(repo, meeting, utterances):
     repo.save_meeting(meeting)
     repo.replace_utterances(meeting.id, utterances)
-    hits = repo.search("smtp")
+    hits = repo.search("smtp", "main")
     assert len(hits) == 1 and hits[0]["meeting_id"] == meeting.id and hits[0]["speaker"] == "Ana"
-    assert repo.search("credenciales viernes")[0]["t0"] == 3.5
+    assert repo.search("credenciales viernes", "main")[0]["t0"] == 3.5
     repo.replace_utterances(meeting.id, utterances[:1])
-    assert repo.search("credenciales") == []
-    assert repo.search('"; DROP TABLE x; --') == []
-    assert repo.search("") == []
+    assert repo.search("credenciales", "main") == []
+    assert repo.search('"; DROP TABLE x; --', "main") == []
+    assert repo.search("", "main") == []
 
 
 def test_search_accent_insensitive(repo, meeting, utterances):
     repo.save_meeting(meeting)
     repo.replace_utterances(meeting.id, utterances)
-    assert repo.search("migracion")
+    assert repo.search("migracion", "main")
 
 
 def test_jobs_lifecycle(repo, meeting):
@@ -122,25 +122,29 @@ def test_action_items(repo, meeting, notes):
 
 
 def test_links_and_channel_projects(repo):
-    repo.set_link("10", linear_user_id="lin_1", email="ana@x.io", name="Ana")
-    assert repo.get_link("10")["linear_user_id"] == "lin_1"
-    repo.set_link("10", linear_user_id="lin_2")
-    assert repo.get_link("10")["linear_user_id"] == "lin_2" and repo.get_link("10")["email"] == "ana@x.io"
-    assert repo.get_link("99") is None
-    repo.learn_channel_project("200", "hermes:p1", "Website")
-    assert repo.channel_project("200") == {"project_key": "hermes:p1", "project_name": "Website"}
-    assert repo.channel_project("201") is None
-    assert repo.all_channel_projects() == [{"channel_id": "200", "project_key": "hermes:p1",
-                                            "project_name": "Website"}]
+    repo.set_link("main", "10", linear_user_id="lin_1", email="ana@x.io", name="Ana")
+    assert repo.get_link("main", "10")["linear_user_id"] == "lin_1"
+    repo.set_link("main", "10", linear_user_id="lin_2")
+    assert repo.get_link("main", "10")["linear_user_id"] == "lin_2" and repo.get_link("main", "10")["email"] == "ana@x.io"
+    assert repo.get_link("main", "99") is None and repo.get_link("other", "10") is None
+    repo.learn_channel_project("main", "200", "hermes:p1", "Website")
+    assert repo.channel_project("main", "200") == {"project_key": "hermes:p1", "project_name": "Website"}
+    assert repo.channel_project("main", "201") is None
+    assert repo.all_channel_projects("other") == []
+    assert repo.all_channel_projects("main") == [{"channel_id": "200", "project_key": "hermes:p1",
+                                                  "project_name": "Website"}]
 
 
-def test_migration_from_older_version(tmp_path):
+def test_empty_file_gets_the_baseline_without_a_backup(tmp_path):
     import sqlite3
+
+    from meeting_scribe.storage.baseline import backups
     db = tmp_path / "old.sqlite"
-    sqlite3.connect(db).close()
+    sqlite3.connect(db).close()  # user_version 0: a new store, nothing to retire
     r = Repository(db)
-    assert r.user_version() == SCHEMA_VERSION
+    assert r.user_version() == SCHEMA_VERSION and r.retired is None
     r.close()
+    assert backups(tmp_path) == []
 
 
 def test_claim_job_is_exclusive(repo, meeting):
@@ -151,27 +155,6 @@ def test_claim_job_is_exclusive(repo, meeting):
     assert repo.claim_job(job.id, now=NOW) is True
     assert repo.claim_job(job.id, now=NOW) is False
     assert repo.get_job(meeting.id).state == "running"
-
-
-def test_v1_database_migrates_to_leases_and_per_sink_status(tmp_path):
-    """Review findings 1/2/6: schema v2 upgrades a v1 file in place and back-fills delivered items."""
-    import sqlite3
-
-    from meeting_scribe.storage import repo as repo_mod
-
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
-    conn.executescript(repo_mod._V1 + "PRAGMA user_version=1;")
-    conn.execute("INSERT INTO deliveries (meeting_id, sink, key, external_id, url, created_at)"
-                 " VALUES ('m1','kanban','mtg:m1:a1','t_1',NULL,1.0)")
-    conn.commit()
-    conn.close()
-    r = Repository(path)
-    assert r.user_version() == repo_mod.SCHEMA_VERSION
-    assert r.item_sink_status("m1", "a1", "kanban") == "delivered"
-    assert r.item_sink_status("m1", "a1", "linear") is None
-    assert r.get_delivery("kanban", "mtg:m1:a1")["external_id"] == "t_1"
-    r.close()
 
 
 def test_stale_requeue_only_takes_expired_leases(repo, meeting):

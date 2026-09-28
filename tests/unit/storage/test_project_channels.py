@@ -7,11 +7,12 @@ from meeting_scribe.storage.repo import SCHEMA_VERSION, Repository
 def test_learned_project_channel_roundtrip_and_overwrite(tmp_path):
     repo = Repository(tmp_path / "i.sqlite")
     assert SCHEMA_VERSION >= 3
-    assert repo.project_channel("orion") is None
-    repo.learn_project_channel("Orion ", "501")
-    assert repo.project_channel("orion") == "501"
-    repo.learn_project_channel("ORION", "777")
-    assert repo.project_channel("orion") == "777"
+    assert repo.project_channel("main", "orion") is None
+    repo.learn_project_channel("main", "Orion ", "501")
+    assert repo.project_channel("main", "orion") == "501"
+    repo.learn_project_channel("main", "ORION", "777")
+    assert repo.project_channel("main", "orion") == "777"
+    assert repo.project_channel("other", "orion") is None  # learned per space (DESIGN §23)
     repo.close()
 
 

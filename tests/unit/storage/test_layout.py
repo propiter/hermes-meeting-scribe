@@ -5,8 +5,9 @@ from meeting_scribe.storage.layout import Layout
 def test_meeting_folder_naming(tmp_path, meeting):
     layout = Layout(lambda: tmp_path)
     folder = layout.meeting_folder(meeting)
-    assert folder == tmp_path / "meetings" / "2026" / "09" / "2026-09-26_1504_daily-sync_k3v7q2ab"
-    assert layout.relative(folder) == "meetings/2026/09/2026-09-26_1504_daily-sync_k3v7q2ab"
+    # DESIGN §23: every space has its own tree under meetings/<space>/
+    assert folder == tmp_path / "meetings" / "main" / "2026" / "09" / "2026-09-26_1504_daily-sync_k3v7q2ab"
+    assert layout.relative(folder) == "meetings/main/2026/09/2026-09-26_1504_daily-sync_k3v7q2ab"
     assert layout.resolve("meetings/2026/09/x") == tmp_path / "meetings/2026/09/x"
 
 

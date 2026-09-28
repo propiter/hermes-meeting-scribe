@@ -14,7 +14,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..filelock import file_lock
 
@@ -30,12 +30,40 @@ def _version(db: Path) -> int:
         conn.close()
 
 
+def setup_lock(db: Path) -> Any:
+    """The cross-process lock under which a store is retired and (re)created. Several processes
+    opening a NEW database at once would otherwise race on ``PRAGMA journal_mode=WAL``, which fails
+    with ``database is locked`` instead of waiting (SQLite's busy handler does not cover it)."""
+    return file_lock(db.with_name(db.name + ".retire.lock"))
+
+
+def is_current(db: Path, version: int) -> bool:
+    """A WAL database already at ``version``: opening it needs no setup (and no lock)."""
+    if not db.exists() or not db.with_name(db.name + "-wal").exists() and _journal_mode(db) != "wal":
+        return False
+    try:
+        return _version(db) >= version
+    except sqlite3.Error:
+        return False
+
+
+def _journal_mode(db: Path) -> str:
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            return str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return ""
+
+
 def retire_legacy(db: Path) -> Optional[Path]:
     """Move a pre-spaces database (and the meeting folders it indexed) aside; the backup folder, or
     ``None`` when there was nothing to retire."""
     if not db.exists():
         return None
-    with file_lock(db.with_name(db.name + ".retire.lock")):
+    with setup_lock(db):
         if not db.exists() or not 0 < _version(db) < BASELINE_VERSION:
             return None
         backup = db.parent / f"{BACKUP_PREFIX}{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"

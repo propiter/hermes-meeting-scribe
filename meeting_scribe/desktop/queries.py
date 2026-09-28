@@ -100,14 +100,26 @@ def _people(data: dict[str, Any]) -> int:
 
 
 class Library:
-    def __init__(self, repo: Repository, root: Path) -> None:
-        self.repo, self.root = repo, Path(root)
+    """The Desktop library of ONE space (DESIGN §23); ``space=None`` only for single-space tests of
+    the pre-spaces surface. A meeting of another space is "not found", never shown."""
+
+    def __init__(self, repo: Repository, root: Path, space: Optional[str] = None) -> None:
+        self.repo, self.root, self.space = repo, Path(root), space
+
+    def _mine(self, mid: str) -> bool:
+        if self.space is None:
+            return True
+        m = self.repo.get_meeting(mid)
+        return m is not None and m.space == self.space
 
     def require(self, mid: str) -> Any:
         meeting = self.repo.get_meeting(mid)
-        if meeting is None:
+        if meeting is None or (self.space is not None and meeting.space != self.space):
             raise KeyError(mid)
         return meeting
+
+    def _scope(self) -> tuple[str, tuple[Any, ...]]:
+        return ("1=1", ()) if self.space is None else ("space=?", (self.space,))
 
     # -- library ------------------------------------------------------------------------------
     def meetings(self, *, limit: int = 30, cursor: str = "", q: str = "", source: str = "", state: str = "",
@@ -117,7 +129,8 @@ class Library:
         is a channel id; ``project`` a project name (the meeting's or one of its tasks')."""
         if not 1 <= limit <= 100:
             raise ValueError("limit must be 1..100")
-        where, params = ["1=1"], []
+        scope, scope_params = self._scope()
+        where, params = [scope], list(scope_params)
         if source:
             if source not in SOURCES:
                 raise ValueError("unknown source")
@@ -159,7 +172,7 @@ class Library:
         if after:
             where.append("(started_at, id) < (?, ?)")
             params.extend(after)
-        rows = self.repo._x("SELECT data, source, external_id, started_at, id FROM meetings WHERE " + " AND ".join(where) +
+        rows = self.repo._x("SELECT data, source, external_id, space, started_at, id FROM meetings WHERE " + " AND ".join(where) +
                             " ORDER BY started_at DESC, id DESC LIMIT ?", (*params, limit + 1)).fetchall()
         page = rows[:limit]
         items = []
@@ -179,17 +192,20 @@ class Library:
 
     def facets(self) -> dict[str, Any]:
         """Counts for the filter bar (whole library, not the current page)."""
+        scope, sp = self._scope()
         by_state = {r["state"]: r["n"] for r in
-                    self.repo._x("SELECT state, COUNT(*) AS n FROM meetings GROUP BY state").fetchall()}
+                    self.repo._x(f"SELECT state, COUNT(*) AS n FROM meetings WHERE {scope} GROUP BY state", sp).fetchall()}
         by_source = {r["source"]: r["n"] for r in
-                     self.repo._x("SELECT source, COUNT(*) AS n FROM meetings GROUP BY source").fetchall()}
+                     self.repo._x(f"SELECT source, COUNT(*) AS n FROM meetings WHERE {scope} GROUP BY source",
+                                  sp).fetchall()}
         channels = [{"id": r["channel_id"], "name": r["name"] or r["channel_id"], "count": r["n"]} for r in self.repo._x(
             "SELECT channel_id, max(json_extract(data, '$.channel_name')) AS name, COUNT(*) AS n FROM meetings "
-            "WHERE channel_id != '' GROUP BY channel_id ORDER BY n DESC, name LIMIT 200").fetchall()]
+            f"WHERE channel_id != '' AND {scope} GROUP BY channel_id ORDER BY n DESC, name LIMIT 200", sp).fetchall()]
         projects = {str(r["p"]): int(r["n"]) for r in self.repo._x(
             "SELECT p, COUNT(DISTINCT mid) AS n FROM (SELECT id AS mid, json_extract(data, '$.project') AS p FROM "
-            "meetings UNION ALL SELECT meeting_id, json_extract(data, '$.project') FROM action_items) "
-            "WHERE p IS NOT NULL AND p != '' GROUP BY lower(p)").fetchall()}
+            f"meetings WHERE {scope} UNION ALL SELECT meeting_id, json_extract(data, '$.project') FROM action_items "
+            f"WHERE meeting_id IN (SELECT id FROM meetings WHERE {scope})) "
+            "WHERE p IS NOT NULL AND p != '' GROUP BY lower(p)", (*sp, *sp)).fetchall()}
         return {"total": sum(by_state.values()),
                 "states": {g: sum(by_state.get(s, 0) for s in members) for g, members in STATE_GROUPS.items()},
                 "sources": {s: by_source.get(s, 0) for s in SOURCES},
@@ -361,17 +377,22 @@ class Library:
                 titles[mid] = (m.title or m.channel_name) if m else mid
             return titles[mid]
         jobs = [{"meeting_id": j.meeting_id, "title": title(j.meeting_id), **(self.job(j.meeting_id) or {})}
-                for j in self.repo.list_jobs(("running", "queued", "failed"))]
+                for j in self.repo.list_jobs(("running", "queued", "failed"), space=self.space)]
+        scope, sp = self._scope()
         commands = [{**_command_fields(r), "meeting_id": r["meeting_id"], "title": title(r["meeting_id"])}
                     for r in self.repo._x("SELECT id, meeting_id, body, state, error, created_at, updated_at "
-                                          "FROM desktop_commands ORDER BY created_at DESC LIMIT 10").fetchall()]
+                                          f"FROM desktop_commands WHERE meeting_id IN (SELECT id FROM meetings WHERE "
+                                          f"{scope}) ORDER BY created_at DESC LIMIT 10", sp).fetchall()]
+        waiting = {k[len(WAITING_KV):]: v for k, v in self.repo.kv_prefix(WAITING_KV).items()
+                   if self._mine(k[len(WAITING_KV):])}
+        dm_notes = {k[len(KV_DM_NOTES):]: v for k, v in self.repo.kv_prefix(KV_DM_NOTES).items()
+                    if self._mine(k[len(KV_DM_NOTES):])}
         return {"worker": {"state": worker, "last_seen": seen},
                 "counts": {s: sum(1 for j in jobs if j["state"] == s) for s in ("running", "queued", "failed")},
                 "jobs": jobs[:100],
-                "waiting_destination": [{"meeting_id": k[len(WAITING_KV):], "title": title(k[len(WAITING_KV):]),
-                                         "detail": redact(v)} for k, v in self.repo.kv_prefix(WAITING_KV).items()],
-                "dm_notes": [{"meeting_id": k[len(KV_DM_NOTES):], "title": title(k[len(KV_DM_NOTES):]),
-                              "detail": redact(v)} for k, v in self.repo.kv_prefix(KV_DM_NOTES).items()],
+                "waiting_destination": [{"meeting_id": k, "title": title(k), "detail": redact(v)}
+                                        for k, v in waiting.items()],
+                "dm_notes": [{"meeting_id": k, "title": title(k), "detail": redact(v)} for k, v in dm_notes.items()],
                 "commands": commands}
 
 
@@ -387,12 +408,23 @@ def _command_fields(row: Any) -> dict[str, Any]:
             "error": redact(row["error"] or ""), "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
 
+def only_space(repo: Repository) -> Optional[str]:
+    """The install's single space; ``None`` with none or several (the Desktop has no space selector
+    yet — DESIGN §23: it never shows one team's data as if it were the only one)."""
+    rows = repo.list_spaces()
+    return rows[0].slug if len(rows) == 1 else None
+
+
 def google_status(root: Path, repo: Repository, enabled: bool) -> dict[str, Any]:
-    """Connection state from the per-profile files, WITHOUT any token or client field."""
-    from ..google.importer import KV
+    """Connection state from the space's files, WITHOUT any token or client field."""
+    from ..google.importer import status_kv
     from ..google.oauth import GoogleFiles
 
-    files = GoogleFiles(lambda: root)
+    space = only_space(repo)
+    if space is None:
+        return {"enabled": enabled, "space_required": True}
+    KV = status_kv(space)
+    files = GoogleFiles(lambda: root, space)
     token = files.read_token() or {}
     client = files.client_path.exists()
     connected = bool(token.get("refresh_token")) and not token.get("disconnected") and client

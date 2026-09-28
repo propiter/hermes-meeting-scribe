@@ -128,8 +128,16 @@ def _statements(script: str) -> list[str]:
 class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.retired = baseline.retire_legacy(path)  # a pre-spaces database is backed up, not migrated
         self._lock = threading.RLock()
+        self.retired: Optional[Path] = None
+        if baseline.is_current(path, SCHEMA_VERSION):
+            self._open(path)  # the common case: no cross-process lock
+            return
+        with baseline.setup_lock(path):  # retire + create + WAL switch exactly once across processes
+            self.retired = baseline.retire_legacy(path)  # a pre-spaces database is backed up, not migrated
+            self._open(path)
+
+    def _open(self, path: Path) -> None:
         self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA busy_timeout=5000")  # first: the WAL switch and migrations may wait
