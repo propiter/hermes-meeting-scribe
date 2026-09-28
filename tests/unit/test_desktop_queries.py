@@ -198,6 +198,10 @@ def test_status_worker_jobs_waiting_and_commands(repo, tmp_path, meeting):
     assert st["waiting_destination"][0]["meeting_id"] == meeting.id
     assert "sk-zzzzzzzzzz" not in json.dumps(st)
     assert st["commands"][0]["id"] == "r1"
+    # what was asked travels with the row (the page names the action), the raw body does not
+    assert {k: st["commands"][0][k] for k in ("action", "stage", "title")} == {
+        "action": "reprocess", "stage": "deliver", "title": meeting.title}
+    assert "body" not in st["commands"][0]
     assert lib.detail(meeting.id)["command"]["state"] == "queued"
 
 

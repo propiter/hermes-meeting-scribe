@@ -210,7 +210,7 @@ export const LOCALES = {
       retryAuto: 'It will be retried automatically.',
       reprocess: 'Reprocess…',
       reprocessHelp: 'Redo a step and everything after it. Already published messages are updated, not duplicated.',
-      actions: { reprocess: step => `Reprocess from «${step}»`, prepare_audio: 'Prepare audio' },
+      actions: { reprocess: step => `Reprocess from «${step}»`, prepare_audio: 'Prepare the audio to listen to', unknown: 'An action from this page' },
       cmd: {
         queued: 'Queued: the bot starts in a few seconds.', running: 'Running…', done: 'Finished.',
         failed: message => `Failed: ${message}`,
@@ -254,7 +254,7 @@ export const LOCALES = {
       doctorIssues: n => (n === 1 ? '1 thing to check.' : `${n} things to check.`),
       check: { ok: 'OK', warn: 'Check', fail: 'Problem' },
       openMeeting: 'Open',
-      cmd: { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', unknown: 'Unknown', acknowledged: 'Reviewed' }
+      cmd: { queued: 'Waiting to start', running: 'In progress', done: 'Finished', failed: 'Could not finish', unknown: 'Result unknown', acknowledged: 'Reviewed' }
     },
     settings: {
       intro: 'Changes reach the bot within a few seconds. Values set by an administrator cannot be changed here.',
@@ -418,7 +418,7 @@ export const LOCALES = {
       retryAuto: 'Se reintentará automáticamente.',
       reprocess: 'Reprocesar…',
       reprocessHelp: 'Repite una etapa y todas las siguientes. Lo ya publicado se actualiza, no se duplica.',
-      actions: { reprocess: step => `Reprocesar desde «${step}»`, prepare_audio: 'Preparar audio' },
+      actions: { reprocess: step => `Reprocesar desde «${step}»`, prepare_audio: 'Preparar el audio para escucharlo', unknown: 'Una acción de esta página' },
       cmd: {
         queued: 'En cola: el bot empieza en unos segundos.', running: 'En marcha…', done: 'Terminado.',
         failed: message => `Falló: ${message}`,
@@ -462,7 +462,7 @@ export const LOCALES = {
       doctorIssues: n => (n === 1 ? '1 cosa que revisar.' : `${n} cosas que revisar.`),
       check: { ok: 'Bien', warn: 'Revisar', fail: 'Problema' },
       openMeeting: 'Abrir',
-      cmd: { queued: 'En cola', running: 'En marcha', done: 'Hecho', failed: 'Falló', unknown: 'Desconocido', acknowledged: 'Revisado' }
+      cmd: { queued: 'Pendiente de empezar', running: 'En marcha', done: 'Terminado', failed: 'No se pudo terminar', unknown: 'Resultado desconocido', acknowledged: 'Revisado' }
     },
     settings: {
       intro: 'Los cambios llegan al bot en unos segundos. Los valores fijados por un administrador no se pueden cambiar aquí.',
@@ -680,11 +680,14 @@ function meetingTitle(t, m) {
   return (m && (m.title || m.channel_name)) || t('library.untitled')
 }
 
-/** Deterministic hue per speaker (stable across renders and meetings). */
-export function speakerHue(key) {
+/** Host palette tokens speakers cycle through (light + dark themes define every one). */
+export const SPEAKER_TONES = ['--ui-blue', '--ui-green', '--ui-purple', '--ui-orange', '--ui-cyan', '--ui-yellow', '--ui-red']
+
+/** Deterministic palette token per speaker (stable across renders and meetings). */
+export function speakerTone(key) {
   let hash = 0
   for (const ch of String(key || '?')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0
-  return hash % 360
+  return `var(${SPEAKER_TONES[hash % SPEAKER_TONES.length]})`
 }
 
 function initials(name) {
@@ -1231,12 +1234,12 @@ function TranscriptTab({ id, total, onSeek }) {
         const who = u.speaker || u.speaker_id || '?'
         const same = !needle && previous === who
         previous = who
-        const hue = speakerHue(u.speaker_id || who)
+        const tone = speakerTone(u.speaker_id || who)
         return h('li', { key: u.id, className: `ms-utt${same ? ' is-cont' : ''}` },
-          h('span', { className: 'ms-avatar', style: { '--ms-hue': hue }, 'aria-hidden': 'true' }, same ? '' : initials(who)),
+          h('span', { className: 'ms-avatar', style: { '--ms-tone': tone }, 'aria-hidden': 'true' }, same ? '' : initials(who)),
           h('div', { className: 'ms-utt-main' },
             same ? null : h('div', { className: 'ms-utt-head' },
-              h('span', { className: 'ms-speaker', style: { '--ms-hue': hue } }, who),
+              h('span', { className: 'ms-speaker', style: { '--ms-tone': tone } }, who),
               onSeek
                 ? h('button', { type: 'button', className: 'ms-time is-link', onClick: () => onSeek(u.t0), 'aria-label': t('transcript.jump', fmtClock(u.t0)) }, fmtClock(u.t0))
                 : h('span', { className: 'ms-time' }, fmtClock(u.t0))),
@@ -1336,7 +1339,7 @@ function ProcessingTab({ detail: d, commandId, onSubmitted, onFinished }) {
           let label
           if (e.kind === 'running') label = t('processing.ev.running', stepName(e.stage))
           else if (e.kind === 'failed') label = t('processing.ev.failed', stepName(e.stage))
-          else if (e.kind === 'command') label = e.action === 'reprocess' ? t('processing.actions.reprocess', t(`reprocess.${e.stage}`)) : tOr(t, `processing.actions.${e.action}`, String(e.action))
+          else if (e.kind === 'command') label = commandLabel(e, t)
           else label = tOr(t, `processing.ev.${e.kind}`, e.kind)
           return h('li', { key: i, className: 'ms-tl-item' },
             h(Dot, { tone }),
@@ -1420,6 +1423,12 @@ function ReprocessBlock({ meeting, job, commandId, onSubmitted, onFinished }) {
       h('span', null, h('span', { className: 'ms-choice-title' }, t(`reprocess.${s}`)), h('span', { className: 'ms-choice-help' }, t(`reprocess.${s}Help`))))))))
 }
 
+/** What a page action asked for, in plain words («Reprocess from “Transcription”», «Prepare audio»). */
+export function commandLabel(c, t) {
+  if (c.action === 'reprocess') return t('processing.actions.reprocess', tOr(t, `reprocess.${c.stage}`, t('processing.actions.unknown')))
+  return tOr(t, `processing.actions.${c.action}`, t('processing.actions.unknown'))
+}
+
 // ---------------------------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------------------------
@@ -1439,7 +1448,7 @@ export function StatusView() {
       h(SectionLabel, { actions: h(Button, { type: 'button', variant: 'ghost', size: 'xs', onClick: () => query.refetch() }, h(Codicon, { name: 'refresh', size: '0.75rem' }), t('common.refresh')) }, t('status.bot')),
       h('p', { className: 'ms-status-line' }, h(Dot, { tone: workerTone }), tOr(t, `status.worker.${worker.state}`, t('status.worker.unknown'))),
       worker.last_seen ? h('p', { className: 'ms-hint' }, t('status.lastSeen', fmtEpoch(worker.last_seen, locale))) : null,
-      h('div', { className: 'ms-counters' }, ['running', 'queued', 'failed'].map(k => h('div', { key: k, className: `ms-counter ms-counter-${k}` },
+      h('div', { className: 'ms-counters' }, ['running', 'queued', 'failed'].map(k => h('div', { key: k, className: `ms-counter ms-counter-${k}${s.counts?.[k] ? '' : ' is-zero'}` },
         h('span', { className: 'ms-counter-n' }, String(s.counts?.[k] ?? 0)), h('span', { className: 'ms-counter-l' }, t(`status.${k}`)))))),
     h('section', { className: 'ms-card' },
       h(SectionLabel, null, t('status.queue')),
@@ -1471,8 +1480,8 @@ export function StatusView() {
         ? h('ul', { className: 'ms-list' }, s.commands.map(c => h('li', { key: c.id, className: 'ms-list-row' },
           h(Dot, { tone: c.state === 'done' ? 'good' : c.state === 'failed' || c.state === 'unknown' ? 'bad' : 'busy' }),
           h('span', { className: 'ms-grow' },
-            h('span', { className: 'ms-list-title' }, c.action === 'reprocess' ? t('processing.actions.reprocess', t(`reprocess.${c.stage}`)) : tOr(t, `processing.actions.${c.action}`, String(c.action || ''))),
-            h('span', { className: 'ms-list-sub' }, fmtEpoch(c.created_at, locale), ' · ', tOr(t, `status.cmd.${c.state}`, c.state))),
+            h('span', { className: 'ms-list-title' }, commandLabel(c, t)),
+            h('span', { className: 'ms-list-sub' }, [c.title, fmtEpoch(c.created_at, locale), tOr(t, `status.cmd.${c.state}`, t('status.cmd.unknown'))].filter(Boolean).join(' · '))),
           openMeeting(c.meeting_id))))
         : h('p', { className: 'ms-muted' }, t('status.noCommands'))),
     h(DoctorCard, null))
@@ -1835,7 +1844,7 @@ export function MeetingsPage() {
 // styles — host tokens only (--ui-*, --dt-*), so the page follows the active theme (light/dark)
 // ---------------------------------------------------------------------------------------------
 export const CSS = `
-.ms-page{display:flex;flex-direction:column;height:100%;min-height:0;color:var(--ui-text-primary);font-size:13px;line-height:1.5;background:var(--ui-bg-primary,transparent)}
+.ms-page{display:flex;flex-direction:column;height:100%;min-height:0;color:var(--ui-text-primary);font-size:13px;line-height:1.5;background:var(--ui-surface-background)}
 .ms-page-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px 10px;flex-shrink:0}
 .ms-h1{font-size:15px;font-weight:600;margin:0;letter-spacing:-.01em}
 .ms-main{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -1852,32 +1861,32 @@ export const CSS = `
 .ms-code{margin:0;padding:8px 10px;border-radius:6px;background:var(--ui-inline-code-background,var(--ui-bg-tertiary));font-family:var(--dt-font-mono,ui-monospace,monospace);font-size:11.5px;white-space:pre-wrap;word-break:break-word;user-select:text;color:var(--ui-text-secondary)}
 /* tones */
 .ms-dot{display:inline-block;flex-shrink:0;width:7px;height:7px;border-radius:999px;background:var(--ui-text-quaternary)}
-.ms-dot.ms-tone-good{background:var(--ui-green,#3fb950)}
-.ms-dot.ms-tone-bad{background:var(--ui-red,#f85149)}
-.ms-dot.ms-tone-warn{background:var(--ui-yellow,#d29922)}
-.ms-dot.ms-tone-busy{background:var(--ui-blue,#58a6ff);animation:ms-pulse 1.6s ease-in-out infinite}
-.ms-dot.ms-tone-live{background:var(--ui-red,#f85149);box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-red,#f85149) 22%,transparent);animation:ms-pulse 1.2s ease-in-out infinite}
+.ms-dot.ms-tone-good{background:var(--ui-green)}
+.ms-dot.ms-tone-bad{background:var(--ui-red)}
+.ms-dot.ms-tone-warn{background:var(--ui-yellow)}
+.ms-dot.ms-tone-busy{background:var(--ui-blue);animation:ms-pulse 1.6s ease-in-out infinite}
+.ms-dot.ms-tone-live{background:var(--ui-red);box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-red) 22%,transparent);animation:ms-pulse 1.2s ease-in-out infinite}
 @keyframes ms-pulse{50%{opacity:.45}}
 @media (prefers-reduced-motion:reduce){.ms-dot{animation:none!important}}
-.ms-tone-text-good{color:var(--ui-green,#3fb950)}
-.ms-tone-text-bad{color:var(--ui-red,#f85149)}
-.ms-tone-text-warn{color:var(--ui-yellow,#d29922)}
-.ms-tone-text-busy{color:var(--ui-blue,#58a6ff)}
+.ms-tone-text-good{color:var(--ui-green)}
+.ms-tone-text-bad{color:var(--ui-red)}
+.ms-tone-text-warn{color:var(--ui-yellow)}
+.ms-tone-text-busy{color:var(--ui-blue)}
 .ms-tone-text-muted{color:var(--ui-text-tertiary)}
-.ms-pill{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:500;line-height:18px;white-space:nowrap;background:color-mix(in srgb,var(--ui-text-primary) 7%,transparent);color:var(--ui-text-secondary)}
+.ms-pill{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:500;line-height:18px;white-space:nowrap;background:var(--ui-bg-quaternary);color:var(--ui-text-secondary)}
 .ms-pill .ms-dot{width:6px;height:6px}
-.ms-pill.ms-tone-good{background:color-mix(in srgb,var(--ui-green,#3fb950) 14%,transparent);color:var(--ui-green,#3fb950)}
-.ms-pill.ms-tone-bad{background:color-mix(in srgb,var(--ui-red,#f85149) 13%,transparent);color:var(--ui-red,#f85149)}
-.ms-pill.ms-tone-warn{background:color-mix(in srgb,var(--ui-yellow,#d29922) 15%,transparent);color:color-mix(in srgb,var(--ui-yellow,#d29922) 80%,var(--ui-text-primary))}
-.ms-pill.ms-tone-busy{background:color-mix(in srgb,var(--ui-blue,#58a6ff) 13%,transparent);color:var(--ui-blue,#58a6ff)}
+.ms-pill.ms-tone-good{background:color-mix(in srgb,var(--ui-green) 14%,transparent);color:var(--ui-green)}
+.ms-pill.ms-tone-bad{background:color-mix(in srgb,var(--ui-red) 13%,transparent);color:var(--ui-red)}
+.ms-pill.ms-tone-warn{background:color-mix(in srgb,var(--ui-yellow) 15%,transparent);color:color-mix(in srgb,var(--ui-yellow) 80%,var(--ui-text-primary))}
+.ms-pill.ms-tone-busy{background:color-mix(in srgb,var(--ui-blue) 13%,transparent);color:var(--ui-blue)}
 .ms-pill.ms-tone-accent{background:color-mix(in srgb,var(--ui-accent) 12%,transparent);color:var(--ui-accent)}
 /* master–detail */
 .ms-md{flex:1;min-height:0;display:grid;grid-template-columns:minmax(280px,340px) 1fr;border-top:1px solid var(--ui-stroke-tertiary)}
-.ms-master{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--ui-stroke-tertiary);background:var(--ui-bg-sidebar,transparent)}
+.ms-master{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--ui-stroke-tertiary);background:transparent}
 .ms-master-head{display:flex;flex-direction:column;gap:8px;padding:12px 12px 6px}
 .ms-search-row{display:flex;align-items:center;gap:6px}
 .ms-filter-toggle{flex-shrink:0;gap:5px}
-.ms-filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px;border-radius:8px;background:var(--ui-bg-quinary,color-mix(in srgb,var(--ui-text-primary) 3%,transparent));border:1px solid var(--ui-stroke-tertiary)}
+.ms-filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px;border-radius:8px;background:transparent;border:1px solid var(--ui-stroke-tertiary)}
 .ms-filter{display:flex;flex-direction:column;gap:3px;min-width:0}
 .ms-filter-label{font-size:10.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--ui-text-tertiary);margin:0}
 .ms-filter-trigger{width:100%}
@@ -1912,7 +1921,7 @@ export const CSS = `
 .ms-tab:hover{color:var(--ui-text-primary)}
 .ms-tab[data-state=active]{color:var(--ui-text-primary);border-bottom-color:var(--ui-accent)}
 .ms-tab:focus-visible{outline:2px solid var(--ui-accent);outline-offset:2px;border-radius:3px}
-.ms-tab-count{font-size:10.5px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--ui-text-primary) 8%,transparent);color:var(--ui-text-secondary);font-variant-numeric:tabular-nums}
+.ms-tab-count{font-size:10.5px;padding:0 6px;border-radius:999px;background:var(--ui-bg-quaternary);color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums}
 .ms-detail-body{flex:1;min-height:0;overflow-y:auto;padding:20px 28px 40px}
 .ms-detail-body>*{max-width:860px}
 .ms-detail-pad{padding:20px 28px;display:flex;flex-direction:column;gap:10px}
@@ -1925,7 +1934,7 @@ export const CSS = `
 .ms-bullets{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:6px}
 .ms-bullets li{position:relative;padding-left:16px;color:var(--ui-text-secondary)}
 .ms-bullets li::before{content:'';position:absolute;left:3px;top:.62em;width:5px;height:5px;border-radius:999px;background:var(--ui-text-quaternary)}
-.ms-bullets-q li::before{background:var(--ui-yellow,#d29922)}
+.ms-bullets-q li::before{background:var(--ui-yellow)}
 .ms-topics{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
 .ms-topic{padding:10px 12px;border-radius:8px;border:1px solid var(--ui-stroke-tertiary)}
 .ms-topic-title{margin:0 0 6px;font-weight:600;font-size:12.5px}
@@ -1934,17 +1943,17 @@ export const CSS = `
 .ms-mini-task:first-child{border-top:0}
 .ms-mini-title{font-weight:500;min-width:0}
 .ms-mini-meta{font-size:12px;color:var(--ui-text-tertiary);white-space:nowrap;text-align:right}
-.ms-audio-block{padding:12px 14px;border-radius:10px;background:var(--ui-bg-quinary,color-mix(in srgb,var(--ui-text-primary) 3%,transparent));border:1px solid var(--ui-stroke-tertiary)}
+.ms-audio-block{padding:12px 14px;border-radius:10px;background:transparent;border:1px solid var(--ui-stroke-tertiary)}
 .ms-audio{width:100%;height:36px;color-scheme:light dark}
-.ms-callout{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--ui-stroke-tertiary);background:color-mix(in srgb,var(--ui-text-primary) 3%,transparent)}
+.ms-callout{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--ui-stroke-tertiary);background:transparent}
 .ms-callout p{margin:0}
 .ms-callout-icon{margin-top:2px;flex-shrink:0;color:var(--ui-text-tertiary)}
 .ms-callout-body{display:flex;flex-direction:column;gap:4px;min-width:0;color:var(--ui-text-secondary)}
 .ms-callout-title{font-weight:600;color:var(--ui-text-primary)}
-.ms-callout-warn{border-color:color-mix(in srgb,var(--ui-yellow,#d29922) 35%,transparent);background:color-mix(in srgb,var(--ui-yellow,#d29922) 8%,transparent)}
-.ms-callout-warn .ms-callout-icon{color:var(--ui-yellow,#d29922)}
-.ms-callout-bad{border-color:color-mix(in srgb,var(--ui-red,#f85149) 35%,transparent);background:color-mix(in srgb,var(--ui-red,#f85149) 7%,transparent)}
-.ms-callout-bad .ms-callout-icon{color:var(--ui-red,#f85149)}
+.ms-callout-warn{border-color:color-mix(in srgb,var(--ui-yellow) 35%,transparent);background:color-mix(in srgb,var(--ui-yellow) 8%,transparent)}
+.ms-callout-warn .ms-callout-icon{color:var(--ui-yellow)}
+.ms-callout-bad{border-color:color-mix(in srgb,var(--ui-red) 35%,transparent);background:color-mix(in srgb,var(--ui-red) 7%,transparent)}
+.ms-callout-bad .ms-callout-icon{color:var(--ui-red)}
 .ms-details summary{cursor:pointer;font-size:12px;color:var(--ui-text-tertiary);margin-top:4px}
 .ms-details summary:focus-visible{outline:2px solid var(--ui-accent);outline-offset:2px}
 .ms-details .ms-code{margin-top:6px}
@@ -1953,13 +1962,11 @@ export const CSS = `
 .ms-utts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .ms-utt{display:grid;grid-template-columns:28px 1fr;gap:10px;padding:8px 0 2px}
 .ms-utt.is-cont{padding-top:0}
-.ms-avatar{width:26px;height:26px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:hsl(var(--ms-hue) 55% 42%);background:hsl(var(--ms-hue) 60% 55% / .16)}
+.ms-avatar{width:26px;height:26px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:var(--ms-tone);background:color-mix(in srgb,var(--ms-tone) 16%,transparent)}
 .ms-utt.is-cont .ms-avatar{background:transparent}
 .ms-utt-main{min-width:0}
 .ms-utt-head{display:flex;align-items:baseline;gap:8px}
-.ms-speaker{font-weight:600;font-size:12.5px;color:hsl(var(--ms-hue) 50% 45%)}
-:root.dark .ms-speaker,.dark .ms-speaker{color:hsl(var(--ms-hue) 65% 68%)}
-:root.dark .ms-avatar,.dark .ms-avatar{color:hsl(var(--ms-hue) 70% 72%)}
+.ms-speaker{font-weight:600;font-size:12.5px;color:var(--ms-tone)}
 .ms-time{font-size:11px;color:var(--ui-text-tertiary);font-variant-numeric:tabular-nums;font-family:var(--dt-font-mono,ui-monospace,monospace);background:none;border:0;padding:0}
 .ms-time.is-link{cursor:pointer;border-radius:3px}
 .ms-time.is-link:hover{color:var(--ui-accent);text-decoration:underline}
@@ -1967,10 +1974,10 @@ export const CSS = `
 .ms-time-inline{margin-right:8px;opacity:0}
 .ms-utt:hover .ms-time-inline,.ms-time-inline:focus-visible{opacity:1}
 .ms-utt-text{margin:1px 0 0;white-space:pre-wrap;color:var(--ui-text-secondary);line-height:1.55}
-.ms-mark{background:color-mix(in srgb,var(--ui-yellow,#d29922) 38%,transparent);color:var(--ui-text-primary);border-radius:2px;padding:0 1px}
+.ms-mark{background:color-mix(in srgb,var(--ui-yellow) 38%,transparent);color:var(--ui-text-primary);border-radius:2px;padding:0 1px}
 /* tasks */
 .ms-tasks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
-.ms-task{padding:12px 14px;border:1px solid var(--ui-stroke-tertiary);border-radius:10px;display:flex;flex-direction:column;gap:8px;background:var(--ui-bg-card,transparent)}
+.ms-task{padding:12px 14px;border:1px solid var(--ui-stroke-tertiary);border-radius:10px;display:flex;flex-direction:column;gap:8px;background:transparent}
 .ms-task.is-dismissed{opacity:.6}
 .ms-task-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .ms-task-title{margin:0;font-weight:600;font-size:13.5px}
@@ -2007,7 +2014,7 @@ export const CSS = `
 .ms-choice-help{display:block;font-size:12px;color:var(--ui-text-tertiary)}
 /* empty + skeleton */
 .ms-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px;padding:40px 24px;min-height:220px}
-.ms-empty-icon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--ui-text-tertiary);background:color-mix(in srgb,var(--ui-text-primary) 5%,transparent);margin-bottom:4px}
+.ms-empty-icon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--ui-text-tertiary);background:var(--ui-bg-quaternary);margin-bottom:4px}
 .ms-empty-title{margin:0;font-weight:600;font-size:13.5px}
 .ms-empty-body{max-width:420px;color:var(--ui-text-tertiary);font-size:12.5px;display:flex;flex-direction:column;gap:8px}
 .ms-empty-body p{margin:0}
@@ -2026,14 +2033,15 @@ export const CSS = `
 .ms-skel-audio{height:36px;width:100%}
 /* status */
 .ms-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;align-items:start;max-width:1200px}
-.ms-card{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:10px;border:1px solid var(--ui-stroke-tertiary);background:var(--ui-bg-card,transparent)}
+.ms-card{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:10px;border:1px solid var(--ui-stroke-tertiary);background:transparent}
 .ms-card-title{margin:0;font-size:13px;font-weight:600}
 .ms-status-line{display:flex;align-items:center;gap:8px;margin:0}
 .ms-counters{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.ms-counter{display:flex;flex-direction:column;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--ui-text-primary) 4%,transparent)}
+.ms-counter{display:flex;flex-direction:column;padding:6px 0 0;border-top:1px solid var(--ui-stroke-tertiary)}
 .ms-counter-n{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.2}
-.ms-counter-failed .ms-counter-n{color:var(--ui-red,#f85149)}
-.ms-counter-running .ms-counter-n{color:var(--ui-blue,#58a6ff)}
+.ms-counter.is-zero .ms-counter-n{color:var(--ui-text-quaternary)}
+.ms-counter-failed:not(.is-zero) .ms-counter-n{color:var(--ui-red)}
+.ms-counter-running:not(.is-zero) .ms-counter-n{color:var(--ui-blue)}
 .ms-counter-l{font-size:11px;color:var(--ui-text-tertiary)}
 .ms-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .ms-list-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--ui-stroke-tertiary)}
@@ -2042,7 +2050,7 @@ export const CSS = `
 .ms-list-sub{display:block;font-size:11.5px;color:var(--ui-text-tertiary)}
 /* settings */
 .ms-settings{flex:1;min-height:0;display:grid;grid-template-columns:200px 1fr;border-top:1px solid var(--ui-stroke-tertiary)}
-.ms-settings-nav{display:flex;flex-direction:column;gap:1px;padding:12px 8px;border-right:1px solid var(--ui-stroke-tertiary);overflow-y:auto;background:var(--ui-bg-sidebar,transparent)}
+.ms-settings-nav{display:flex;flex-direction:column;gap:1px;padding:12px 8px;border-right:1px solid var(--ui-stroke-tertiary);overflow-y:auto;background:transparent}
 .ms-nav-item{text-align:left;padding:6px 10px;border-radius:6px;border:0;background:transparent;color:var(--ui-text-secondary);font:inherit;font-size:12.5px;cursor:pointer}
 .ms-nav-item:hover{background:var(--ui-row-hover-background);color:var(--ui-text-primary)}
 .ms-nav-item.is-active{background:var(--ui-row-active-background);color:var(--ui-text-primary);font-weight:500}
@@ -2064,7 +2072,7 @@ export const CSS = `
 .ms-field>.ms-error,.ms-field>.ms-hint{grid-column:1/-1}
 .ms-select{width:100%}
 .ms-textarea{resize:vertical;font-family:var(--dt-font-mono,ui-monospace,monospace);font-size:12px}
-.ms-saved{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--ui-green,#3fb950)}
+.ms-saved{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--ui-green)}
 .ms-editor .ms-pc-table{display:flex;flex-direction:column;gap:6px}
 .ms-pc-row{display:grid;grid-template-columns:1fr 1fr 28px;gap:8px;align-items:center}
 .ms-pc-headrow span{font-size:10.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--ui-text-tertiary)}

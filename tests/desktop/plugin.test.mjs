@@ -118,7 +118,7 @@ test('audioSources select only the explicitly resolved connection mode', () => {
   assert.deepEqual(mod.audioSources(audio, null, 'work'), [])
 })
 
-test('pure helpers: state tone, row subtitle, date range, speaker hue, matches, sinks', () => {
+test('pure helpers: state tone, row subtitle, date range, speaker tone, matches, sinks', () => {
   const t = (k, ...a) => `${k}${a.length ? `:${a.join(',')}` : ''}`
   assert.equal(mod.stateTone('done'), 'good')
   assert.equal(mod.stateTone('failed'), 'bad')
@@ -133,8 +133,8 @@ test('pure helpers: state tone, row subtitle, date range, speaker hue, matches, 
   assert.deepEqual(mod.dateRange('today', now), { since: '2026-09-27', until: '2026-09-27' })
   assert.deepEqual(mod.dateRange('week', now), { since: '2026-09-21', until: '2026-09-27' })
   assert.deepEqual(mod.dateRange('x', now), { since: '', until: '' })
-  assert.equal(mod.speakerHue('ana'), mod.speakerHue('ana'))
-  assert.ok(mod.speakerHue('ana') >= 0 && mod.speakerHue('ana') < 360)
+  assert.equal(mod.speakerTone('ana'), mod.speakerTone('ana'))
+  assert.ok(mod.SPEAKER_TONES.some(tone => mod.speakerTone('ana') === `var(${tone})`))
   assert.deepEqual(mod.splitMatches('Ship it, ship', 'ship').map(p => p.match), [true, false, true])
   assert.deepEqual(mod.sinkView('delivered', 'auto'), { tone: 'good', key: 'delivered' })
   assert.deepEqual(mod.sinkView(undefined, 'off'), { tone: 'muted', key: 'off' })
@@ -190,7 +190,9 @@ const TRANSCRIPT = { items: [{ id: 1, t0: 1.5, t1: 3, speaker_id: '1', speaker: 
 const STATUS = {
   worker: { state: 'recent', last_seen: 1790000000 }, counts: { running: 1, queued: 0, failed: 1 },
   jobs: [{ meeting_id: 'k3v7q2ab', title: 'Daily Sync', state: 'failed', stage: 'analyze', error: 'RuntimeError: quota', problem: 'llm' }],
-  waiting_destination: [], dm_notes: [], commands: [], settings_warnings: ['autojoin_min_humans=0: must be >= 1'],
+  waiting_destination: [], dm_notes: [],
+  commands: [{ id: 'c1', meeting_id: 'k3v7q2ab', title: 'Daily Sync', action: 'prepare_audio', stage: null, state: 'done', error: '', created_at: 1790000000, updated_at: 1790000001 }],
+  settings_warnings: ['autojoin_min_humans=0: must be >= 1'],
   google: { enabled: false, connected: false, revoked: false, commands: { connect: 'hermes meeting-scribe google connect --client-secret <client.json>', status: 'hermes meeting-scribe google status', enable: 'hermes meeting-scribe config set google_meet_enabled true' } }
 }
 const SETTINGS = {
@@ -354,6 +356,26 @@ test('status shows worker, queue problems, warnings, Google guide and diagnostic
   assert.match(html, /autojoin_min_humans=0/)
   assert.match(html, /google connect --client-secret &lt;client\.json&gt;/)
   assert.match(html, /Run diagnostics/)
+  // a finished action says what was done and on which meeting, not a bare state
+  assert.match(html, /Prepare the audio to listen to/)
+  assert.match(html, /Daily Sync · [^<]* · Finished/)
+  // a zero counter is neutral; only a non-zero one carries a colour
+  assert.match(html, /ms-counter ms-counter-queued is-zero/)
+  assert.match(html, /ms-counter ms-counter-failed"/)
+})
+
+test('the page styles use only host tokens: no literal colours or accent-tinted surfaces', () => {
+  assert.doesNotMatch(mod.CSS, /#[0-9a-fA-F]{3,8}\b/)
+  assert.doesNotMatch(mod.CSS, /\b(?:hsl|rgb)a?\(/)
+  assert.doesNotMatch(mod.CSS, /--ui-bg-(?:primary|card|sidebar|quinary)\b/)
+  assert.match(mod.CSS, /\.ms-page\{[^}]*background:var\(--ui-surface-background\)/)
+})
+
+test('commandLabel describes each page action in plain words', () => {
+  const t = (key, ...args) => ({ 'processing.actions.reprocess': `from ${args[0]}`, 'reprocess.analyze': 'Summary', 'processing.actions.prepare_audio': 'Prepare', 'processing.actions.unknown': 'Something' })[key] ?? key
+  assert.equal(mod.commandLabel({ action: 'reprocess', stage: 'analyze' }, t), 'from Summary')
+  assert.equal(mod.commandLabel({ action: 'prepare_audio' }, t), 'Prepare')
+  assert.equal(mod.commandLabel({ action: 'mystery' }, t), 'Something')
 })
 
 test('settings: section nav, fields from the schema, origins', opts, async () => {

@@ -304,12 +304,9 @@ class Library:
             events.append({"kind": "waiting_destination", "at": row["updated_at"] if row is not None else None})
         for c in self.repo._x("SELECT id, body, state, error, created_at, updated_at FROM desktop_commands "
                               "WHERE meeting_id=? ORDER BY created_at", (mid,)).fetchall():
-            try:
-                body = json.loads(c["body"])
-            except ValueError:
-                body = {}
-            events.append({"kind": "command", "at": c["created_at"], "action": body.get("action"),
-                           "stage": body.get("stage"), "state": c["state"], "updated_at": c["updated_at"]})
+            f = _command_fields(c)
+            events.append({"kind": "command", "at": f["created_at"], "action": f["action"], "stage": f["stage"],
+                           "state": f["state"], "updated_at": f["updated_at"]})
         return sorted(events, key=lambda e: e.get("at") or 0)
 
     def job(self, mid: str) -> Optional[dict[str, Any]]:
@@ -365,9 +362,9 @@ class Library:
             return titles[mid]
         jobs = [{"meeting_id": j.meeting_id, "title": title(j.meeting_id), **(self.job(j.meeting_id) or {})}
                 for j in self.repo.list_jobs(("running", "queued", "failed"))]
-        commands = [dict(r) for r in self.repo._x(
-            "SELECT id, meeting_id, state, error, created_at, updated_at FROM desktop_commands "
-            "ORDER BY created_at DESC LIMIT 10").fetchall()]
+        commands = [{**_command_fields(r), "meeting_id": r["meeting_id"], "title": title(r["meeting_id"])}
+                    for r in self.repo._x("SELECT id, meeting_id, body, state, error, created_at, updated_at "
+                                          "FROM desktop_commands ORDER BY created_at DESC LIMIT 10").fetchall()]
         return {"worker": {"state": worker, "last_seen": seen},
                 "counts": {s: sum(1 for j in jobs if j["state"] == s) for s in ("running", "queued", "failed")},
                 "jobs": jobs[:100],
@@ -375,7 +372,19 @@ class Library:
                                          "detail": redact(v)} for k, v in self.repo.kv_prefix(WAITING_KV).items()],
                 "dm_notes": [{"meeting_id": k[len(KV_DM_NOTES):], "title": title(k[len(KV_DM_NOTES):]),
                               "detail": redact(v)} for k, v in self.repo.kv_prefix(KV_DM_NOTES).items()],
-                "commands": [{**c, "error": redact(c["error"] or "")} for c in commands]}
+                "commands": commands}
+
+
+def _command_fields(row: Any) -> dict[str, Any]:
+    """A desktop command row as the page shows it: WHAT was asked (action + stage), never the raw body."""
+    try:
+        body = json.loads(row["body"])
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    return {"id": row["id"], "action": body.get("action"), "stage": body.get("stage"), "state": row["state"],
+            "error": redact(row["error"] or ""), "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
 
 def google_status(root: Path, repo: Repository, enabled: bool) -> dict[str, Any]:
