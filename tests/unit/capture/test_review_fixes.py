@@ -299,16 +299,14 @@ async def test_dave_session_is_refreshed_every_tick(world):
     await s.stop()
 
 
-async def test_unmapped_frames_are_dropped_while_dave_is_active(world):
+async def test_unmapped_dave_payload_is_never_decoded_as_noise(world):
     s = session(world)
     await s.start()
-    s.receiver._dave_session = object()
-    s.vc._connection.dave_session = s.receiver._dave_session
-    s.receiver._buffers[7].extend(FRAME)  # E2EE payload decoded as noise before SPEAKING
-    s.receiver.map_ssrc(7, 42)
-    s.receiver._buffers[7].extend(FRAME)
-    frames = s.receiver.drain()[42]
-    assert len(frames) == 1
+    s.receiver._dave_session = s.vc._connection.dave_session = object()
+    assert 7 in s.receiver._decoders  # Hermes will not create a real decoder for it...
+    assert s.receiver._decoders[7].decode(b"E2EE\xfa\xfa") == b""  # ...and gets no PCM back
+    assert s.receiver.drain() == {}
+    assert s.receiver.voice_report().undecided == {7: 1}
     await s.stop()
 
 

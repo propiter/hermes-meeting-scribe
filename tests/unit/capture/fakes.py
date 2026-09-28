@@ -20,7 +20,9 @@ class FakeDecoder:
 
 
 class FakeVoiceReceiver:
-    """Mirror of Hermes ``VoiceReceiver`` (same attributes, same buffer seam)."""
+    """Mirror of Hermes ``VoiceReceiver`` (same attributes, same buffer and decoder seams)."""
+
+    decoder_factory: Callable[[], Any] = FakeDecoder
 
     def __init__(self, voice_client: Any, allowed_user_ids: Optional[set] = None) -> None:
         self._vc = voice_client
@@ -77,12 +79,75 @@ class FakeVoiceReceiver:
             with self._lock:
                 user_id = self._ssrc_to_user.get(ssrc, 0)
             if user_id:
-                decrypted = self._dave_session.decrypt(user_id, "audio", decrypted)
-        if ssrc not in self._decoders:
-            self._decoders[ssrc] = FakeDecoder()
-        pcm = self._decoders[ssrc].decode(decrypted)
-        with self._lock:
-            self._buffers[ssrc].extend(pcm)
+                try:
+                    decrypted = self._dave_session.decrypt(user_id, "audio", decrypted)
+                except Exception as e:
+                    if "Unencrypted" not in str(e):
+                        return
+            # Unknown SSRC (no SPEAKING yet): skip DAVE, try Opus directly (Hermes does the same).
+        try:
+            if ssrc not in self._decoders:
+                self._decoders[ssrc] = self.decoder_factory()
+            pcm = self._decoders[ssrc].decode(decrypted)
+            with self._lock:
+                self._buffers[ssrc].extend(pcm)
+        except Exception:
+            with self._lock:
+                self._decoders.pop(ssrc, None)
+
+
+class FakeCodec:
+    """Opus + DAVE media type for ``ScribeReceiver``: only payloads starting ``OPUS`` decode (to a
+    frame carrying the payload so tests can tell packets apart); anything else raises."""
+
+    def __init__(self) -> None:
+        self.decoders = 0
+
+    def new_decoder(self) -> Any:
+        self.decoders += 1
+        return self
+
+    def decode(self, data: bytes) -> bytes:
+        if not data.startswith(b"OPUS"):
+            raise ValueError("corrupted stream")
+        return FRAME[: len(FRAME) - len(data)] + data
+
+    def audio_media(self) -> str:
+        return "audio"
+
+
+def dave_frame(owner: int, seq: int) -> bytes:
+    """A fake DAVE frame of ``owner``: only their key opens it (to ``OPUS<seq>``)."""
+    return b"DAVE" + struct.pack(">QI", owner, seq) + b"\x00\x00\xfa\xfa"
+
+
+class FakeDave:
+    """DAVE session: per-sender keys, a decryptor per group member, nonces usable once."""
+
+    def __init__(self, members: list[int], bot: int = 9999, shared: Optional[dict[int, int]] = None) -> None:
+        self.members = list(members)
+        self.user_id = bot
+        self.shared = shared or {}  # user -> another user whose key opens their frames too (never in Discord)
+        self.seen: set[tuple[int, bytes]] = set()
+        self.calls: list[int] = []
+        self.ready = True
+
+    def get_user_ids(self) -> list[str]:
+        return [str(u) for u in self.members + [self.user_id]]
+
+    def decrypt(self, user_id: int, media: Any, packet: bytes) -> bytes:
+        self.calls.append(user_id)
+        if user_id not in self.members:
+            raise ValueError("Failed to decrypt: NoDecryptorForUser")
+        if not packet.startswith(b"DAVE") or packet[-2:] != b"\xfa\xfa":
+            raise ValueError("Failed to decrypt: UnencryptedWhenPassthroughDisabled")
+        owner, seq = struct.unpack_from(">QI", packet, 4)
+        if user_id != owner and self.shared.get(owner) != user_id:
+            raise ValueError("Failed to decrypt: NoValidCryptorFound")
+        if (user_id, packet) in self.seen:
+            raise ValueError("Failed to decrypt: nonce already processed")
+        self.seen.add((user_id, packet))
+        return b"OPUS" + str(seq).encode()
 
 
 def build_rtp_packet(ssrc: int = 100, seq: int = 1, timestamp: int = 960) -> bytes:

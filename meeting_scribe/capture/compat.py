@@ -2,9 +2,12 @@
 
 We subclass ``VoiceReceiver`` and use a handful of private adapter/connection attributes. Rather
 than failing mid-meeting when Hermes refactors them, :func:`probe` checks the surface up front
-(presence, callability, arity, plus one *source* check: the receiver must still append decoded
-PCM with ``self._buffers[ssrc].extend(`` because that is the seam ``TimedBuffer`` hooks). If the
-probe fails, capture is disabled with a clear message and ``doctor`` reports what changed.
+(presence, callability, arity, plus *source* checks of ``_on_packet``: it must still append decoded
+PCM with ``self._buffers[ssrc].extend(`` — the seam ``TimedBuffer`` hooks — and still fetch the
+per-SSRC Opus decoder with ``ssrc not in self._decoders`` / ``self._decoders[ssrc].decode(`` —
+the seam where the payload of an SSRC without SPEAKING is retained, DESIGN §4.1). The DAVE session
+must offer ``decrypt``/``get_user_ids`` and ``davey.MediaType.audio`` (identification by key). If
+the probe fails, capture is disabled with a clear message and ``doctor`` reports what changed.
 """
 from __future__ import annotations
 
@@ -13,11 +16,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 BUFFER_SEAM = "self._buffers[ssrc].extend("
+DECODER_SEAMS = ("ssrc not in self._decoders", "self._decoders[ssrc].decode(")
 
 # (owner label, attribute, kind) — kind: "method" (callable on the class), "attr" (instance attr
 # set in __init__), "coro" (async method).
 _RECEIVER = (("start", "method"), ("stop", "method"), ("map_ssrc", "method"), ("_on_packet", "method"))
-_RECEIVER_ATTRS = ("_lock", "_buffers", "_ssrc_to_user", "_dave_session", "_vc")
+_RECEIVER_ATTRS = ("_lock", "_buffers", "_decoders", "_ssrc_to_user", "_dave_session", "_secret_key", "_vc")
+_DAVE = (("decrypt", "method"), ("get_user_ids", "method"))
 _ADAPTER = (("leave_voice_channel", "coro"), ("get_user_voice_channel", "coro"), ("_resolve_channel", "coro"),
             ("send", "coro"))
 _ADAPTER_ATTRS = ("_voice_clients", "_voice_locks", "_client")
@@ -88,14 +93,26 @@ def _check_receiver(cls: type, problems: list[str], checked: list[str]) -> None:
             src = inspect.getsource(on_packet)
         except (OSError, TypeError):
             src = ""
-        if BUFFER_SEAM not in src:
-            problems.append(f"VoiceReceiver._on_packet no longer contains `{BUFFER_SEAM}`")
+        for seam in (BUFFER_SEAM, *DECODER_SEAMS):
+            if seam not in src:
+                problems.append(f"VoiceReceiver._on_packet no longer contains `{seam}`")
+
+
+def _check_dave(dave: Any, problems: list[str], checked: list[str]) -> None:
+    """``davey`` (the DAVE library discord.py uses): optional, voice without E2EE works without it."""
+    if dave is None:
+        return
+    _check_methods("DaveSession", getattr(dave, "DaveSession", None) or type(None), _DAVE, problems, checked)
+    checked.append("davey.MediaType.audio")
+    if getattr(getattr(dave, "MediaType", None), "audio", None) is None:
+        problems.append("davey.MediaType.audio missing")
 
 
 def probe(receiver_cls: Optional[type], adapter_cls: Optional[type], conn_cls: Optional[type],
-          check_auth: Optional[Callable[..., Any]]) -> CompatResult:
+          check_auth: Optional[Callable[..., Any]], dave: Any = None) -> CompatResult:
     problems: list[str] = []
     checked: list[str] = []
+    _check_dave(dave, problems, checked)
     for label, cls, fn in (("VoiceReceiver", receiver_cls, _check_receiver),
                            ("DiscordAdapter", adapter_cls, None), ("VoiceConnectionState", conn_cls, None)):
         if cls is None:
@@ -128,8 +145,12 @@ def probe_hermes() -> CompatResult:
         extra = (f"discord.voice_state.VoiceConnectionState not importable: {type(exc).__name__}: {exc}",)
     else:
         conn, extra = VoiceConnectionState, ()
+    try:
+        import davey  # type: ignore[import-not-found]
+    except ImportError:  # no DAVE support installed: discord.py then negotiates voice without E2EE
+        davey = None
     res = probe(getattr(mod, "VoiceReceiver", None), getattr(mod, "DiscordAdapter", None), conn,
-                getattr(mod, "_component_check_auth", None))
+                getattr(mod, "_component_check_auth", None), davey)
     if not extra:
         return res
     return CompatResult(False, extra + tuple(p for p in res.problems if "VoiceConnectionState not" not in p),

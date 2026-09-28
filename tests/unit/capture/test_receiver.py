@@ -9,7 +9,7 @@ import pytest
 
 from meeting_scribe.capture.receiver import TimedBuffer, scribe_receiver_class
 
-from .fakes import FRAME, FakeConn, FakeVoiceReceiver, build_rtp_packet
+from .fakes import FRAME, FakeCodec, FakeConn, FakeVoiceReceiver, build_rtp_packet
 
 pytest.importorskip("nacl")
 
@@ -31,14 +31,14 @@ def make(clock, dave=None):
     cls = scribe_receiver_class(FakeVoiceReceiver)
     conn = FakeConn(dave=dave)
     vc = SimpleNamespace(_connection=conn, channel=SimpleNamespace(members=[]), user=SimpleNamespace(id=9999))
-    rx = cls(vc, clock=clock)
+    rx = cls(vc, clock=clock, codec=FakeCodec())
     rx.start()
     return rx, conn
 
 
-def feed(rx, ssrc, n=1):
+def feed(rx, ssrc, n=1, payload=b"\xf8\xff\xfe"):
     with patch("nacl.secret.Aead") as aead:
-        aead.return_value.decrypt.return_value = b"\xf8\xff\xfe"
+        aead.return_value.decrypt.return_value = payload
         for i in range(n):
             rx._on_packet(build_rtp_packet(ssrc=ssrc, seq=i + 1))
 
@@ -82,19 +82,21 @@ def test_drain_empties_buffers(clock):
 
 def test_unmapped_ssrc_is_kept_until_speaking_maps_it(clock):
     rx, _ = make(clock)
-    feed(rx, 300)
+    feed(rx, 300, payload=b"OPUS1")
     assert rx.drain() == {}
+    clock.t += 3.0  # SPEAKING arrives late: the audio keeps its arrival time
     rx.map_ssrc(300, 77)
-    assert list(rx.drain()) == [77]
+    out = rx.drain()
+    assert list(out) == [77] and out[77][0][0] == 1000.0
 
 
-def test_unmapped_frames_older_than_limit_are_dropped(clock):
+def test_unmapped_frames_older_than_the_window_are_dropped(clock):
     rx, _ = make(clock)
-    feed(rx, 300)
-    clock.t += rx.UNMAPPED_MAX_AGE + 1
-    rx.drain()
+    feed(rx, 300, payload=b"OPUS1")
+    clock.t += rx.RETAIN_SECONDS + 1
+    feed(rx, 300, payload=b"OPUS2")
     rx.map_ssrc(300, 77)
-    assert rx.drain() == {}
+    assert [t for t, _ in rx.drain()[77]] == [clock.t]
 
 
 def test_bot_own_ssrc_is_ignored(clock):

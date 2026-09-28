@@ -14,6 +14,8 @@ class GoodReceiver:
         self._buffers = defaultdict(bytearray)
         self._ssrc_to_user = {}
         self._dave_session = None
+        self._secret_key = None
+        self._decoders = {}
 
     def start(self):
         pass
@@ -25,7 +27,10 @@ class GoodReceiver:
         pass
 
     def _on_packet(self, data):
-        ssrc, pcm = 1, b""
+        ssrc = 1
+        if ssrc not in self._decoders:
+            self._decoders[ssrc] = object()
+        pcm = self._decoders[ssrc].decode(data)
         with self._lock:
             self._buffers[ssrc].extend(pcm)
 
@@ -86,6 +91,45 @@ def test_receiver_buffer_contract_change_is_detected():
     res = probe(Changed, GoodAdapter, GoodConn, good_auth)
     assert not res.ok
     assert any("_buffers[ssrc].extend(" in p for p in res.problems)
+
+
+def test_decoder_seam_change_is_detected():
+    class Pooled(GoodReceiver):
+        def _on_packet(self, data):
+            pcm = self._pool.decode(data)
+            with self._lock:
+                self._buffers[1].extend(pcm)
+
+    res = probe(Pooled, GoodAdapter, GoodConn, good_auth)
+    joined = "\n".join(res.problems)
+    assert "ssrc not in self._decoders" in joined and "self._decoders[ssrc].decode(" in joined
+
+
+class GoodDave:
+    class DaveSession:
+        def decrypt(self, user_id, media_type, packet):
+            pass
+
+        def get_user_ids(self):
+            pass
+
+    class MediaType:
+        audio = 0
+
+
+def test_dave_library_surface_is_checked_when_installed():
+    assert probe(GoodReceiver, GoodAdapter, GoodConn, good_auth, GoodDave).ok
+
+    class OldDave:
+        class DaveSession:
+            def decrypt(self, user_id, media_type, packet):
+                pass
+
+        MediaType = None
+
+    res = probe(GoodReceiver, GoodAdapter, GoodConn, good_auth, OldDave)
+    joined = "\n".join(res.problems)
+    assert "DaveSession.get_user_ids" in joined and "davey.MediaType.audio" in joined
 
 
 def test_missing_methods_and_attrs_are_listed():

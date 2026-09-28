@@ -116,6 +116,38 @@ def test_scribe_receiver_on_real_voice_receiver_packet_path():
     rx.stop()
 
 
+def test_real_voice_receiver_without_speaking_keeps_audio_until_identified():
+    """Hermes' real ``_on_packet`` with a real Opus decoder: an SSRC SPEAKING never mapped is
+    retained (not decoded as noise) and, once it is the only candidate, decoded at its original
+    arrival times (DESIGN §4.1)."""
+    import discord.opus as opus
+
+    if not opus.is_loaded():
+        opus._load_default()
+    if not opus.is_loaded():
+        pytest.skip("libopus not loadable")
+    from meeting_scribe.capture.receiver import scribe_receiver_class
+
+    key = bytes(range(32))
+    cls = scribe_receiver_class(adapter_mod.VoiceReceiver)
+    now = [100.0]
+    rx = cls(_voice_client(key), clock=lambda: now[0])
+    rx.start()
+    rx.update_presence([42])
+    frame = opus.Encoder().encode(b"\x00\x01" * 1920, 960)
+    for seq in (1, 2, 3):
+        rx._on_packet(_rtp(key, frame, ssrc=777, seq=seq))
+        now[0] += 0.02
+    assert rx.drain() == {}  # before the grace: nobody is guessed
+    now[0] += rx.IDENTIFY_GRACE
+    drained = rx.drain()
+    assert list(drained) == [42]
+    assert [t for t, _ in drained[42]] == pytest.approx([100.0, 100.02, 100.04])
+    assert all(len(pcm) == 3840 for _, pcm in drained[42])
+    assert rx.voice_report().identified == {777: (42, "sole")}
+    rx.stop()
+
+
 def test_factory_on_real_bot_registers_dynamic_items(manager):
     asyncio.run(_factory_on_real_bot(manager))
 
