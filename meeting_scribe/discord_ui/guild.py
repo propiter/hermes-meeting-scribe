@@ -18,6 +18,7 @@ from .routing import ChannelInfo
 log = logging.getLogger(__name__)
 SOURCE = "discord"
 TEXT_KINDS = frozenset({"text", "news"})
+FORUM_KINDS = frozenset({"forum", "media"})  # one post per meeting (DESIGN §19.1)
 SNAPSHOT_TIMEOUT = 10.0
 
 
@@ -26,15 +27,21 @@ def _kind(channel: Any) -> Optional[str]:
     kind = kind.rsplit(".", 1)[-1]
     if kind == "category":
         return "category"
+    if kind in FORUM_KINDS:
+        return "forum"
     return "text" if kind in TEXT_KINDS else None
 
 
 def can_post(channel: Any, member: Any, *, need_threads: bool) -> bool:
+    """Text channel: View + Send (+ Create Public Threads for project threads). Forum/media: View +
+    Send (creates the post) + Send Messages in Threads (the tasks inside it), whatever ``need_threads``."""
     try:
         perms = channel.permissions_for(member)
     except Exception:  # partial objects in tests / uncached member: assume we can and let Discord decide
         return True
     ok = bool(getattr(perms, "view_channel", False) and getattr(perms, "send_messages", False))
+    if _kind(channel) == "forum":
+        return ok and bool(getattr(perms, "send_messages_in_threads", False))
     return ok and (not need_threads or bool(getattr(perms, "create_public_threads", False)))
 
 

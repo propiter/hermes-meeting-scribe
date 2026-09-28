@@ -246,6 +246,22 @@ config_schema:
     group: delivery
     minimum: 1
     maximum: 500
+  delivery_forum_tags:
+    type: list
+    default: []
+    label: Forum post tags
+    description: When notes or tasks go to a forum channel, also apply the forum tags with these names
+      to each meeting post (the tag matching the meeting's project is applied anyway). Max 5 per post;
+      names the forum does not have are ignored.
+    group: delivery
+  delivery_forum_default_tag:
+    type: list
+    default: []
+    label: Default forum tag
+    description: 'For forums that require a tag on every post: the tag to use when no tag matches the
+      project or the forum post tags (the first name that exists in that forum). Empty = none; the post
+      then waits until a tag is set.'
+    group: delivery
   projects_min_confidence:
     type: float
     default: 0.6

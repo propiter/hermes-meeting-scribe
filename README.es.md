@@ -182,6 +182,9 @@ propio.
   - obligatorios: **Ver canal, Conectar, Enviar mensajes, Crear hilos públicos**
   - opcional: **Gestionar apodos**, para el prefijo `[REC] ` en el apodo
   - *Hablar* no hace falta
+- **Permisos en un foro** usado para notas o tareas: **Ver canal, Enviar mensajes** (crea el post),
+  **Enviar mensajes en hilos** (todo lo de dentro) y **Adjuntar archivos** (la transcripción).
+  **Gestionar hilos** solo hace falta para renombrar o etiquetar un post que no creó el bot.
 - **Qué revisa `doctor`:** la prueba de compatibilidad de captura (`discord_compat`), las
   dependencias de voz (PyNaCl, davey, libopus), los intents y los permisos.
 
@@ -317,6 +320,8 @@ advertencia.
 | `delivery_dm_assignees` | bool | `true` | Enviar a cada responsable sus tareas por DM tras publicar. |
 | `delivery_discord_transcript` | bool | `true` | Adjuntar la transcripción completa (archivo Markdown) a las notas. |
 | `delivery_transcript_max_mb` | int | `8` | Tamaño máximo por archivo; si es mayor se divide. Súbelo si tu servidor permite archivos más grandes. |
+| `delivery_forum_tags` | list | `[]` | Cuando las notas o tareas van a un canal foro, aplica también a cada post de reunión las etiquetas del foro con estos nombres (la que coincide con el proyecto de la reunión se aplica siempre). Máximo 5 por post; los nombres que el foro no tiene se ignoran. |
+| `delivery_forum_default_tag` | list | `[]` | Para foros que exigen una etiqueta en cada post: la etiqueta a usar cuando ninguna coincide con el proyecto ni con las etiquetas de los posts (el primer nombre que exista en ese foro). Vacío = ninguna; el post espera hasta que se configure. |
 
 #### Proyectos
 
@@ -409,10 +414,21 @@ Las notas (resumen, índice de tareas y transcripción) van al primero de estos 
 - **Tareas.** Una tarea con proyecto va a un hilo del canal de ese proyecto (ver "Tareas en
   Discord"), también en Meet. Una tarea sin proyecto va a `delivery_fallback_channel` si está
   definido; si no, bajo las notas.
+- **Canales foro.** Cualquiera de estos canales (notas, respaldo, canal de proyecto) puede ser un
+  foro o un canal multimedia. Entonces cada reunión es **un post** titulado `<fecha> · <título>`: el
+  resumen (TL;DR, decisiones, preguntas abiertas) es su primer mensaje y dentro del post van la
+  transcripción, las tareas con sus botones y el índice de tareas. Un foro de proyecto recibe un post
+  por reunión con las tareas de ese proyecto. Las re-entregas y los botones editan el post; si se
+  borra, se crea de nuevo. Cada post lleva las etiquetas del foro cuyo nombre coincide con el
+  proyecto de la reunión o con `delivery_forum_tags` (máximo 5). Si el foro exige etiqueta y ninguna
+  coincide, se usa `delivery_forum_default_tag`; si no hay, la entrega espera y `status`/`doctor`
+  dicen qué ajuste cambiar — nunca se publica en otro sitio. `doctor` y `config list` muestran qué
+  canales son foros y qué permisos faltan. Los DM a los responsables enlazan al post.
 
 ```bash
 hermes meeting-scribe config set google_meet_discord_channel "#notas-reunion"
 hermes meeting-scribe config set delivery_fallback_channel "#pendientes"
+hermes meeting-scribe config set delivery_forum_default_tag "Actas"   # solo para foros que exigen etiqueta
 hermes meeting-scribe config set delivery_discord_guild "Mi Equipo"   # solo si el bot está en varios servidores
 hermes meeting-scribe doctor
 ```

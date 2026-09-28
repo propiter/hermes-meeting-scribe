@@ -335,5 +335,13 @@
   "space.cli_override_set": "{slug}: {key} = {value}",
   "space.cli_override_unset": "{slug}: {key} vuelve a usar el valor global.",
   "space.cli_unassigned_guild": "el bot está en el servidor {guild}, que no pertenece a ningún espacio: allí no se graba nada (hermes meeting-scribe space add-guild <slug> <id>).",
-  "space.choose_yours": "Estás en varios equipos: {spaces}. Indica cuál al final del comando, por ejemplo `/{cmd} {sub} space={example}`."
+  "space.choose_yours": "Estás en varios equipos: {spaces}. Indica cuál al final del comando, por ejemplo `/{cmd} {sub} space={example}`.",
+  "cfg.delivery_forum_tags.label": "Etiquetas de los posts del foro",
+  "cfg.delivery_forum_tags.help": "Cuando las notas o tareas van a un canal foro, aplica también a cada post de reunión las etiquetas del foro con estos nombres (la que coincide con el proyecto de la reunión se aplica siempre). Máximo 5 por post; los nombres que el foro no tiene se ignoran.",
+  "cfg.delivery_forum_default_tag.label": "Etiqueta por defecto del foro",
+  "cfg.delivery_forum_default_tag.help": "Para foros que exigen una etiqueta en cada post: la etiqueta a usar cuando ninguna coincide con el proyecto ni con las etiquetas de los posts (el primer nombre que exista en ese foro). Vacío = ninguna; el post espera hasta que se configure.",
+  "cfg.kind.forum": "foro",
+  "cfg.kind.media": "canal multimedia",
+  "tasks.panel_link": "Notas de la reunión: {url}",
+  "ui.error_forum_needs_tag": "Ese foro exige una etiqueta en cada post y ninguna coincide con este proyecto. Pide a un administrador que configure `delivery_forum_default_tag` o elige otro canal."
 }

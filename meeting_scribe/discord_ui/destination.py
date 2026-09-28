@@ -7,9 +7,10 @@ Order of the notes channel:
 * Nothing usable → PENDING: the delivery waits (without using attempts) until a channel is set or
   appears; ``status``/``doctor`` show the exact command to run.
 
-Channel settings hold an id or a NAME. A name is matched against the server's text channels after
-removing decoration (emoji, ``#``, case, ``-``/``_``/spaces); ambiguous or unknown names are never
-guessed — they are reported and skipped.
+Channel settings hold an id or a NAME. A name is matched against the server's text, announcement,
+forum and media channels after removing decoration (emoji, ``#``, case, ``-``/``_``/spaces);
+ambiguous or unknown names are never guessed — they are reported and skipped. In a forum (or media)
+channel each meeting is ONE post (DESIGN §19.1).
 
 The server ("guild"): the meeting's own for Discord meetings (not cached → PENDING, never another
 server); for imported meetings (no guild) the one of a configured channel id, else
@@ -18,8 +19,8 @@ server. With several servers and nothing configured nothing is guessed. Configur
 another server are ignored and reported.
 
 AUTOMATIC, in that server: its system channel when the bot can post AND attach files there, else
-the first text channel whose clean name is in ``delivery_auto_channel_names`` (list order, then
-channel position) where the bot can post. Never NSFW, never hidden from ``@everyone``, and nothing
+the first text or forum channel whose clean name is in ``delivery_auto_channel_names`` (list order,
+then channel position) where the bot can post. Never NSFW, never hidden from ``@everyone``, and nothing
 while the bot's member is not cached (permissions unknown).
 
 Never a DM: Hermes' home channel is no longer a fallback (it is often a DM with the owner, where
@@ -39,6 +40,10 @@ from ..domain.text import fold, is_ascii_digits
 
 REPORT_KV = "discord.destination_report"
 TEXT_KINDS = frozenset({"text", "news"})
+FORUM_KINDS = frozenset({"forum", "media"})  # Discord channel types 15 and 16: one post (thread) per meeting
+POSTABLE_KINDS = TEXT_KINDS | FORUM_KINDS
+MAX_FORUM_TAGS = 5  # Discord accepts at most 5 applied tags per post
+TAG_REQUIRED_CODE = 40067  # "A tag is required to create a forum post in this channel"
 EXPLICIT_KEYS = ("google_meet_discord_channel", "delivery_discord_channel")
 _SEP_RE = re.compile(r"[-_\s]+")
 
@@ -53,8 +58,53 @@ def _kind(channel: Any) -> str:
     return str(getattr(channel, "type", "") or "").rsplit(".", 1)[-1]
 
 
-def is_text(channel: Any) -> bool:
-    return _kind(channel) in TEXT_KINDS
+def is_forum(channel: Any) -> bool:
+    """A forum or media channel: nothing is sent to it directly; each meeting is a post (thread)."""
+    return _kind(channel) in FORUM_KINDS
+
+
+def is_postable(channel: Any) -> bool:
+    return _kind(channel) in POSTABLE_KINDS
+
+
+def kind_label(channel: Any) -> str:
+    """``text`` | ``forum`` | ``media`` (announcement channels count as text)."""
+    kind = _kind(channel)
+    return kind if kind in FORUM_KINDS else "text"
+
+
+def requires_tag(forum: Any) -> bool:
+    return bool(getattr(getattr(forum, "flags", None), "require_tag", False))
+
+
+def tag_names(forum: Any) -> list[str]:
+    return [str(getattr(tag, "name", "") or "") for tag in list(getattr(forum, "available_tags", None) or ())]
+
+
+def pick_tags(forum: Any, wanted: Iterable[str], defaults: Sequence[str] = ()) -> list[Any]:
+    """The forum's tags whose name matches (decoration, emoji and case ignored) one of ``wanted``, in the
+    forum's order, at most 5. When the forum REQUIRES a tag and none matched, the first of ``defaults``
+    that the forum has. Tag names are never invented: an unknown name is simply not applied."""
+    tags = list(getattr(forum, "available_tags", None) or ())
+    keys = {norm_name(w) for w in wanted if norm_name(w)}
+    hits = [tag for tag in tags if norm_name(getattr(tag, "name", "")) in keys][:MAX_FORUM_TAGS]
+    if hits or not requires_tag(forum):
+        return hits
+    for name in defaults:
+        tag = next((x for x in tags if norm_name(getattr(x, "name", "")) == norm_name(name)), None)
+        if tag is not None:
+            return [tag]
+    return []
+
+
+def tag_rejected(exc: BaseException) -> bool:
+    """Discord refused a post because the forum requires a tag (HTTP 400, code 40067)."""
+    return getattr(exc, "code", None) == TAG_REQUIRED_CODE
+
+
+class DestinationPending(LookupError):
+    """No usable notes channel yet (none resolved, or a forum refused the post); the delivery waits,
+    without spending attempts, until the configuration is fixed (DESIGN §19)."""
 
 
 def _perms(channel: Any, member: Any) -> Any:
@@ -66,14 +116,29 @@ def _perms(channel: Any, member: Any) -> Any:
         return None
 
 
+def needed_permissions(channel: Any, *, attach: bool = False) -> tuple[str, ...]:
+    """What the bot needs to post the notes there. A forum/media post is created with *Send Messages*
+    and everything after its first message lives inside it (*Send Messages in Threads*)."""
+    names = ("view_channel", "send_messages") + (("send_messages_in_threads",) if is_forum(channel) else ())
+    return names + (("attach_files",) if attach else ())
+
+
+def missing_permissions(channel: Any, member: Any, *, attach: bool = False) -> Optional[list[str]]:
+    """The missing ones (``[]`` = all granted); ``None`` when the permissions are unknown."""
+    p = _perms(channel, member)
+    if p is None:
+        return None
+    return [name for name in needed_permissions(channel, attach=attach) if not bool(getattr(p, name, False))]
+
+
+PERMISSION_LABELS = {"view_channel": "View Channel", "send_messages": "Send Messages",
+                     "send_messages_in_threads": "Send Messages in Threads", "attach_files": "Attach Files"}
+
+
 def can_send(channel: Any, member: Any, *, attach: bool = False) -> bool:
     """Known to be allowed. Unknown permissions (member not cached) are NOT a yes: the automatic
     choice must not guess (review M3); explicit settings do not go through this check."""
-    p = _perms(channel, member)
-    if p is None:
-        return False
-    ok = bool(getattr(p, "view_channel", False) and getattr(p, "send_messages", False))
-    return ok and (not attach or bool(getattr(p, "attach_files", False)))
+    return missing_permissions(channel, member, attach=attach) == []
 
 
 def is_public(channel: Any) -> bool:
@@ -105,6 +170,7 @@ class Resolved:
     channel_id: Optional[str] = None
     channel_name: str = ""
     detail: str = ""
+    kind: str = ""  # text | forum | media (when the channel is known)
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if v not in (None, "")}
@@ -167,20 +233,20 @@ def pick_guild(client: Any, setting: str, allowed: Optional[frozenset[str]] = No
 
 
 def find_channel_by_name(guilds: Iterable[Any], name: str) -> tuple[list[Any], list[Any]]:
-    """``(text matches, non-text matches)`` of ``name`` across ``guilds``."""
+    """``(postable matches — text, announcement, forum, media —, other matches)`` of ``name``."""
     wanted = norm_name(name)
     text: list[Any] = []
     other: list[Any] = []
     for g in guilds:
         for ch in list(getattr(g, "channels", None) or ()):
             if norm_name(getattr(ch, "name", "")) == wanted:
-                (text if is_text(ch) else other).append(ch)
+                (text if is_postable(ch) else other).append(ch)
     return text, other
 
 
 def resolve_setting(client: Any, key: str, value: str, guild: Any,
                     allowed: Optional[frozenset[str]] = None) -> Resolved:
-    """A channel setting (id or name) → a text channel id; names are resolved in ``guild`` (or, when no
+    """A channel setting (id or name) → a postable channel id; names are resolved in ``guild`` (or, when no
     server is chosen, across every server of the space — accepted only when exactly one matches)."""
     kind, ref = channel_ref(value)
     if not kind:
@@ -191,14 +257,14 @@ def resolve_setting(client: Any, key: str, value: str, guild: Any,
     text, other = find_channel_by_name(scope, ref)
     if len(text) == 1:
         ch = text[0]
-        return Resolved(key, ref, "ok", str(ch.id), str(getattr(ch, "name", "")))
+        return Resolved(key, ref, "ok", str(ch.id), str(getattr(ch, "name", "")), kind=kind_label(ch))
     if len(text) > 1:
-        return Resolved(key, ref, "ambiguous", detail=f"{len(text)} text channels are named like {ref!r}; "
+        return Resolved(key, ref, "ambiguous", detail=f"{len(text)} channels are named like {ref!r}; "
                                                        f"use the channel id instead")
     if other:
-        return Resolved(key, ref, "not_text", detail=f"#{ref} is not a text channel")
+        return Resolved(key, ref, "not_text", detail=f"#{ref} is not a text or forum channel")
     where = f"server {getattr(guild, 'name', '') or getattr(guild, 'id', '')}" if guild is not None else "any server"
-    return Resolved(key, ref, "missing", detail=f"no text channel named {ref!r} in {where}")
+    return Resolved(key, ref, "missing", detail=f"no text or forum channel named {ref!r} in {where}")
 
 
 def auto_channel(guild: Any, names: Sequence[str]) -> Resolved:
@@ -214,7 +280,7 @@ def auto_channel(guild: Any, names: Sequence[str]) -> Resolved:
     skipped: list[str] = []
 
     def usable(ch: Any, *, attach: bool = False) -> bool:
-        if not is_text(ch) or not can_send(ch, me, attach=attach):
+        if not is_postable(ch) or not can_send(ch, me, attach=attach):
             return False
         if is_nsfw(ch) or not is_public(ch):
             skipped.append(f"#{getattr(ch, 'name', '')}")
@@ -222,7 +288,8 @@ def auto_channel(guild: Any, names: Sequence[str]) -> Resolved:
         return True
     system = getattr(guild, "system_channel", None)
     if system is not None and usable(system, attach=True):
-        return Resolved("auto", "system_channel", "ok", str(system.id), str(getattr(system, "name", "")))
+        return Resolved("auto", "system_channel", "ok", str(system.id), str(getattr(system, "name", "")),
+                        kind=kind_label(system))
     wanted = [norm_name(n) for n in names if norm_name(n)]
     best: Optional[tuple[int, int, Any]] = None
     for ch in list(getattr(guild, "channels", None) or ()):
@@ -240,7 +307,8 @@ def auto_channel(guild: Any, names: Sequence[str]) -> Resolved:
                        "configure one explicitly to use it)")
         return Resolved("auto", ", ".join(names), "none", detail=detail)
     ch = best[2]
-    return Resolved("auto", str(getattr(ch, "name", "")), "ok", str(ch.id), str(getattr(ch, "name", "")))
+    return Resolved("auto", str(getattr(ch, "name", "")), "ok", str(ch.id), str(getattr(ch, "name", "")),
+                    kind=kind_label(ch))
 
 
 def _cached_channel(client: Any, cid: str) -> Any:
@@ -282,10 +350,33 @@ def _check_id(client: Any, step: Resolved, guild: Any, allowed: Optional[frozens
         return Resolved(step.key, step.value, "other_guild",
                         detail=f"{step.key}={step.value} is in server {_guild_label(ch_guild)}, not in "
                                f"{_guild_label(guild)}; ignored")
-    return Resolved(step.key, step.value, "ok", step.channel_id, str(getattr(ch, "name", "") or step.channel_name))
+    return Resolved(step.key, step.value, "ok", step.channel_id, str(getattr(ch, "name", "") or step.channel_name),
+                    kind=kind_label(ch))
 
 
-def _explicit_warnings(client: Any, step: Resolved) -> list[str]:
+def forum_warnings(key: str, forum: Any, s: Settings) -> list[str]:
+    """A forum that REQUIRES a tag, and none of ``delivery_forum_default_tag`` exists there: a post whose
+    project and ``delivery_forum_tags`` match no tag will be refused (the delivery then waits)."""
+    if not is_forum(forum) or not requires_tag(forum) or pick_tags(forum, (), s.delivery_forum_default_tag):
+        return []
+    names = ", ".join(tag_names(forum)) or "none"
+    warning = (f"{key}: forum #{getattr(forum, 'name', '')} requires a tag on every post; posts whose project "
+               "matches no tag are refused. Set one with `hermes meeting-scribe config set "
+               f"delivery_forum_default_tag \"<tag>\"` (tags there: {names})")
+    return [warning]
+
+
+def permission_warnings(key: str, channel: Any, *, attach: bool) -> list[str]:
+    """Missing bot permissions on a configured channel (unknown permissions: nothing to say)."""
+    missing = missing_permissions(channel, getattr(getattr(channel, "guild", None), "me", None), attach=attach)
+    if not missing:
+        return []
+    what = "forum" if is_forum(channel) else "channel"
+    labels = ", ".join(PERMISSION_LABELS.get(m, m) for m in missing)
+    return [f"{key}: the bot is missing {labels} in {what} #{getattr(channel, 'name', '')}"]
+
+
+def _explicit_warnings(client: Any, step: Resolved, s: Settings) -> list[str]:
     ch = _cached_channel(client, step.channel_id or "")
     if ch is None:
         return []
@@ -294,7 +385,8 @@ def _explicit_warnings(client: Any, step: Resolved) -> list[str]:
         out.append(f"{step.key}: #{getattr(ch, 'name', '')} is not visible to @everyone; only its members see the notes")
     if is_nsfw(ch):
         out.append(f"{step.key}: #{getattr(ch, 'name', '')} is marked NSFW")
-    return out
+    out += permission_warnings(step.key, ch, attach=s.delivery_discord_transcript and step.key in EXPLICIT_KEYS)
+    return out + forum_warnings(step.key, ch, s)
 
 
 def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optional[frozenset[str]] = None) -> Destination:
@@ -349,7 +441,7 @@ def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optio
             d.steps.append(step)
         if step.channel_id and step.channel_id not in d.targets:
             d.targets.append(step.channel_id)
-            d.warnings += _explicit_warnings(client, step)
+            d.warnings += _explicit_warnings(client, step, s)
             if guild is None:  # a name found in exactly one server: that server
                 guild = d.guild = _guild_of_channel(client, step.channel_id)
                 d.guild_source = "channel" if guild is not None else d.guild_source
@@ -366,9 +458,24 @@ def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optio
     if fb.status != "unset":
         d.steps.append(fb)
     d.fallback_channel = fb.channel_id
+    if fb.channel_id:
+        d.warnings += _explicit_warnings(client, fb, s)
+    d.warnings += _project_forum_warnings(client, s, guild)
     if not d.targets:
         d.problem = pending_reason(meeting, d)
     return d
+
+
+def _project_forum_warnings(client: Any, s: Settings, guild: Any) -> list[str]:
+    """``project_channels`` entries that are forums of this server: permissions and required tags."""
+    out: list[str] = []
+    for project, cid in s.project_channel_map().items():
+        ch = _cached_channel(client, cid)
+        if ch is None or not is_forum(ch) or (guild is not None and not same_guild(getattr(ch, "guild", None), guild)):
+            continue
+        key = f"project_channels[{project}]"
+        out += permission_warnings(key, ch, attach=False) + forum_warnings(key, ch, s)
+    return out
 
 
 def channel_key(meeting: Meeting) -> str:

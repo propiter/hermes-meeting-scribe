@@ -194,7 +194,10 @@ def check_delivery(env: Any) -> Check:
         g = rep.get("guild") or {}
         where = f"{g.get('name') or g.get('id') or 'no server'}"
         target = (rep.get("targets") or ["—"])[0]
-        parts.append(f"{source}: server {where} ({g.get('source') or '-'}), notes channel {target}")
+        kind = next((st.get("kind") for st in rep.get("steps") or () if st.get("channel_id") == target
+                     and st.get("kind") in ("forum", "media")), "")
+        channel = f"{kind} {target} (one post per meeting)" if kind else f"channel {target}"
+        parts.append(f"{source}: server {where} ({g.get('source') or '-'}), notes {channel}")
         problems += [st["detail"] for st in rep.get("steps") or () if st.get("detail")
                      and st.get("status") not in ("ok", "unset", "none")]
         problems += [w for w in rep.get("warnings") or () if isinstance(w, str) and w]

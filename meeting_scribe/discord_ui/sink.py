@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..config import Settings
-from ..domain.errors import ChannelUnavailable
+from ..domain.errors import ChannelUnavailable, ForumTagRequired
 from ..domain.models import KV_MOVE_FROM_DM, Meeting, Notes, SinkResult, is_discord_user_id
 from ..domain.names import clean_channel_name
 from ..storage.artifacts import read_notes, read_transcript, render_transcript_md
 from .board import Board, move_options
-from .destination import REPORT_KV, Destination, resolve
+from .destination import REPORT_KV, Destination, DestinationPending, is_forum, pick_tags, requires_tag, resolve
 from .publisher import Pointers, ViewFactory
 from .render import RenderOptions
 from .render_tasks import render_panel
@@ -33,10 +33,6 @@ log = logging.getLogger(__name__)
 SINK = "discord"
 
 __all__ = ["DiscordNotesSink", "ViewFactory", "SINK", "DestinationPending"]
-
-
-class DestinationPending(LookupError):
-    """No notes channel could be resolved; the delivery waits for one (DESIGN §19)."""
 
 
 class DiscordNotesSink:
@@ -204,6 +200,14 @@ class DiscordNotesSink:
             raise LookupError(meeting_id)
         return move_options(got[1], item_id, self._settings(got[1].meeting).channel_name_ignore_prefixes)
 
+    async def _check_forum_move(self, meeting: Meeting, channel_id: str, project: str) -> None:
+        """A forum that requires a tag would refuse the task's post: say so BEFORE moving anything."""
+        s = self._settings(meeting)
+        forum = await self._adapter()._resolve_channel(channel_id)
+        if is_forum(forum) and requires_tag(forum) and not pick_tags(forum, (project, *s.delivery_forum_tags),
+                                                                      s.delivery_forum_default_tag):
+            raise ForumTagRequired(f"forum {channel_id} requires a tag and none matches {project!r}")
+
     async def move_item(self, meeting_id: str, item_id: str, channel_id: str, *, learn: bool = True) -> str:
         """📁: pin the task to ``channel_id`` (``learn``: owners teach routing), re-post it there, drop the old one."""
         async with self._lock(meeting_id):
@@ -218,6 +222,8 @@ class DiscordNotesSink:
         if chan is None or not chan.can_post:
             raise ChannelUnavailable(f"channel {channel_id} is not available")
         name = clean_channel_name(chan.name, self._settings(board.meeting).channel_name_ignore_prefixes) or chan.name
+        if chan.kind == "forum":
+            await self._check_forum_move(board.meeting, chan.id, name)
         await asyncio.to_thread(lambda: self._service().move_item(meeting_id, item_id, chan.id, name, learn=learn))
         await self._refresh(meeting_id)
         return f"<#{chan.id}>"

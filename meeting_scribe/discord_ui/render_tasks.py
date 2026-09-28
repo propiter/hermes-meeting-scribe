@@ -183,7 +183,8 @@ def render_index(meeting: Meeting, views: Sequence[TaskView], threads: Mapping[O
 
 # -- panel -----------------------------------------------------------------------------------------
 def render_panel(meeting: Meeting, views: Sequence[TaskView], *, user_id: str, scope: str, page: int,
-                 o: RenderOptions, is_owner: bool) -> TaskPanel:
+                 o: RenderOptions, is_owner: bool, link: str = "") -> TaskPanel:
+    """``link``: where the meeting's notes are (the DM panel points to the notes message or forum post)."""
     lang = o.lang
     scope = "a" if scope == "a" and is_owner else "m"
     mine = [v for v in views if scope == "a" or (v.item.owner_speaker_id or "") == str(user_id)]
@@ -192,6 +193,8 @@ def render_panel(meeting: Meeting, views: Sequence[TaskView], *, user_id: str, s
     title = meeting.title or meeting.channel_name
     key = "tasks.panel_all" if scope == "a" else "tasks.panel_mine"
     header = f"### 📋 {t(key, lang, title=title)}"
+    if link:
+        header += f"\n-# 🔗 {t('tasks.panel_link', lang, url=link)}"
     if not mine:
         header += f"\n{t('tasks.panel_empty', lang)}"
     elif pages > 1:

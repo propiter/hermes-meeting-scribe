@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional, Protocol
 
 from . import cli_google, cli_spaces, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
-from .config import CHANNEL_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
+from .config import DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
 from .domain.models import MeetingState, Stage
 from .i18n import t
 from .pipeline.service import MeetingService
@@ -350,7 +350,7 @@ def _config_set(args: argparse.Namespace, rt: CliRuntime) -> int:
         return 2
     if key in ("google_meet_enabled", "google_meet_discord_channel", "delivery_discord_channel"):
         _warn_meet_channel(rt, space or None)
-    if key in CHANNEL_KEYS or key in ("delivery_discord_guild", "delivery_auto_channel_names"):
+    if key in DESTINATION_KEYS:
         _nudge_waiting(rt)
     return 0
 
@@ -448,6 +448,12 @@ def _resolved_channels(rt: CliRuntime) -> dict[str, dict[str, Any]]:
             key = "delivery_auto_channel_names" if step.get("key") == "auto" else step.get("key")
             if key in SPEC and key not in out:
                 out[key] = {k: v for k, v in step.items() if k != "key"}
+        for warning in rep.get("warnings") or ():  # "<key>: …" / "project_channels[<name>]: …"
+            key = str(warning).split(":", 1)[0].split("[", 1)[0]
+            if key in SPEC:
+                notes = out.setdefault(key, {}).setdefault("warnings", [])
+                if warning not in notes:
+                    notes.append(warning)
         guild = rep.get("guild") or {}
         if guild.get("id") and "delivery_discord_guild" not in out:
             out["delivery_discord_guild"] = {"status": "ok", "guild_id": guild["id"], "guild_name": guild.get("name"),
@@ -473,12 +479,17 @@ def _config_list(args: argparse.Namespace, rt: CliRuntime) -> int:
         res = r.get("resolved") or {}
         note = ""
         if res.get("channel_id"):
-            note = f"  → #{res.get('channel_name') or res['channel_id']} ({res['channel_id']})"
+            kind = {"forum": t("cfg.kind.forum", rt.settings().ui_language),
+                    "media": t("cfg.kind.media", rt.settings().ui_language)}.get(res.get("kind") or "", "")
+            kind = f"{kind} " if kind else ""
+            note = f"  → {kind}#{res.get('channel_name') or res['channel_id']} ({res['channel_id']})"
         elif res.get("guild_id"):
             note = f"  → {res.get('guild_name') or res['guild_id']} ({res['guild_id']}, {res.get('source')})"
         elif res.get("detail"):
             note = f"  ! {res['detail']}"
         _print(f"  {r['key']} = {_fmt(r['value'])}  ({r['origin']}){note}")
+        for warning in res.get("warnings") or ():
+            _print(f"    ! {warning}")
     if llm is not None and (not args.group or args.group == "llm"):
         _print(f"[{t('cfg.group.llm', rt.settings().ui_language)}]")
         _print_llm(llm, rt.settings().ui_language, indent="  ")

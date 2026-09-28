@@ -12,7 +12,8 @@ spoken ``project_hint``):
 5. nothing for the task → the meeting's project, always flagged;
 6. nothing at all → ``channel_id=None``: the task stays in the meeting chat.
 
-A matched channel the bot cannot post in (View / Send / Create Public Threads) also returns
+A matched channel the bot cannot post in (View / Send / Create Public Threads; for a forum, View /
+Send / Send Messages in Threads) also returns
 ``channel_id=None`` with ``reason="no_permission"`` and ``wanted_channel_id`` so the index says so.
 """
 from __future__ import annotations
@@ -31,7 +32,7 @@ WEAK_FLOOR = 0.2  # below min_score by this much a best guess is still posted, f
 class ChannelInfo:
     id: str
     name: str
-    kind: str = "text"  # text | category
+    kind: str = "text"  # text | forum (forum and media: one post per meeting) | category
     category_id: Optional[str] = None
     position: int = 0
     can_post: bool = True  # View Channel + Send Messages + Create Public Threads

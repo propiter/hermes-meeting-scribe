@@ -103,6 +103,8 @@ SPEC: dict[str, Opt] = {
     "delivery_dm_assignees": Opt("bool", True, "delivery"),
     "delivery_discord_transcript": Opt("bool", True, "delivery"),
     "delivery_transcript_max_mb": Opt("int", 8, "delivery", minimum=1, maximum=500),
+    "delivery_forum_tags": Opt("list", (), "delivery"),
+    "delivery_forum_default_tag": Opt("list", (), "delivery"),
     # projects
     "projects_min_confidence": Opt("float", 0.6, "projects", minimum=0.0, maximum=1.0),
     "project_channels": Opt("list", (), "projects", format="project_channel"),
@@ -133,6 +135,9 @@ SPEC: dict[str, Opt] = {
     "commands_aliases": Opt("list", ("meet", "rec"), "ui", scope="global"),
 }
 CHANNEL_KEYS = tuple(k for k, o in SPEC.items() if o.format == _CH)
+# Changing one of these may unblock a delivery waiting for a channel (DESIGN §19): re-queue it.
+DESTINATION_KEYS = CHANNEL_KEYS + ("delivery_discord_guild", "delivery_auto_channel_names", "project_channels",
+                                   "delivery_forum_tags", "delivery_forum_default_tag")
 # Pre-0.2 dotted names. ``ctx.set_config("kanban.mode")`` stored NESTED YAML while Hermes' Desktop
 # settings form reads ``settings[key]`` FLAT, so dotted keys always showed their defaults there
 # (review finding 10). Canonical keys are now flat; the old nested values are still read as a fallback
@@ -285,6 +290,8 @@ class Settings:
     delivery_auto_channel_names: tuple[str, ...]
     delivery_fallback_channel: str
     delivery_transcript_max_mb: int
+    delivery_forum_tags: tuple[str, ...]
+    delivery_forum_default_tag: tuple[str, ...]
     pipeline_max_attempts: int
     pipeline_workers: int
     pipeline_max_transcriptions: int

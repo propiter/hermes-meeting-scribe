@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Optional
 
 from .. import doctor, llm_config
-from ..config import (CHANNEL_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, space_keys,
+from ..config import (DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, space_keys,
                       validate_value)
 from ..llm_config import redact
 from ..storage.repo import Repository
@@ -111,7 +111,7 @@ def set_space_setting(store: SettingsStore, repo: Repository, slug: str, key: st
 
 
 def _nudge(repo: Optional[Repository], key: str) -> int:
-    if repo is not None and (key in CHANNEL_KEYS or key in ("delivery_discord_guild", "delivery_auto_channel_names")):
+    if repo is not None and key in DESTINATION_KEYS:
         return requeue_waiting(repo)
     return 0
 

@@ -8,8 +8,17 @@ Layout per delivery:
 * each project channel: an anchor message + a thread (``thread:<channel>`` pointer; directly in the
   channel when ``delivery_project_threads`` is off or the thread cannot be created), then ONE
   message per task with its own buttons (``task:<item>`` pointer holding the routed ``target``).
-* assignee DMs (``delivery_dm_assignees``, default on): one panel per assignee (``dm:<user>``).
-  A closed DM (50007) is logged and listed in the index; it never fails the delivery.
+* assignee DMs (``delivery_dm_assignees``, default on): one panel per assignee (``dm:<user>``),
+  with a link to the meeting's notes. A closed DM (50007) is logged and listed in the index; it
+  never fails the delivery.
+
+Forum/media channels (DESIGN §19.1): the notes channel is ONE post per meeting named
+``<date> · <title>`` whose first message is the summary; its other parts, the transcript, the tasks
+without project and the index go inside the post. A project channel that is a forum gets one post
+per meeting too (instead of anchor + thread). Pointers keep the post id (``thread``/``channel``),
+its first message and the applied tags; a deleted post is created again, a post whose first
+message was deleted keeps being used. A forum that requires a tag and refuses the post leaves the
+delivery waiting (:class:`DestinationPending`) — never another channel, never a DM.
 
 Every pointer is saved right after its message exists, so a retry after a partial failure edits
 instead of duplicating (review W8). A task whose route changed (📁 move, new learned mapping) is
@@ -25,7 +34,8 @@ from ..config import Settings
 from ..domain.models import KV_DM_NOTES, KV_MOVE_FROM_DM, Meeting, Notes, is_discord_user_id
 from ..i18n import t
 from .board import Board, build_board
-from .destination import Destination, channel_key, explicit_channel, same_guild
+from .destination import (MAX_FORUM_TAGS, Destination, DestinationPending, channel_key, explicit_channel, is_forum,
+                          pick_tags, same_guild, tag_names, tag_rejected)
 from .guild import snapshot_channels
 from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
@@ -33,6 +43,7 @@ from .render_tasks import TaskView, render_index, render_panel, render_task
 from .transcript_file import SUFFIX as TRANSCRIPT_SUFFIX, mark_legacy, publish_transcript
 
 log = logging.getLogger(__name__)
+POST_NAME_LIMIT = 100  # Discord caps thread (forum post) names at 100 characters
 MOVE_SUFFIX = "dm_move"  # a move out of a DM in progress: {from, channel, key, attach, old: {suffix: ptr}}
 LEFTOVER_SUFFIX = "dm_leftover"  # DM messages a finished move kept (no confirmed replacement): {from, old, why}
 
@@ -124,7 +135,13 @@ class TaskPublisher:
         specs = render_header(meeting, notes, self.o.lang)
         ptr = await ptrs.load("notes")
         channel = None
-        if ptr and ptr.get("messages"):
+        if ptr and ptr.get("messages") and ptr.get("forum"):
+            channel, first_id = await self._open_post(ptr["channel"], ptr["messages"][0], specs[0])
+            if channel is not None:
+                ptr = {**ptr, "messages": [first_id, *ptr["messages"][1:]]}
+                ptr = await self._sync_post(channel, ptr, self._post_name(meeting, notes),
+                                            self._notes_tags(meeting, notes), ptrs, "notes")
+        elif ptr and ptr.get("messages"):
             try:
                 channel = await self.msgs.channel(ptr["channel"])
                 await self.msgs.edit(channel, ptr["messages"][0], spec=specs[0])
@@ -132,14 +149,27 @@ class TaskPublisher:
                 if not is_missing(exc):
                     raise  # transient: the job retries, nothing is duplicated
                 log.info("meeting-scribe: stored notes message gone (%s); re-posting", exc)
-                channel, ptr = None, None
-        if channel is None or ptr is None:
+                channel = None
+        if channel is None:
+            if ptr and "attach" in ptr and attach is None:
+                attach = bool(ptr["attach"])  # a re-post keeps the transcript intent of the original summary
+            if ptr and ptr.get("forum"):
+                await self._forget_post_contents(ptr, ptrs)
             channel = chat if chat is not None else await self._chat_channel(meeting)
-            first = await self.msgs.send(channel, spec=specs[0])
-            ptr = {"v": 2, "channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url,
-                   # the transcript may be attached to THIS summary (set once, when it is first posted)
-                   "attach": bool(self.settings.delivery_discord_transcript) if attach is None else bool(attach)}
-            await ptrs.save("notes", ptr, first.jump_url)
+            # the transcript may be attached to THIS summary (set once, when it is first posted)
+            intent = bool(self.settings.delivery_discord_transcript) if attach is None else bool(attach)
+            if is_forum(channel):
+                forum = channel
+                channel, first, tags = await self._new_post(forum, self._post_name(meeting, notes), specs[0],
+                                                            self._notes_tags(meeting, notes))
+                ptr = {"v": 2, "channel": channel.id, "thread": None, "forum": forum.id, "messages": [first.id],
+                       "url": self._post_url(channel, first), "attach": intent,
+                       "name": self._post_name(meeting, notes), "tags": tags}
+            else:
+                first = await self.msgs.send(channel, spec=specs[0])
+                ptr = {"v": 2, "channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url,
+                       "attach": intent}
+            await ptrs.save("notes", ptr, ptr["url"])
         if ptr.get("v") != 2:
             ptr = await self._migrate_legacy(channel, ptr, ptrs)
         ids: list[int] = list(ptr["messages"])
@@ -155,7 +185,7 @@ class TaskPublisher:
             msg = await self.msgs.send(channel, spec=spec)
             ids[i:i + 1] = [msg.id]
             await ptrs.save("notes", {**ptr, "messages": ids}, ptr.get("url", ""))
-        for surplus in ids[len(specs):]:  # the summary got shorter
+        for surplus in ids[len(specs):]:  # the summary got shorter (never the first: a post's opening message)
             await self.msgs.delete(channel.id, surplus)
         ptr = {**ptr, "messages": ids[:len(specs)]}
         await ptrs.save("notes", ptr, ptr.get("url", ""))
@@ -170,7 +200,96 @@ class TaskPublisher:
         await ptrs.save("notes", ptr, ptr.get("url", ""))
         return ptr
 
+    # -- forum posts (DESIGN §19.1) -------------------------------------------------------------------
+    def _post_name(self, meeting: Meeting, notes: Notes) -> str:
+        """``<date> · <title>``: the forum post of a meeting (Discord caps thread names at 100)."""
+        title = (notes.meeting_title or meeting.title or meeting.channel_name or t("tasks.thread_default", self.o.lang))
+        return f"{meeting.started_at:%Y-%m-%d} · {' '.join(title.split())}"[:POST_NAME_LIMIT]
+
+    def _notes_tags(self, meeting: Meeting, notes: Notes) -> list[str]:
+        """Tag names wanted on the notes post: the meeting's project and ``delivery_forum_tags``."""
+        return [n for n in (notes.project, meeting.project, *self.settings.delivery_forum_tags) if n]
+
+    @staticmethod
+    def _post_url(thread: Any, first: Any) -> str:
+        return str(getattr(thread, "jump_url", "") or getattr(first, "jump_url", "") or "")
+
+    async def _new_post(self, forum: Any, name: str, spec: MessageSpec, wanted: Sequence[str]) -> tuple[Any, Any, list]:
+        """Create a post; ``(thread, first message, applied tag ids)``. A forum that requires a tag and
+        refuses the post leaves the delivery waiting with the exact fix (never another channel)."""
+        tags = pick_tags(forum, wanted, self.settings.delivery_forum_default_tag)
+        try:
+            thread, first = await self.msgs.create_post(forum, name=name, spec=spec, tags=tags)
+        except Exception as exc:
+            if not tag_rejected(exc):
+                raise
+            available = ", ".join(tag_names(forum)) or "none"
+            raise DestinationPending(
+                f"forum #{getattr(forum, 'name', forum.id)} requires a tag on every post and none of its tags "
+                f"({available}) matches the meeting's project or delivery_forum_tags. Set one with "
+                "`hermes meeting-scribe config set delivery_forum_default_tag \"<tag>\"`") from exc
+        log.info("meeting-scribe: new forum post %s in %s", getattr(thread, "id", "?"), getattr(forum, "id", "?"))
+        return thread, first, [str(getattr(tag, "id", "")) for tag in tags]
+
+    async def _open_post(self, thread_id: Any, message_id: Any, spec: MessageSpec) -> tuple[Any, Any]:
+        """``(post, first message id)`` of an existing forum post, its first message edited in place;
+        ``(None, None)`` when the post was deleted. A post whose first message was deleted is kept:
+        that message is posted again inside it (the rest of the post stays where it is)."""
+        try:
+            thread = await self.msgs.channel(thread_id)
+        except Exception as exc:
+            if not is_missing(exc):
+                raise
+            log.info("meeting-scribe: forum post %s gone (%s); creating a new one", thread_id, exc)
+            return None, None
+        try:
+            await self.msgs.edit(thread, message_id, spec=spec)
+            return thread, message_id
+        except Exception as exc:
+            if not is_missing(exc):
+                raise
+            log.info("meeting-scribe: first message of forum post %s gone (%s); posting it again", thread_id, exc)
+        msg = await self.msgs.send(thread, spec=spec)
+        return thread, msg.id
+
+    async def _forget_post_contents(self, ptr: dict, ptrs: Pointers) -> None:
+        """A deleted forum post took its transcript with it: forget that pointer so DELIVER posts the
+        transcript again in the new post (tasks and index are re-posted by their own pointers)."""
+        transcript = await ptrs.load(TRANSCRIPT_SUFFIX)
+        if transcript and str(transcript.get("channel")) == str(ptr.get("channel")):
+            await ptrs.drop(TRANSCRIPT_SUFFIX)
+
+    async def _sync_post(self, thread: Any, ptr: dict, name: str, wanted: Sequence[str], ptrs: Pointers,
+                         suffix: str) -> dict:
+        """Rename the post / update our tags when the title or project changed (tags someone added by
+        hand stay). A refused edit is logged and retried on the next publish; it never fails a delivery."""
+        forum = getattr(thread, "parent", None)
+        if forum is None:  # parent not cached: the tags cannot be matched, only the name is kept current
+            ours = list(ptr.get("tags") or ())
+            changes: dict[str, Any] = {"name": name}
+        else:
+            ours = [str(getattr(x, "id", "")) for x in pick_tags(forum, wanted, self.settings.delivery_forum_default_tag)]
+            previous = {str(x) for x in ptr.get("tags") or ()}
+            by_id = {str(getattr(x, "id", "")): x for x in list(getattr(forum, "available_tags", None) or ())}
+            kept = [x for x in list(getattr(thread, "applied_tags", None) or ())  # tags added by hand stay
+                    if str(getattr(x, "id", "")) not in previous and str(getattr(x, "id", "")) not in ours]
+            changes = {"name": name, "applied_tags": ([by_id[i] for i in ours if i in by_id] + kept)[:MAX_FORUM_TAGS]}
+        if ptr.get("name") == name and list(ptr.get("tags") or ()) == ours:
+            return ptr
+        try:
+            await thread.edit(**changes)
+        except Exception as exc:
+            if is_missing(exc):
+                raise
+            log.info("meeting-scribe: could not rename/tag forum post %s: %s", getattr(thread, "id", "?"), exc)
+            return ptr
+        ptr = {**ptr, "name": name, "tags": ours}
+        await ptrs.save(suffix, ptr, ptr.get("url", ""))
+        return ptr
+
     async def chat_task_target(self, channel: Any, ptr: dict, ptrs: Pointers, meeting: Meeting) -> Any:
+        if ptr.get("forum"):  # the meeting's forum post already is its thread
+            return channel
         if ptr.get("thread"):
             try:
                 return await self.msgs.channel(ptr["thread"])
@@ -193,13 +312,15 @@ class TaskPublisher:
 
     # -- project channels -----------------------------------------------------------------------
     async def project_target(self, channel_id: str, meeting: Meeting, notes: Notes, count: int,
-                             ptrs: Pointers) -> Any:
+                             ptrs: Pointers, project: str = "") -> Any:
         channel = await self.msgs.channel(channel_id)
         title = notes.meeting_title or meeting.title or meeting.channel_name
         spec = MessageSpec(t("tasks.project_anchor", self.o.lang, title=title,
                              date=f"{meeting.started_at:%Y-%m-%d}", id=meeting.id, count=count))
         suffix = f"thread:{channel_id}"
         ptr = await ptrs.load(suffix) or {}
+        if is_forum(channel):
+            return await self._project_post(channel, meeting, notes, spec, ptr, suffix, ptrs, project)
         placed = await self.msgs.edit_or_send(ptr, channel, spec=spec)
         ptr = {**ptr, **placed}
         await ptrs.save(suffix, ptr)
@@ -219,16 +340,44 @@ class TaskPublisher:
         await ptrs.save(suffix, {**ptr, "thread": thread.id})
         return thread
 
+    async def _project_post(self, forum: Any, meeting: Meeting, notes: Notes, spec: MessageSpec, ptr: dict,
+                            suffix: str, ptrs: Pointers, project: str) -> Any:
+        """A project forum: one post per meeting (its first message is the anchor), tasks inside it."""
+        name = self._post_name(meeting, notes)
+        wanted = [n for n in (project, *self.settings.delivery_forum_tags) if n]
+        if ptr.get("forum") and ptr.get("thread"):
+            thread, first_id = await self._open_post(ptr["thread"], ptr.get("message"), spec)
+            if thread is not None:
+                ptr = {**ptr, "message": first_id}
+                await ptrs.save(suffix, ptr, ptr.get("url", ""))
+                await self._sync_post(thread, ptr, name, wanted, ptrs, suffix)
+                return thread
+        thread, first, tags = await self._new_post(forum, name, spec, wanted)
+        url = self._post_url(thread, first)
+        await ptrs.save(suffix, {"channel": thread.id, "message": first.id, "thread": thread.id, "forum": forum.id,
+                                 "url": url, "name": name, "tags": tags}, url)
+        return thread
+
+    @staticmethod
+    def _notes_place(chat: Any) -> set[str]:
+        """The notes channel, and — when the notes are a forum post — that forum: tasks routed there go
+        into the meeting's post, never into a second post of the same forum."""
+        parent = getattr(chat, "parent_id", None) or getattr(getattr(chat, "parent", None), "id", None)
+        forum_post = parent is not None and is_forum(getattr(chat, "parent", None))
+        return {str(chat.id)} | ({str(parent)} if forum_post else set())
+
     async def _fallback_target(self, meeting: Meeting, notes: Notes, chat: Any, count: int, ptrs: Pointers) -> Any:
         """``delivery_fallback_channel`` for tasks without a project channel (None = the notes chat)."""
         dest = self._destination(meeting)
         fallback = dest.fallback_channel
-        if not fallback or str(fallback) == str(chat.id):
+        if not fallback or str(fallback) in self._notes_place(chat):
             return None
         try:
             if not self._in_server(await self.msgs.channel(fallback), dest):
                 return None
             return await self.project_target(fallback, meeting, notes, count, ptrs)
+        except DestinationPending:
+            raise  # a forum refused the post: the caller reports it, the tasks wait in the notes post
         except Exception as exc:  # deleted / no access: the notes chat, as before
             log.info("meeting-scribe: fallback channel %s unavailable (%s)", fallback, exc)
             return None
@@ -267,7 +416,9 @@ class TaskPublisher:
 
     async def dm(self, board: Board, uid: str, ptrs: Pointers, *, send: bool) -> bool:
         """Post (``send``) or refresh the assignee's DM panel; ``False`` when the DM could not be sent."""
-        panel = render_panel(board.meeting, board.views, user_id=uid, scope="m", page=0, o=self.o, is_owner=False)
+        notes_ptr = await ptrs.load("notes") or {}
+        panel = render_panel(board.meeting, board.views, user_id=uid, scope="m", page=0, o=self.o, is_owner=False,
+                             link=str(notes_ptr.get("url") or ""))
         ptr = await ptrs.load(f"dm:{uid}")
         try:
             user = await self._user(uid)
@@ -506,15 +657,26 @@ class TaskPublisher:
         for view in board.views:
             groups.setdefault(view.route.channel_id, []).append(view)
         threads: dict[Optional[str], Any] = {}
+        refused: list[str] = []  # forums that refused a post (required tag): the delivery waits after the rest
         for cid, views in groups.items():
             target = None
-            if cid is not None:
-                try:
-                    target = await self.project_target(cid, meeting, notes, len(views), ptrs)
-                except Exception as exc:  # channel vanished since the snapshot: meeting chat
-                    log.info("meeting-scribe: project channel %s unavailable (%s)", cid, exc)
-            if target is None and cid is None:
-                target = await self._fallback_target(meeting, notes, chat, len(views), ptrs)
+            try:
+                if cid is not None and str(cid) in self._notes_place(chat):
+                    target = chat  # the project channel is the notes forum: its tasks live in the meeting's post
+                elif cid is not None:
+                    try:
+                        target = await self.project_target(cid, meeting, notes, len(views), ptrs,
+                                                           project=views[0].route.project or "")
+                    except DestinationPending:
+                        raise
+                    except Exception as exc:  # channel vanished since the snapshot: meeting chat
+                        log.info("meeting-scribe: project channel %s unavailable (%s)", cid, exc)
+                if target is None and cid is None:
+                    target = await self._fallback_target(meeting, notes, chat, len(views), ptrs)
+            except DestinationPending as exc:  # these tasks wait for the forum; never another channel
+                log.warning("meeting-scribe: meeting %s: %s", meeting.id, exc)
+                refused.append(str(exc))
+                continue
             if target is None:
                 target = await self.chat_task_target(chat, notes_ptr, ptrs, meeting)
             threads[cid] = str(target.id)
@@ -541,4 +703,6 @@ class TaskPublisher:
                 leftover = await ptrs.load(LEFTOVER_SUFFIX)
                 if leftover is not None:  # a kept DM message whose replacement may exist by now
                     await self._finish_move(meeting, leftover, ptrs, alive=alive)
+            if refused:  # everything else is posted; the refused tasks are posted once the forum accepts them
+                raise DestinationPending("; ".join(dict.fromkeys(refused)))
         return str(notes_ptr.get("url") or "")

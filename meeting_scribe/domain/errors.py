@@ -36,3 +36,7 @@ class NothingToReprocess(ValueError):
 
 class ChannelUnavailable(LookupError):
     """The Discord channel picked for a task is gone or the bot cannot post there."""
+
+
+class ForumTagRequired(ChannelUnavailable):
+    """The picked channel is a forum that requires a tag on every post and none fits the task."""

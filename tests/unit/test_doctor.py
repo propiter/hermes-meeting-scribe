@@ -185,6 +185,28 @@ def test_delivery_check_shows_destination_warnings(tmp_path):
     repo.close()
 
 
+def test_delivery_check_names_a_forum_and_its_missing_permissions(tmp_path):
+    """DESIGN §19.1: the notes channel is a forum (one post per meeting) and a permission is missing."""
+    import json
+
+    from meeting_scribe.discord_ui.destination import REPORT_KV
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {})
+    e = env(tmp_path)
+    e.service = lambda: svc
+    repo.kv_set(f"{REPORT_KV}.discord", json.dumps({
+        "guild": {"id": "100", "name": "Example Team", "source": "meeting"}, "targets": ["700"],
+        "steps": [{"key": "delivery_discord_channel", "status": "ok", "channel_id": "700", "kind": "forum"}],
+        "warnings": ["delivery_discord_channel: the bot is missing Send Messages in Threads in forum #notes"]}))
+    res = check_delivery(e)
+    assert res.status == "warn" and "notes forum 700 (one post per meeting)" in res.detail
+    assert "Send Messages in Threads" in res.detail
+    repo.close()
+
+
 def test_delivery_check_lists_meetings_left_in_a_dm(tmp_path):
     from meeting_scribe.doctor import check_delivery
     from meeting_scribe.storage.repo import Repository

@@ -176,3 +176,21 @@ def test_google_commands_per_space(two, capsys):
     code, out = run(two, ["google", "sync", "--space", "team"], capsys)
     assert code == 1  # not connected: that space's own answer
     assert run(two, ["google", "disconnect", "--space", "team"], capsys)[0] == 0
+
+
+def test_config_list_shows_a_forum_and_its_warnings(rt, capsys):
+    """DESIGN §19.1: ``config list`` names the kind of a resolved forum and repeats its warnings."""
+    from meeting_scribe.discord_ui.destination import REPORT_KV
+
+    rt.repo().kv_set(f"{REPORT_KV}.discord", json.dumps({
+        "guild": {"id": "100", "name": "Example Team", "source": "meeting"}, "targets": ["700"],
+        "steps": [{"key": "delivery_discord_channel", "value": "notes", "status": "ok", "channel_id": "700",
+                   "channel_name": "notes", "kind": "forum"}],
+        "warnings": ["delivery_discord_channel: the bot is missing Attach Files in forum #notes",
+                     "project_channels[orion]: forum #orion requires a tag on every post"]}))
+    code, out = run(rt, ["config", "list", "--group", "delivery"], capsys)
+    assert code == 0 and "→ forum #notes (700)" in out and "! delivery_discord_channel: the bot is missing" in out
+    code, out = run(rt, ["config", "list", "--json"], capsys)
+    rows = {r["key"]: r for r in json.loads(out)["settings"]}
+    assert rows["delivery_discord_channel"]["resolved"]["kind"] == "forum"
+    assert "requires a tag" in rows["project_channels"]["resolved"]["warnings"][0]

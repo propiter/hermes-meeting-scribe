@@ -176,6 +176,9 @@ The plugin reuses the bot that Hermes' Discord adapter already runs. It needs no
   - required: **View Channel, Connect, Send Messages, Create Public Threads**
   - optional: **Manage Nicknames**, for the `[REC] ` nickname prefix
   - *Speak* is not needed
+- **Permissions in a forum** used for notes or tasks: **View Channel, Send Messages** (creates the
+  post), **Send Messages in Threads** (everything inside it) and **Attach Files** (the transcript).
+  **Manage Threads** is only needed to rename or re-tag a post the bot did not create.
 - **`doctor` checks** the capture compatibility probe (`discord_compat`), voice dependencies
   (PyNaCl, davey, libopus), intents and permissions.
 
@@ -310,6 +313,8 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `delivery_dm_assignees` | bool | `true` | Send each assignee their tasks by DM after delivery. |
 | `delivery_discord_transcript` | bool | `true` | Attach the full transcript (Markdown file) to the notes. |
 | `delivery_transcript_max_mb` | int | `8` | Largest file uploaded; longer transcripts are split. Raise it if your server allows bigger uploads. |
+| `delivery_forum_tags` | list | `[]` | When notes or tasks go to a forum channel, also apply the forum tags with these names to each meeting post (the tag matching the meeting's project is applied anyway). Max 5 per post; names the forum does not have are ignored. |
+| `delivery_forum_default_tag` | list | `[]` | For forums that require a tag on every post: the tag to use when no tag matches the project or the forum post tags (the first name that exists in that forum). Empty = none; the post then waits until a tag is set. |
 
 #### Projects
 
@@ -401,10 +406,21 @@ Notes (summary, task index and transcript) go to the first of these that works:
 - **Tasks.** A task with a project goes to a thread in that project's channel (see "Tasks in
   Discord"), for Meet too. A task without a project goes to `delivery_fallback_channel` if set, else
   under the notes.
+- **Forum channels.** Any of these channels (notes, fallback, a project channel) may be a forum or a
+  media channel. Each meeting is then **one post** named `<date> · <title>`: the summary (TL;DR,
+  decisions, open questions) is its first message, and the transcript, the tasks with their buttons
+  and the task index go inside the post. A project forum gets one post per meeting with that
+  project's tasks. Re-deliveries and button clicks edit the post; a deleted post is created again.
+  Each post gets the forum tags whose name matches the meeting's project or `delivery_forum_tags`
+  (up to 5). If the forum requires a tag and none matches, `delivery_forum_default_tag` is used; with
+  none, the delivery waits and `status`/`doctor` say which setting to change — it is never posted
+  elsewhere. `doctor` and `config list` show which channels are forums and which permissions are
+  missing. Assignee DMs link to the post.
 
 ```bash
 hermes meeting-scribe config set google_meet_discord_channel "#meeting-notes"
 hermes meeting-scribe config set delivery_fallback_channel "#backlog"
+hermes meeting-scribe config set delivery_forum_default_tag "Minutes"  # only for forums that require a tag
 hermes meeting-scribe config set delivery_discord_guild "My Team"    # only if the bot is in several servers
 hermes meeting-scribe doctor
 ```

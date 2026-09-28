@@ -30,6 +30,8 @@ class FakeMessage:
     async def edit(self, *, content: Optional[str] = None, view: Any = None, **kw: Any) -> "FakeMessage":
         if self.deleted:
             raise LookupError("Unknown Message")
+        if self.channel.archived:
+            raise FakeHTTPError(400, 50083, "Operation cannot be performed on an archived thread")
         self.content, self.view = content if content is not None else self.content, view
         self.edits += 1
         return self
@@ -68,6 +70,23 @@ class FakeChannel:
         self.public = public  # visible to @everyone
         self.nsfw = nsfw
         self.fail_sends = 0
+        self.archived = False
+        self.applied_tags: list = []
+        self.thread_edits: list[dict] = []
+
+    @property
+    def jump_url(self) -> str:
+        return f"https://discord.com/channels/1/{self.id}"
+
+    async def edit(self, **kw: Any) -> "FakeChannel":
+        """Thread edit (name, applied_tags, archived) as in discord.py ``Thread.edit``."""
+        if self.parent is not None and self.id not in self.bot.channels:
+            raise LookupError("Unknown Channel")
+        self.thread_edits.append(kw)
+        self.name = kw.get("name", self.name)
+        self.applied_tags = list(kw.get("applied_tags", self.applied_tags))
+        self.archived = kw.get("archived", self.archived)
+        return self
 
     @property
     def guild(self) -> Any:
@@ -89,6 +108,8 @@ class FakeChannel:
         return f"<#{self.id}>"
 
     async def send(self, content: str = "", *, view: Any = None, **kw: Any) -> FakeMessage:
+        if self.parent is not None and self.id not in self.bot.channels:
+            raise LookupError("Unknown Channel")  # a deleted thread / forum post
         if self.fail_sends:
             self.fail_sends -= 1
             raise RuntimeError("503 Service Unavailable")
@@ -106,6 +127,53 @@ class FakeChannel:
 
     def ordered(self) -> list[FakeMessage]:
         return sorted(self.messages.values(), key=lambda m: m.id)
+
+
+class FakeHTTPError(Exception):
+    def __init__(self, status: int, code: int, text: str) -> None:
+        super().__init__(f"{status} (error code: {code}): {text}")
+        self.status = status
+        self.code = code
+
+
+class FakeForum(FakeChannel):
+    """A forum (type 15) or media (type 16) channel: no ``send``; ``create_thread`` opens a post and
+    returns ``(thread, message)`` like discord.py's ``ThreadWithMessage``."""
+
+    def __init__(self, cid: int, name: str, *, tags: tuple[str, ...] = (), require_tag: bool = False,
+                 media: bool = False, **kw: Any) -> None:
+        super().__init__(cid, name, kind="media" if media else "forum", **kw)
+        self.available_tags = [SimpleNamespace(id=cid * 10 + i, name=n) for i, n in enumerate(tags, start=1)]
+        self.flags = SimpleNamespace(require_tag=require_tag)
+        self.posts: list[FakeChannel] = []
+        self.can_post_in_threads = True
+
+    def permissions_for(self, member: Any) -> SimpleNamespace:
+        p = super().permissions_for(member)
+        p.send_messages_in_threads = bool(getattr(p, "send_messages", False)) and self.can_post_in_threads
+        return p
+
+    async def send(self, *a: Any, **kw: Any) -> FakeMessage:  # discord.py: ForumChannel has no send
+        raise AttributeError("'ForumChannel' object has no attribute 'send'")
+
+    async def create_thread(self, *, name: str, content: str = "", view: Any = None, applied_tags: Any = (),
+                            **kw: Any) -> tuple[FakeChannel, FakeMessage]:
+        if self.fail_sends:
+            self.fail_sends -= 1
+            raise RuntimeError("503 Service Unavailable")
+        if self.flags.require_tag and not applied_tags:
+            raise FakeHTTPError(400, 40067, "A tag is required to create a forum post in this channel")
+        assert len(list(applied_tags)) <= 5
+        thread = FakeChannel(next(_ids), name, parent=self)
+        thread.type = "public_thread"
+        thread.applied_tags = list(applied_tags)
+        self.bot.channels[thread.id] = thread
+        self.posts.append(thread)
+        first = await thread.send(content, view=view)
+        return thread, first
+
+    def delete_post(self, thread: FakeChannel) -> None:
+        self.bot.channels.pop(thread.id, None)
 
 
 class _Gone(FakeMessage):
@@ -173,6 +241,11 @@ class FakeBot:
 
     def add(self, cid: int, name: str, **kw: Any) -> FakeChannel:
         ch = FakeChannel(cid, name, bot=self, **kw)
+        self.channels[cid] = ch
+        return ch
+
+    def add_forum(self, cid: int, name: str, **kw: Any) -> FakeForum:
+        ch = FakeForum(cid, name, bot=self, **kw)
         self.channels[cid] = ch
         return ch
 

@@ -5,6 +5,9 @@ click or a 📁 move EDITS it instead of posting a duplicate. A pointer is ``{"c
 (plus extra fields per kind). Only a CONFIRMED missing message (404 / Unknown Message / Channel) is
 re-posted; any other failure (5xx, rate limit, timeout) propagates so the job retries instead of
 duplicating. A message that cannot be deleted is disarmed (buttons removed, pointing elsewhere).
+
+Forum and media channels accept no message of their own: :meth:`Messages.create_post` opens a post
+(a thread whose first message carries the content); everything else is sent inside that post.
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ from .render_tasks import TaskPanel
 
 log = logging.getLogger(__name__)
 SINK = "discord"
+ARCHIVED_CODE = 50083  # "Operation cannot be performed on an archived thread"
 
 
 class ViewFactory(Protocol):
@@ -33,6 +37,11 @@ def is_missing(exc: BaseException) -> bool:
     if isinstance(exc, LookupError):  # the adapter's "unknown channel" and our fakes
         return True
     return getattr(exc, "status", None) == 404 or getattr(exc, "code", None) in (10003, 10008)
+
+
+def is_archived(exc: BaseException) -> bool:
+    """The message lives in an archived thread (an old forum post or project thread): unarchive first."""
+    return getattr(exc, "code", None) == ARCHIVED_CODE
 
 
 class Pointers:
@@ -79,8 +88,32 @@ class Messages:
         assert spec is not None
         return await target.send(spec.content, view=self.views.view(spec.buttons), **self.views.send_kwargs())
 
+    async def create_post(self, forum: Any, *, name: str, spec: MessageSpec, tags: Sequence[Any] = ()) -> tuple[Any, Any]:
+        """A new post in a forum/media channel: ``(thread, first message)`` (discord.py 2.x
+        ``ForumChannel.create_thread`` returns ``ThreadWithMessage``)."""
+        kwargs = dict(self.views.send_kwargs())
+        view = self.views.view(spec.buttons)
+        if view is not None:
+            kwargs["view"] = view
+        if tags:
+            kwargs["applied_tags"] = list(tags)
+        thread, message = await forum.create_thread(name=name, content=spec.content, **kwargs)
+        return thread, message
+
     async def edit(self, channel: Any, message_id: Any, *, spec: Optional[MessageSpec] = None,
                    panel: Optional[TaskPanel] = None) -> Any:
+        try:
+            return await self._edit(channel, message_id, spec=spec, panel=panel)
+        except Exception as exc:
+            if not is_archived(exc) or not callable(getattr(channel, "edit", None)):
+                raise
+        log.info("meeting-scribe: thread %s is archived; unarchiving it to edit message %s",
+                 getattr(channel, "id", "?"), message_id)
+        await channel.edit(archived=False)
+        return await self._edit(channel, message_id, spec=spec, panel=panel)
+
+    async def _edit(self, channel: Any, message_id: Any, *, spec: Optional[MessageSpec] = None,
+                    panel: Optional[TaskPanel] = None) -> Any:
         msg = channel.get_partial_message(int(message_id))
         if panel is not None:
             await msg.edit(view=self.views.panel_view(panel))

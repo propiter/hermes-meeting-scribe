@@ -14,7 +14,7 @@ import re
 from typing import Any, Callable, Optional, Sequence
 
 from ..config import Settings
-from ..domain.errors import ChannelUnavailable, ItemDismissed, NotesNotReady, SinkUnavailable
+from ..domain.errors import ChannelUnavailable, ForumTagRequired, ItemDismissed, NotesNotReady, SinkUnavailable
 from ..domain.models import Candidate
 from ..i18n import t
 from .auth import MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, TASK_ACTIONS, check_task
@@ -46,6 +46,8 @@ def friendly_error(exc: BaseException, lang: str) -> str:
         return t("ui.error_dismissed", lang)
     if isinstance(exc, NotesNotReady):
         return t("ui.error_notes_not_ready", lang)
+    if isinstance(exc, ForumTagRequired):
+        return t("ui.error_forum_needs_tag", lang)
     if isinstance(exc, ChannelUnavailable):
         return t("ui.error_channel_unavailable", lang)
     if isinstance(exc, UserMessage):
