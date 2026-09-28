@@ -108,13 +108,17 @@ class MeetingCommands:
 
     def __init__(self, service: Union[MeetingService, Callable[[], MeetingService]], settings: Callable[..., Settings],
                  capture: Callable[[], Optional[CaptureController]],
-                 membership: Callable[[], Optional[Membership]] = lambda: None) -> None:
+                 membership: Callable[[], Optional[Membership]] = lambda: None,
+                 owners: Callable[[str], Sequence[str]] = lambda space: ()) -> None:
+        """``owners(space)``: the plugin's owners for that space (``Runtime.owners``) — the admins who may
+        link other members and Google accounts."""
         # A callable is resolved per command (review finding 7): the runtime may switch to another
         # profile's database, and a captured instance would keep answering from the old one.
         self._service = service if callable(service) else (lambda: service)
         self.settings = settings
         self.capture = capture
         self._membership = membership
+        self._owners = owners
 
     @property
     def service(self) -> MeetingService:
@@ -320,10 +324,26 @@ class MeetingCommands:
         return t("cmd.project_saved", lang, id=meeting.id, project=chosen.name)
 
     def _cmd_link(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
+        """``link @member <Linear email or name>`` (Linear only: it never identifies anyone in Google
+        Meet) and ``link @member google=users/<id>`` (a Google Meet attendee's account, DESIGN §19.3).
+        Anyone may link THEMSELVES to Linear; linking someone else, and every Google link, is for the
+        plugin's owners: a Google link decides who receives a direct-messages meeting."""
         m = _MENTION_RE.match(args[0]) if args else None
         user_id = m.group(1) if m else (args[0] if args and is_ascii_digits(args[0]) else None)
         if user_id is None or len(args) < 2:
-            return t("cmd.usage", lang, usage=f"/{cmd} link @user <linear-email-or-name>")
+            return t("cmd.usage", lang, usage=f"/{cmd} link @user <linear-email-or-name> | google=users/<id>")
         target = " ".join(args[1:])
+        is_owner = str(caller.user_id) in {str(o) for o in self._owners(self._space)}
+        google = target.lower().startswith("google=")
+        if (google or user_id != str(caller.user_id)) and not is_owner:
+            return t("cmd.link_owner_only", lang)
+        if google:
+            from .google.convert import canonical_google_user
+
+            account = canonical_google_user(target.split("=", 1)[1])
+            if not account:
+                return t("cmd.usage", lang, usage=f"/{cmd} link @user google=users/<id>")
+            self.service.link_google(self._space, user_id, account)
+            return t("cmd.link_google_saved", lang, discord_id=user_id, account=account)
         self.service.link(self._space, user_id, target)
         return t("cmd.link_saved", lang, discord_id=user_id, linear=target)

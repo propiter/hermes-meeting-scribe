@@ -170,7 +170,7 @@ def register(ctx: Any, plugin_root: Path) -> Optional[Runtime]:
                       description=SCHEMAS["meeting_get"]["description"], emoji="🎙️")
 
     commands = MeetingCommands(runtime.service, runtime.settings, capture=lambda: runtime.capture,
-                               membership=lambda: _membership(runtime))
+                               membership=lambda: _membership(runtime), owners=runtime.owners)
     for name in (PRIMARY_COMMAND, *runtime.settings().commands_aliases):
         ctx.register_command(name, _command_handler(commands, runtime, name),
                              description="Meeting notes: record a voice call and get its summary and tasks",

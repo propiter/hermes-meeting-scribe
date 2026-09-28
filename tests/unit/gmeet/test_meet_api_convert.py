@@ -142,3 +142,13 @@ def test_majority_language_is_short_code():
 def test_default_title():
     assert convert.default_title(START) == "Google Meet · 2026-09-20 15:00"
     assert convert.default_title(START, "abc-mnop-xyz").endswith("· abc-mnop-xyz")
+
+
+def test_only_signed_in_attendees_carry_a_google_account():
+    parts = [{"name": "conferenceRecords/r/participants/1", "signedinUser": {"user": "users/71", "displayName": "Ana"}},
+             {"name": "conferenceRecords/r/participants/2", "anonymousUser": {"displayName": "users/71"}},
+             {"name": "conferenceRecords/r/participants/3", "signedinUser": {"user": "ana@example.com",
+                                                                            "displayName": "Ana"}}]
+    entries = [{"participant": f"conferenceRecords/r/participants/{i}"} for i in (1, 2, 3)]
+    speakers = convert.speakers_from(parts, entries)
+    assert [s.google_user for s in speakers] == ["users/71", "", ""]

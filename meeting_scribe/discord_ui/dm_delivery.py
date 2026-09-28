@@ -182,8 +182,9 @@ class DmDelivery:
     # -- what status / doctor say -------------------------------------------------------------------
     @staticmethod
     def _nobody(meeting: Meeting, unmapped: list[str]) -> str:
-        extra = (f"; {len(unmapped)} participant(s) match no Discord user — link them with `/meeting link` in "
-                 "the space, then reprocess") if unmapped else ""
+        extra = (f"; {len(unmapped)} participant(s) match no Discord user ({', '.join(unmapped)}) — an owner links "
+                 "a Google Meet attendee's account with `/meeting link @member google=users/<id>` in the space "
+                 "(guests without a Google account cannot be linked), then reprocess") if unmapped else ""
         return (f"waiting: meeting {meeting.id} goes only by direct message (meeting_routes ':dm') and none of "
                 f"its participants is a Discord user{extra}. It is never posted in a channel")
 
@@ -199,5 +200,5 @@ class DmDelivery:
         if report.closed:
             parts.append(t("dm.unreachable", self.lang, users=", ".join(report.closed)))
         if report.unmapped:
-            parts.append(t("dm.unmapped", self.lang, count=len(report.unmapped)))
+            parts.append(t("dm.unmapped", self.lang, count=len(report.unmapped), names=", ".join(report.unmapped)))
         await asyncio.to_thread(self.repo.kv_set, privacy.DM_UNREACHABLE_KV + meeting.id, " ".join(parts) or None)

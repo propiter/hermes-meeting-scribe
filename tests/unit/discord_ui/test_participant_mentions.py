@@ -91,10 +91,10 @@ async def test_a_long_summary_mentions_only_in_its_first_part(env):
     assert all(allowed(p)["users"] == () and "<@" not in p.content for p in parts[1:])
 
 
-async def test_meet_attendees_are_mentioned_through_person_links_and_others_by_name(env):
-    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("gmeet:users/1", "Ana Gómez"),
-                                                             Speaker("gmeet:users/2", "@everyone Marta"))))
-    env.svc.repo.set_link("main", "10", name="ana gómez")
+async def test_meet_attendees_are_mentioned_through_linked_google_accounts_and_others_by_name(env):
+    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("gmeet:p1", "Ana Gómez", google_user="users/41"),
+                                                             Speaker("gmeet:p2", "@everyone Marta"))))
+    env.svc.repo.set_google_user("main", "10", "users/41")
     await deliver(env)
     first = env.chat.ordered()[0]
     assert "<@10>" in first.content and allowed(first)["users"] == ("10",)

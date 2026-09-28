@@ -7,7 +7,8 @@ import pytest
 
 from meeting_scribe.config import Settings, settings_from_mapping
 from meeting_scribe.spaces import SpaceError, Spaces, bootstrap, move_google_files
-from meeting_scribe.storage.baseline import BASELINE_VERSION, backups
+from meeting_scribe.storage.baseline import backups
+from meeting_scribe.storage.repo import SCHEMA_VERSION
 from meeting_scribe.storage.repo import Repository
 
 
@@ -133,7 +134,7 @@ def test_legacy_backup_keeps_database_and_meeting_files(tmp_path, version):
     (meetings / "notes.md").write_text("notes")
     repo = Repository(path)
     try:
-        assert repo.user_version() == BASELINE_VERSION
+        assert repo.user_version() == SCHEMA_VERSION
         saved = backups(tmp_path)
         assert len(saved) == 1
         old = sqlite3.connect(saved[0] / "index.sqlite")

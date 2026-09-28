@@ -79,8 +79,8 @@ def test_reprocess_and_project_and_link(prepo, layout, settings, clock, meeting)
     assert "from=deliver" in cmds.handle(f"reprocess {mid} from=bogus", CALLER, "meeting")
     assert "Website" in cmds.handle(f"project {mid} Website", CALLER, "meeting")
     assert "Available" in cmds.handle(f"project {mid} Nope", CALLER, "meeting")
-    assert "Linked" in cmds.handle("link <@11> luis@x.io", CALLER, "meeting")
-    assert prepo.get_link("main", "11")["email"] == "luis@x.io"
+    assert "Linked" in cmds.handle("link <@10> ana@x.io", CALLER, "meeting")  # herself: allowed
+    assert prepo.get_link("main", "10")["email"] == "ana@x.io"
     assert "Usage" in cmds.handle("link", CALLER, "meeting")
 
 

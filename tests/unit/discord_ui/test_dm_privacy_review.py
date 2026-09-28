@@ -75,3 +75,67 @@ async def test_a_dm_meeting_never_moves_a_task_into_a_channel(env):
         await sink.move_item(env.meeting.id, "a1", "777", viewer="11", learn=False)
     await sink.share(env.meeting.id, "a1", "project")
     assert "Landing page" not in texts(secret.ordered())
+
+
+# -- who is a Google Meet attendee (DESIGN §19.3: only a Google account an owner linked) -------------------
+def _commands(env, owners=()):
+    from meeting_scribe.commands import MeetingCommands
+    from meeting_scribe.config import settings_from_mapping
+    from meeting_scribe.pipeline.service import MeetingService
+
+    svc = SimpleNamespace(repo=env.svc.repo, space_for=lambda g: env.meeting.space,
+                          link=lambda space, uid, target: MeetingService.link(svc, space, uid, target),
+                          link_google=lambda space, uid, acc: env.svc.repo.set_google_user(space, uid, acc))
+    return MeetingCommands(lambda: svc, lambda space=None: settings_from_mapping(env.cfg), capture=lambda: None,
+                           owners=lambda space: owners)
+
+
+def _caller(uid):
+    from meeting_scribe.commands import Caller
+    return Caller(platform="discord", chat_id="555", user_id=str(uid), scope_id="100")
+
+
+async def test_a_member_linking_themselves_by_an_attendees_name_never_receives_the_meeting(env):
+    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("gmeet:p1", "Luis Pérez", google_user="users/71"),)))
+    env.meeting = env.svc.repo.get_meeting(env.meeting.id)
+    mallory = env.bot.user(66)
+    cmds = _commands(env)
+    assert "Linked" in cmds.handle("link <@66> Luis Pérez", _caller(66), "meeting")  # a Linear link, harmless
+    assert "owners" in cmds.handle("link <@66> google=users/71", _caller(66), "meeting")
+    assert "owners" in cmds.handle("link <@11> Somebody", _caller(66), "meeting")  # someone else: owners only
+    res = await deliver(env)
+    assert res.waiting and SUMMARY_WORD not in texts(mallory.dm.ordered())
+
+
+async def test_a_guest_named_like_a_linked_members_email_or_name_is_nobody(env):
+    env.svc.repo.set_link(env.meeting.space, "11", email="luis@example.com", name="Luis")
+    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("gmeet:p7", "Ana"),
+                                                             Speaker("gmeet:p8", "luis@example.com"),
+                                                             Speaker("gmeet:p9", "Luis"))))
+    env.meeting = env.svc.repo.get_meeting(env.meeting.id)
+    res = await deliver(env)
+    assert res.waiting and SUMMARY_WORD not in texts(env.luis.dm.ordered())
+
+
+async def test_an_owner_links_a_google_account_and_the_attendee_gets_the_meeting(env):
+    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("gmeet:p1", "Whatever I typed",
+                                                                     google_user="users/71"),)))
+    env.meeting = env.svc.repo.get_meeting(env.meeting.id)
+    reply = _commands(env, owners=("1",)).handle("link <@11> google=71", _caller(1), "meeting")
+    assert "users/71" in reply
+    res = await deliver(env)
+    assert res.ok and SUMMARY_WORD in texts(env.luis.dm.ordered())
+
+
+def test_a_google_account_resolves_to_one_member_only(env):
+    env.svc.repo.set_google_user(env.meeting.space, "11", "users/71")
+    env.svc.repo.set_google_user(env.meeting.space, "12", "users/71")  # moved, never shared
+    m = replace(env.meeting, speakers=(Speaker("gmeet:p1", "Luis", google_user="users/71"),))
+    assert privacy.participants(env.svc.repo, m)[0] == ["12"]
+    assert env.svc.repo.get_link(env.meeting.space, "11")["google_user"] is None
+
+
+def test_the_google_account_survives_storage(env):
+    m = replace(env.meeting, speakers=(Speaker("gmeet:p1", "Luis", google_user="users/71"),))
+    env.svc.repo.save_meeting(m)
+    assert env.svc.repo.get_meeting(m.id).speakers[0].google_user == "users/71"

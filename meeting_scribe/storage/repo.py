@@ -88,7 +88,10 @@ CREATE TABLE desktop_commands (
 CREATE INDEX desktop_commands_state ON desktop_commands(state, created_at);
 """
 BASELINE = baseline.BASELINE_VERSION
-_MIGRATIONS: tuple[str, ...] = ()  # schema changes after the baseline, in order (BASELINE + 1, ...)
+_MIGRATIONS: tuple[str, ...] = (  # schema changes after the baseline, in order (BASELINE + 1, ...)
+    # 101: a person link's Google account (``users/<id>``), set only by an admin (DESIGN §19.3)
+    "ALTER TABLE links ADD COLUMN google_user TEXT;",
+)
 SCHEMA_VERSION = BASELINE + len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -467,6 +470,16 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
                 " linear_user_id=COALESCE(excluded.linear_user_id, linear_user_id),"
                 " email=COALESCE(excluded.email, email), name=COALESCE(excluded.name, name),"
                 " updated_at=excluded.updated_at", (space, discord_user_id, linear_user_id, email, name, time.time()))
+
+    def set_google_user(self, space: str, discord_user_id: str, google_user: str) -> None:
+        """Link a Google account to ONE Discord member of ``space`` (an admin's decision): the account is
+        taken away from anyone else it was linked to, so it never resolves to two people."""
+        with self.transaction():
+            self._x("UPDATE links SET google_user=NULL, updated_at=? WHERE space=? AND google_user=?"
+                    " AND discord_user_id != ?", (time.time(), space, google_user, discord_user_id))
+            self._x("INSERT INTO links (space, discord_user_id, google_user, updated_at) VALUES (?,?,?,?)"
+                    " ON CONFLICT(space, discord_user_id) DO UPDATE SET google_user=excluded.google_user,"
+                    " updated_at=excluded.updated_at", (space, discord_user_id, google_user, time.time()))
 
     def get_link(self, space: str, discord_user_id: str) -> Optional[dict[str, Any]]:
         row = self._x("SELECT * FROM links WHERE space=? AND discord_user_id=?", (space, discord_user_id)).fetchone()

@@ -140,6 +140,10 @@ class Speaker:
     user_id: str
     name: str
     is_bot: bool = False
+    # A Google Meet attendee signed in to Google: their Google user id as the Meet API gives it
+    # (``signedinUser.user``, ``users/<id>``). The only identity of an imported speaker that can be
+    # linked to a Discord member (DESIGN §19.3); the display name is typed by the attendee.
+    google_user: str = ""
 
 
 @dataclass(frozen=True)
@@ -326,7 +330,8 @@ class Meeting:
         data["state"] = MeetingState(data.get("state") or MeetingState.RECORDING.value)
         data["started_at"] = datetime.fromisoformat(data["started_at"])
         data["ended_at"] = datetime.fromisoformat(data["ended_at"]) if data.get("ended_at") else None
-        data["speakers"] = tuple(Speaker(str(s["user_id"]), str(s["name"]), bool(s.get("is_bot")))
+        data["speakers"] = tuple(Speaker(str(s["user_id"]), str(s["name"]), bool(s.get("is_bot")),
+                                         str(s.get("google_user") or ""))
                                  for s in data.get("speakers") or ())
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})

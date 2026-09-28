@@ -173,10 +173,10 @@ async def test_no_discord_participant_waits_with_the_reason(env):
     assert in_channels(env) == [] and privacy.record(env.svc.repo, env.meeting.id)["recipients"] == []
 
 
-async def test_meet_participant_mapped_by_a_person_link_gets_the_copy(env):
-    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("gmeet:users/1", "Luis  Pérez"),)))
+async def test_meet_participant_mapped_by_its_linked_google_account_gets_the_copy(env):
+    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("gmeet:p1", "Luis  Pérez", google_user="users/71"),)))
     env.meeting = env.svc.repo.get_meeting(env.meeting.id)
-    env.svc.repo.set_link(env.meeting.space, "11", name="luis pérez")
+    env.svc.repo.set_google_user(env.meeting.space, "11", "users/71")
     res = await deliver(env)
     assert res.ok and SUMMARY_WORD in texts(env.luis.dm.ordered()) and in_channels(env) == []
 
@@ -285,12 +285,12 @@ async def test_share_own_task_to_its_project_channel_posts_the_task_only(env):
     assert texts(env.bot.channels[200].ordered()) == ""
 
 
-def test_participants_skips_names_that_match_two_links(env):
-    env.svc.repo.set_link(env.meeting.space, "11", name="Sam")
-    env.svc.repo.set_link(env.meeting.space, "12", name="sam")
-    m = replace(env.meeting, speakers=(Speaker("gmeet:users/9", "Sam"), Speaker("11", "Luis")))
+def test_participants_never_map_an_attendee_by_name(env):
+    env.svc.repo.set_link(env.meeting.space, "12", name="Sam")
+    m = replace(env.meeting, speakers=(Speaker("gmeet:p9", "Sam"), Speaker("gmeet:p8", "Eve", google_user="users/8"),
+                                       Speaker("11", "Luis")))
     found, unmapped = privacy.participants(env.svc.repo, m)
-    assert found == ["11"] and unmapped == ["Sam"]
+    assert found == ["11"] and unmapped == ["Sam", "Eve (Google users/8)"]
 
 
 def test_dm_record_is_json(env):

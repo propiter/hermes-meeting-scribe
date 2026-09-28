@@ -114,42 +114,57 @@ DM_UNREACHABLE_KV = "privacy.dm_unreachable."  # + meeting id -> who did not get
 
 
 def participants(repo: Any, meeting: Meeting) -> tuple[list[str], list[str]]:
-    """``(discord user ids, names that could not be mapped)`` of the humans of a meeting (see
-    :func:`people`)."""
+    """``(discord user ids, attendees that could not be identified)`` of the humans of a meeting (see
+    :func:`people`). An unidentified attendee signed in to Google is labelled with their account
+    (``Name (Google users/<id>)``) so an admin can link it."""
     found: list[str] = []
     unmapped: list[str] = []
-    for uid, name in people(repo, meeting):
-        (found if uid else unmapped).append(uid or name)
+    for uid, name, account in _people(repo, meeting):
+        if uid:
+            found.append(uid)
+        else:
+            unmapped.append(f"{name} (Google {account})" if account else name)
     return list(dict.fromkeys(found)), unmapped
 
 
 def people(repo: Any, meeting: Meeting) -> list[tuple[str, str]]:
     """``[(discord user id or "", display name)]`` of the humans of a meeting, one per person: who spoke
-    or was in the call (``Meeting.human_speakers``). An imported speaker (Google Meet, ``gmeet:…``) gets
-    an id when exactly one person link of the meeting's space (``/meeting link``) matches its name or
-    email; otherwise only its name."""
+    or was in the call (``Meeting.human_speakers``). Only a VERIFIABLE identity becomes a Discord id —
+    it is what gets someone a direct-messages meeting or an @mention (DESIGN §19.3, §19.4):
+
+    * a Discord speaker: its user id (captured by the bot itself);
+    * a Google Meet attendee: only through its Google account (``Speaker.google_user``, the Meet API's
+      ``signedinUser.user``) linked to exactly one member of the space by an admin
+      (``/meeting link @member google=users/<id>``). Never through the name shown in Meet, which the
+      attendee (a guest too) types, nor through a name or email someone typed in ``/meeting link``.
+
+    Anyone else is named, never mentioned nor sent anything."""
+    return [(uid, name) for uid, name, _account in _people(repo, meeting)]
+
+
+def _people(repo: Any, meeting: Meeting) -> list[tuple[str, str, str]]:
     from .domain.models import is_discord_user_id
-    from .domain.text import fold
 
     links = repo.list_links(meeting.space) if hasattr(repo, "list_links") else []
-    by_name: dict[str, set[str]] = {}
+    by_account: dict[str, set[str]] = {}
     for link in links:
-        for value in (link.get("name"), link.get("email")):
-            if value and str(value).strip():
-                by_name.setdefault(fold(" ".join(str(value).split())), set()).add(str(link["discord_user_id"]))
-    out: list[tuple[str, str]] = []
+        account = str(link.get("google_user") or "")
+        if account:
+            by_account.setdefault(account, set()).add(str(link["discord_user_id"]))
+    out: list[tuple[str, str, str]] = []
     seen: set[str] = set()
     for sp in meeting.human_speakers:
         name = str(sp.name or sp.user_id)
+        account = str(getattr(sp, "google_user", "") or "")
         if is_discord_user_id(sp.user_id):
             uid = str(sp.user_id)
         else:
-            hits = by_name.get(fold(" ".join(str(sp.name or "").split())), set())
+            hits = by_account.get(account, set()) if account else set()
             uid = next(iter(hits)) if len(hits) == 1 else ""
         if uid and uid in seen:
             continue
         seen.add(uid)
-        out.append((uid, name))
+        out.append((uid, name, account))
     return out
 
 

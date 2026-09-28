@@ -334,8 +334,14 @@ class MeetingService:
             write_notes(folder, meeting, notes, notes.language or self.settings(meeting.space).ui_language)
         return chosen
 
+    def link_google(self, space: str, discord_user_id: str, google_user: str) -> None:
+        """Link a Discord member to a Google account (``users/<id>``) WITHIN ``space``: an admin's
+        decision, the only way a Google Meet attendee becomes a DM recipient or a mention (DESIGN §19.3)."""
+        self.repo.set_google_user(space, discord_user_id, google_user)
+
     def link(self, space: str, discord_user_id: str, target: str) -> None:
-        """Link a Discord member to a Linear user WITHIN ``space`` (the same person may differ per team)."""
+        """Link a Discord member to a Linear user WITHIN ``space`` (the same person may differ per team).
+        It never identifies anyone in Google Meet (DESIGN §19.3)."""
         target = target.strip()
         if "@" in target:
             self.repo.set_link(space, discord_user_id, email=target)

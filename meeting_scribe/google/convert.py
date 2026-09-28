@@ -4,7 +4,9 @@
 * Speaker id: ``gmeet:<participant id>`` — stable per conference, derived from the participant
   resource name; it is never a Discord id, so nothing tries to mention or DM it.
 * Speaker name: ``signedinUser|anonymousUser|phoneUser.displayName``; unknown participant → a
-  numbered neutral label.
+  numbered neutral label. The name is typed by the attendee: it never identifies anyone.
+* Google account: ``signedinUser.user`` (``users/<id>``) — the only identity an admin can link to a
+  Discord member (DESIGN §19.3); guests and phone callers have none.
 * Entries are NOT merged: Meet already emits sentence-level entries, and the only merge utility in
   the pipeline (``transcribe.merge``) works on whisper segments, not on finished utterances.
 * Confidence: Meet exposes none; 1.0 means "provided by the source" (whisper uses avg_logprob).
@@ -56,9 +58,25 @@ def participant_name(p: Mapping[str, Any]) -> str:
     return ""
 
 
+def google_user(p: Mapping[str, Any]) -> str:
+    """The Google account of a signed-in attendee (``signedinUser.user`` = ``users/<id>``); "" for a guest
+    or a phone caller, whose only identity is the name they typed."""
+    info = p.get("signedinUser")
+    return canonical_google_user(info.get("user")) if isinstance(info, Mapping) else ""
+
+
+def canonical_google_user(value: Any) -> str:
+    """``users/123`` for ``users/123`` or ``123``; "" for anything else (never a name or an email)."""
+    text = str(value or "").strip()
+    text = text[len("users/"):] if text.startswith("users/") else text
+    return f"users/{text}" if text.isdigit() else ""
+
+
 def speakers_from(participants: Iterable[Mapping[str, Any]], entries: Sequence[Mapping[str, Any]]) -> list[Speaker]:
     """One speaker per participant that spoke (plus labels for speakers missing from the list)."""
+    participants = list(participants)
     names = {participant_id(p["name"]): participant_name(p) for p in participants if p.get("name")}
+    accounts = {participant_id(p["name"]): google_user(p) for p in participants if p.get("name")}
     out: dict[str, Speaker] = {}
     unknown = 0
     for e in entries:
@@ -69,7 +87,7 @@ def speakers_from(participants: Iterable[Mapping[str, Any]], entries: Sequence[M
         if not name:
             unknown += 1
             name = f"Participant {unknown}"
-        out[pid] = Speaker(pid, name)
+        out[pid] = Speaker(pid, name, google_user=accounts.get(pid, ""))
     return list(out.values())
 
 
