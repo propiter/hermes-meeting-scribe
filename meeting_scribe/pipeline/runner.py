@@ -459,10 +459,12 @@ class PipelineRunner:
 
     def stop(self, timeout: float = 10.0) -> None:
         self._stop.set()
-        self._wake.set()
         deadline = time.monotonic() + timeout
         for thread in self._threads:
-            thread.join(max(0.0, deadline - time.monotonic()))
+            # Wake again while joining: an idle sibling may clear ``_wake`` right after we set it.
+            while thread.is_alive() and time.monotonic() < deadline:
+                self._wake.set()
+                thread.join(min(0.1, max(0.0, deadline - time.monotonic())))
         self._threads = []
 
     def wait_idle(self, timeout: float) -> bool:
