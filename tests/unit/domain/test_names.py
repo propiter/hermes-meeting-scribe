@@ -26,7 +26,7 @@ from meeting_scribe.domain.names import (
     ("• Marketing Team •", "Marketing Team"),
     ("👩‍💻 nebula-app ✨", "nebula-app"),     # ZWJ sequence + trailing emoji
     ("1️⃣ orion", "orion"),                  # keycap sequence
-    ("Nebula Ops - Growth", "Nebula Ops - Growth"),
+    ("Nebula Ops - Research", "Nebula Ops - Research"),
     ("x-orion", "x-orion"),                 # letters are never stripped by code
     ("café", "café"),
     ("🎉", ""),
