@@ -319,6 +319,7 @@ advertencia.
 | `delivery_project_threads` | bool | `true` | Publicar cada tarea en un hilo del canal de su proyecto. |
 | `delivery_dm_assignees` | bool | `true` | Enviar a cada responsable sus tareas por DM tras publicar. |
 | `delivery_discord_transcript` | bool | `true` | Adjuntar la transcripción completa (archivo Markdown) a las notas. |
+| `delivery_mention_participants` | bool | `true` | El primer mensaje de las notas menciona con @ a quienes estuvieron en la reunión (una vez, al publicarlas por primera vez; en un canal privado solo a quienes pueden verlo). Nunca @everyone, @here ni roles. |
 | `delivery_transcript_max_mb` | int | `8` | Tamaño máximo por archivo; si es mayor se divide. Súbelo si tu servidor permite archivos más grandes. |
 | `delivery_forum_tags` | list | `[]` | Cuando las notas o tareas van a un canal foro, aplica también a cada post de reunión las etiquetas del foro con estos nombres (la que coincide con el proyecto de la reunión se aplica siempre). Máximo 5 por post; los nombres que el foro no tiene se ignoran. |
 | `delivery_forum_default_tag` | list | `[]` | Para foros que exigen una etiqueta en cada post: la etiqueta a usar cuando ninguna coincide con el proyecto ni con las etiquetas de los posts (el primer nombre que exista en ese foro). Vacío = ninguna; el post espera hasta que se configure. |
@@ -434,7 +435,78 @@ hermes meeting-scribe config set delivery_discord_guild "Mi Equipo"   # solo si 
 hermes meeting-scribe doctor
 ```
 
-### Notas por canal de voz y reuniones privadas
+### Reglas por reunión: adónde va cada reunión
+
+Las reglas deciden, reunión a reunión, adónde van las notas. Cada regla tiene tres partes:
+
+- **Qué reuniones**: un canal de voz, todos los canales de voz de una categoría, o las reuniones de
+  Google Meet cuyo código o título encaje con un patrón (`*` como comodín).
+- **Modo**:
+  - **Normal**: las notas van al canal que elijas; las tareas van a los canales de sus proyectos y
+    al tablero como siempre.
+  - **Privada**: todo (resumen, transcripción, cada tarea) se queda en ese canal. Cada tarea se
+    puede compartir con un botón.
+  - **Solo mensajes directos**: no se publica nada en ningún canal. Cada participante recibe la
+    reunión completa por mensaje directo (resumen, decisiones, preguntas, el archivo de la
+    transcripción, la lista de tareas) y sus propias tareas con botones, incluido uno para publicar
+    la tarea en el canal de su proyecto.
+- **Dónde**: un canal de texto o un foro (no en mensajes directos).
+
+Lo más fácil es Hermes Desktop → **Reuniones** → **Ajustes** → **Entrega** → **Reglas por reunión**.
+Cada regla aparece como una frase, por ejemplo *Canal de voz «Sala del equipo» → foro «notas-equipo»
+· Normal*, con una marca cuando el bot ha comprobado sus canales. **Añadir regla** abre un pequeño
+formulario: elige el tipo de reunión con los botones de arriba, el canal de voz o la categoría de una
+lista (o escribe un patrón de Meet), el modo —debajo, una frase explica qué hace— y el canal de una
+lista agrupada por categoría, donde los canales privados llevan un candado. Si eliges **Privada** y
+un canal que ve todo el servidor, un aviso lo dice antes de guardar. Lo mismo desde la terminal:
+
+```bash
+hermes meeting-scribe route list
+hermes meeting-scribe route add --voice "Sala del equipo" --to "#notas-equipo"
+hermes meeting-scribe route remove 2          # por su número en `route list`, o por su origen
+hermes meeting-scribe route move 3 1          # la regla 3 pasa a ser la primera
+```
+
+Los nombres se convierten en ids cuando el bot ha informado de sus canales (lo hace al conectarse y
+cada vez que cambian), así que renombrar un canal después nunca rompe una regla. `hermes
+meeting-scribe setup` también ofrece añadir reglas. Con varios espacios, añade `--space <id>`.
+
+**Tres recetas**
+
+1. **Las reuniones de cada equipo en su foro.** Un equipo se reúne en el canal de voz «Sala diseño»:
+   `route add --voice "Sala diseño" --to "#notas-diseno"`. En Desktop: *Canal de voz* → «Sala
+   diseño», *Normal*, → «notas-diseno». Las tareas siguen yendo a los canales de sus proyectos.
+2. **Reuniones de dirección en un canal privado.** Lo que se habla en la categoría «Dirección» se
+   queda en un canal que solo ve dirección: `route add --category "Dirección" --to
+   "#notas-direccion" --private`. En Desktop: *Categoría* → «Dirección», *Privada*, →
+   «notas-direccion» (con candado). Nada llega a canales de proyecto, a los mensajes directos de otros
+   ni al tablero salvo que alguien de ese canal pulse un botón de compartir.
+3. **Reuniones 1:1 solo por mensaje directo.** `route add --voice "1a1" --dm`. En Desktop: *Canal de
+   voz* → «1a1», *Solo mensajes directos* (sin canal que elegir). Las dos personas reciben la reunión
+   en sus mensajes directos y no aparece nada en el servidor.
+
+**Solo mensajes directos, en detalle.** Los participantes son las personas que vio la captura
+(quienes hablaron o estuvieron en la llamada). En Google Meet cuenta un asistente cuyo nombre o email
+coincide con exactamente una persona vinculada con `/meeting link`. Quien tenga los mensajes
+directos cerrados se omite y `status`/`doctor` dicen quién; los demás la reciben igual y nunca se
+publica en un canal como alternativa. Si no se puede llegar a nadie, la reunión espera y dice por
+qué. Reprocesar edita los mismos mensajes. Los botones solo funcionan en tu propia copia y sobre tus
+propias tareas (nadie puede actuar sobre la tarea de otro ni reenviársela). La reunión sigue en
+mensajes directos aunque luego se quite la regla, y el agente solo la encuentra desde esos mensajes.
+Una reunión publicada antes de que existiera la regla se retira primero de los canales.
+
+### Se menciona a los participantes
+
+El primer mensaje de las notas (en un canal, su hilo, un post de foro o el canal de una regla
+privada) menciona con @ a quienes estuvieron en la reunión, para que sepan que las notas están ahí:
+los participantes de Discord por su cuenta, los asistentes de Google Meet si están vinculados con
+`/meeting link` y el resto por su nombre. Notifica una sola vez, al publicar las notas por primera
+vez (reprocesar edita el texto sin volver a notificar), nunca a @everyone, @here, roles ni al bot, y
+en un canal privado solo a quienes pueden verlo. Las reuniones de solo mensajes directos no lo usan.
+Se desactiva con `hermes meeting-scribe config set delivery_mention_participants false` (por
+espacio con `--space`) o en Desktop → Ajustes → Entrega.
+
+### Notas por canal de voz y reuniones privadas (sintaxis de las reglas)
 
 `meeting_routes` envía las notas de ciertas reuniones a su propio canal. Cada entrada es una regla
 `origen = #canal`, con `:private` opcional (también vale `:privado`/`:privada`):

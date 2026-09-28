@@ -1085,6 +1085,35 @@ the install has several spaces or the space already has its own list, else to th
   them).
 - The exact error for a user with closed DMs (`Forbidden` 50007) — treated as unreachable.
 
+### 19.4 Participants mentioned in the notes
+
+Request: wherever the notes of a meeting are published (a text channel, its thread, a forum post, a
+private rule's channel), the first message @mentions the humans of the meeting so they know the notes
+are there.
+
+- **Setting** `delivery_mention_participants` (bool, default `true`, group `delivery`, space-scoped;
+  Desktop shows it as a switch in Delivery).
+- **Who** (`privacy.people`, shared with §19.3): `Meeting.human_speakers` — Discord speakers by id
+  (who spoke or was in the call); Google Meet attendees mapped through exactly one person link of the
+  space (name or email); anyone else by name only, as inert text (`safe_name`: a typed `@everyone`
+  never pings). The bot (client user / guild `me`) is never listed.
+- **Where in the message**: one line `-# 👥 Participants: <@a>, <@b>, Name` under the title of the
+  FIRST part of the summary (`render_header(participants=…)`); at most 40 mentions, the rest counted.
+- **Pings** (`MessageSpec.mentions`, `Messages._mentions`, `DiscordViews.mention_kwargs`): the first
+  part is sent with `AllowedMentions(users=[exactly those ids], roles=False, everyone=False,
+  replied_user=False)`; the other parts ping nobody. Only the very first publication pings (no
+  `notes` pointer yet): the line is saved in the pointer (`people`) and reused verbatim; every edit
+  and any re-post (a deleted summary, a reprocess) carries the same text with `users=[]`.
+- **Who may be pinged**: a member the bot can check (`guild.get_member` +
+  `channel.permissions_for(member).view_channel`, a thread/post judged by its parent) is mentioned
+  only if they can view the channel. A member the bot cannot check is mentioned only in a channel
+  @everyone can see and not under a private rule; otherwise they appear by name (fail closed: no
+  forced notification for someone without access).
+- **Not applied** to direct-messages-only meetings (§19.3): each participant already gets their copy.
+
+**Not verifiable without real Discord.** That `guild.get_member` is populated (members intent and
+cache) for everyone in a private channel; without it those people are named, not mentioned.
+
 ## 20. Configuration schema for UIs (unreleased)
 
 `config.SPEC` stays the single source of truth; each `Opt` now has a `group` (capture,

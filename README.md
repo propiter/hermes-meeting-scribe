@@ -312,6 +312,7 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `delivery_project_threads` | bool | `true` | Post each task in a thread of its project's channel. |
 | `delivery_dm_assignees` | bool | `true` | Send each assignee their tasks by DM after delivery. |
 | `delivery_discord_transcript` | bool | `true` | Attach the full transcript (Markdown file) to the notes. |
+| `delivery_mention_participants` | bool | `true` | The first message of the notes @mentions the people who were in the meeting (once, when the notes are first posted; in a private channel only those who can see it). Never @everyone, @here or roles. |
 | `delivery_transcript_max_mb` | int | `8` | Largest file uploaded; longer transcripts are split. Raise it if your server allows bigger uploads. |
 | `delivery_forum_tags` | list | `[]` | When notes or tasks go to a forum channel, also apply the forum tags with these names to each meeting post (the tag matching the meeting's project is applied anyway). Max 5 per post; names the forum does not have are ignored. |
 | `delivery_forum_default_tag` | list | `[]` | For forums that require a tag on every post: the tag to use when no tag matches the project or the forum post tags (the first name that exists in that forum). Empty = none; the post then waits until a tag is set. |
@@ -485,6 +486,17 @@ the meeting waits and says why. Reprocessing edits the same messages. Buttons on
 copy and only on your own tasks (nobody can act on or forward someone else's task). The meeting
 stays in direct messages even if the rule is removed later, and the agent only finds it from those
 DMs. A meeting published before the rule existed is withdrawn from the channels first.
+
+### Participants are mentioned
+
+The first message of the notes (in a channel, its thread, a forum post or a private rule's channel)
+@mentions the people who were in the meeting, so they know the notes are there: Discord participants
+by their account, Google Meet attendees when they are linked with `/meeting link`, anyone else by
+name. It pings only once, when the notes are first posted (reprocessing edits the text without
+pinging again), never @everyone, @here, roles or the bot, and in a private channel only people who
+can see it. Direct-messages-only meetings skip it. Turn it off with
+`hermes meeting-scribe config set delivery_mention_participants false` (per space with `--space`) or
+in Desktop → Settings → Delivery.
 
 ### Notes per voice channel and private meetings (rule syntax)
 

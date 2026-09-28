@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Participants mentioned in the notes** (`delivery_mention_participants`, on by default,
+  per space, a switch in Desktop). The first message of the notes — channel, thread, forum post or a
+  private rule's channel — @mentions the humans of the meeting (Discord ids; Meet attendees via
+  person links; others by name). It pings exactly those users once, at the first publication
+  (`allowed_mentions` users only: no @everyone/@here/roles, never the bot); edits and re-posts keep
+  the text without pinging; in private channels only people who can see the channel are mentioned.
+  Not used for direct-messages-only meetings.
 - **Direct-messages-only meetings** (`origin = :dm` in `meeting_routes`; `route add … --dm`; "Direct
   messages only" in Desktop). Nothing is posted in any channel: each participant (who spoke or was in
   the call; Meet attendees mapped through `/meeting link`) gets the whole meeting by DM — summary,
