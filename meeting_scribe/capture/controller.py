@@ -232,7 +232,8 @@ class CaptureManager:
             return t("capture.unassigned", self.lang, guild=guild.id)
         except AlreadyRecording as exc:
             s = exc.session
-            return t("capture.already", self.lang, channel=s.channel.name, id=s.meeting.id if s.meeting else "-")
+            key = "capture.already" if int(s.channel.id) == int(channel.id) else "capture.other_channel"
+            return t(key, self.lang, channel=s.channel.name, id=s.meeting.id if s.meeting else "-")
         except Busy as exc:
             return str(exc)
         except FfmpegNotFound as exc:
