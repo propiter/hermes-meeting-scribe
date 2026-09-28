@@ -196,6 +196,30 @@ def test_config_list_shows_the_channel_a_name_resolved_to(rt, capsys):
     assert "Example Team (100, only)" in out
 
 
+def test_config_list_ignores_the_report_of_a_channel_changed_since(rt, capsys):
+    """Regression: the last delivery resolved an older value; the new one must not show its channel."""
+    from meeting_scribe.discord_ui.destination import REPORT_KV
+
+    repo = rt.service().repo
+    repo.kv_set(f"{REPORT_KV}.discord", json.dumps({
+        "guild": {"id": "100", "name": "Example Team", "source": "meeting"}, "targets": ["610"],
+        "steps": [{"key": "delivery_discord_channel", "value": "", "status": "unset"},
+                  {"key": "voice_text", "status": "ok", "channel_id": "610", "channel_name": "general"}]}))
+    rt.cfg["delivery_discord_channel"] = "620"
+    code, out = run(rt, ["config", "list", "--group", "delivery"], capsys)
+    assert "#general" not in out
+    assert "delivery_discord_channel = 620  (configured)  ! delivery_discord_channel: changed since the last " \
+           "delivery; it will be checked on the next one" in out
+    repo.set_bot_guilds([("100", "Example Team")])
+    repo.set_guild_channels("100", [{"id": "620", "name": "meeting-notes", "type": "text", "public": True}])
+    code, out = run(rt, ["config", "list", "--group", "delivery"], capsys)
+    assert "delivery_discord_channel = 620  (configured)  → #meeting-notes (620)" in out
+    rt.cfg["delivery_discord_channel"] = "missing-notes"
+    code, out = run(rt, ["config", "list", "--json"], capsys)
+    row = {r["key"]: r for r in json.loads(out)["settings"]}["delivery_discord_channel"]
+    assert row["resolved"]["status"] == "missing" and "channel_id" not in row["resolved"]
+
+
 def test_config_schema_json(rt, capsys):
     code, out = run(rt, ["config", "schema", "--json", "--lang", "es"], capsys)
     doc = json.loads(out)

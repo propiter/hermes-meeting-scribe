@@ -169,6 +169,28 @@ def check_llm(env: DoctorEnv) -> Check:
     return Check.ok("; ".join(parts))
 
 
+def _stale_channel(s: Settings, repo: Any, source: str, rep: dict[str, Any]) -> str:
+    """Plain words for an explicit channel setting changed since the delivery ``rep`` of ``source``
+    describes (``""`` when the report still matches the configuration)."""
+    steps = {st.get("key"): st for st in rep.get("steps") or () if isinstance(st, dict)}
+    keys = ("google_meet_discord_channel",) if source == "google_meet" else ()
+    for key in keys + ("delivery_discord_channel",):
+        if key not in steps and not getattr(s, key):
+            continue
+        now = current_channel(s, repo, key, steps.get(key))
+        if now is steps.get(key):
+            if now.get("channel_id"):  # the chain stopped here: later keys were never consulted
+                return ""
+            continue
+        if not now:
+            return f"{key} was cleared after the last delivery; the next one resolves the notes channel again"
+        if now.get("channel_id"):
+            return f"notes channel {key} = {now['value']} → #{now['channel_name']} ({now['channel_id']}), " \
+                   "from the channel list; confirmed on the next delivery"
+        return now.get("detail") or f"{key}: {NEXT_DELIVERY}"
+    return ""
+
+
 def check_delivery(env: Any) -> Check:
     """Where notes go (DESIGN §19): last resolution seen by the gateway and meetings waiting for a channel."""
     import json
@@ -197,6 +219,10 @@ def check_delivery(env: Any) -> Check:
         kind = next((st.get("kind") for st in rep.get("steps") or () if st.get("channel_id") == target
                      and st.get("kind") in ("forum", "media")), "")
         channel = f"{kind} {target} (one post per meeting)" if kind else f"channel {target}"
+        stale = _stale_channel(s, svc.repo, source, rep)
+        if stale:  # the report resolved a value that is no longer configured: say what holds now
+            parts.append(f"{source}: server {where} ({g.get('source') or '-'}), {stale}")
+            continue
         parts.append(f"{source}: server {where} ({g.get('source') or '-'}), notes {channel}")
         problems += [st["detail"] for st in rep.get("steps") or () if st.get("detail")
                      and st.get("status") not in ("ok", "unset", "none")]
@@ -310,6 +336,33 @@ def space_catalog(repo: Any, space: str) -> Any:
     from .channel_catalog import Catalog
 
     return Catalog.load(repo, space_guilds(repo, space))
+
+
+CHANNEL_KEYS = ("delivery_discord_channel", "google_meet_discord_channel", "delivery_fallback_channel")
+NEXT_DELIVERY = "changed since the last delivery; it will be checked on the next one"
+
+
+def current_channel(s: Settings, repo: Optional[Any], key: str, step: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """What ``config list``/``doctor`` show for channel setting ``key``: the gateway's last resolution
+    (``step``) only while it resolved the value configured NOW; otherwise the channel catalog's view of
+    the current value (like ``meeting_routes``), or ``not_checked`` until the next delivery. A report
+    of an older value must never pass for the current one."""
+    from .channel_catalog import TARGET_KINDS
+    from .config import channel_ref
+
+    kind, ref = channel_ref(getattr(s, key))
+    if step and str(step.get("value") or "") == ref:
+        return step
+    if not kind:
+        return {}
+    catalog = space_catalog(repo, s.space) if repo is not None else None
+    found = catalog.find(ref, TARGET_KINDS) if catalog is not None else None
+    if found is not None and found.status == "ok":
+        return {"value": ref, "status": "ok", "channel_id": found.id, "channel_name": found.name,
+                "kind": found.kind, "source": "catalog"}
+    if found is not None and found.status not in ("unknown", "no_servers"):
+        return {"value": ref, "status": found.status, "detail": f"{key}: {found.detail}"}
+    return {"value": ref, "status": "not_checked", "detail": f"{key}: {NEXT_DELIVERY}"}
 
 
 def route_text(row: dict[str, Any]) -> str:

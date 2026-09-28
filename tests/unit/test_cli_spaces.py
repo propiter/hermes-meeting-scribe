@@ -182,6 +182,7 @@ def test_config_list_shows_a_forum_and_its_warnings(rt, capsys):
     """DESIGN §19.1: ``config list`` names the kind of a resolved forum and repeats its warnings."""
     from meeting_scribe.discord_ui.destination import REPORT_KV
 
+    rt.set_config("delivery_discord_channel", "notes")  # the value that report resolved
     rt.repo().kv_set(f"{REPORT_KV}.discord", json.dumps({
         "guild": {"id": "100", "name": "Example Team", "source": "meeting"}, "targets": ["700"],
         "steps": [{"key": "delivery_discord_channel", "value": "notes", "status": "ok", "channel_id": "700",

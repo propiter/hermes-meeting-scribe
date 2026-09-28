@@ -165,6 +165,30 @@ def test_delivery_check_reports_waiting_meetings_and_bad_names(tmp_path):
     repo.close()
 
 
+def test_delivery_check_does_not_show_the_channel_of_a_changed_setting(tmp_path):
+    """Regression: a report of an older notes channel is replaced by the catalog's view of the new one."""
+    import json
+
+    from meeting_scribe.discord_ui.destination import REPORT_KV
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {})
+    e = env(tmp_path, delivery_discord_channel="620")
+    e.service = lambda: svc
+    repo.kv_set(f"{REPORT_KV}.discord", json.dumps({
+        "guild": {"id": "100", "name": "Example Team", "source": "meeting"}, "targets": ["610"],
+        "steps": [{"key": "delivery_discord_channel", "value": "", "status": "unset"}]}))
+    res = check_delivery(e)
+    assert "channel 610" not in res.detail and "changed since the last delivery" in res.detail
+    repo.set_bot_guilds([("100", "Example Team")])
+    repo.set_guild_channels("100", [{"id": "620", "name": "meeting-notes", "type": "text", "public": True}])
+    res = check_delivery(e)
+    assert "→ #meeting-notes (620), from the channel list" in res.detail and "610" not in res.detail
+    repo.close()
+
+
 def test_delivery_check_shows_destination_warnings(tmp_path):
     """Review M2: a private notes channel is used when configured, but doctor says who cannot see it."""
     import json

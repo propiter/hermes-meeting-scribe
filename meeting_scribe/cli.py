@@ -448,7 +448,7 @@ def config_rows(rt: CliRuntime, space: Optional[str] = None) -> list[dict[str, A
     overrides = rt.spaces().require(space).overrides if space else {}
     origin_of = getattr(rt, "config_origin", None)
     invalid = {w.split("=", 1)[0].rsplit(": ", 1)[-1] for w in settings.warnings}
-    resolved = {} if cli_spaces.several(rt) else _resolved_channels(rt)
+    resolved = {} if cli_spaces.several(rt) else _resolved_channels(rt, settings)
     rows = []
     for key, opt in SPEC.items():
         value = getattr(settings, key)
@@ -479,11 +479,12 @@ def _route_rows(rt: CliRuntime, settings: Settings) -> list[dict[str, Any]]:
     return doctor.route_rows(settings, repo)
 
 
-def _resolved_channels(rt: CliRuntime) -> dict[str, dict[str, Any]]:
+def _resolved_channels(rt: CliRuntime, settings: Settings) -> dict[str, dict[str, Any]]:
     from .discord_ui.destination import REPORT_KV
 
     try:
-        reports = rt.service().repo.kv_prefix(REPORT_KV)
+        repo = rt.service().repo
+        reports = repo.kv_prefix(REPORT_KV)
     except Exception:
         return {}
     out: dict[str, dict[str, Any]] = {}
@@ -506,6 +507,10 @@ def _resolved_channels(rt: CliRuntime) -> dict[str, dict[str, Any]]:
         if guild.get("id") and "delivery_discord_guild" not in out:
             out["delivery_discord_guild"] = {"status": "ok", "guild_id": guild["id"], "guild_name": guild.get("name"),
                                              "source": guild.get("source")}
+    for key in doctor.CHANNEL_KEYS:  # a report of an older value never passes for the current one
+        current = doctor.current_channel(settings, repo, key, out.pop(key, None))
+        if current:
+            out[key] = current
     return out
 
 
