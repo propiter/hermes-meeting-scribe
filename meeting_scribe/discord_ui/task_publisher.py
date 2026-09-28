@@ -34,6 +34,7 @@ import asyncio
 import logging
 from typing import Any, Callable, Optional, Sequence
 
+from .. import privacy
 from ..config import Settings
 from ..domain.models import KV_DM_NOTES, KV_MOVE_FROM_DM, Meeting, Notes, is_discord_user_id
 from ..i18n import t
@@ -117,9 +118,11 @@ class TaskPublisher:
                                   notes_place=await self.private_place(meeting, ptrs))
 
     async def private_place(self, meeting: Meeting, ptrs: Pointers) -> set[str]:
-        """The private notes channel of a meeting: the rule's channel(s) and — once posted — the notes
-        channel, its forum post and the thread holding its tasks."""
-        place = {str(c) for c in self._destination(meeting).targets}
+        """The private notes channel of a meeting: its anchored channel (recorded once published, never
+        moved by a rule edit), else the rule's channel(s), and — once posted — the notes channel, its forum
+        post and the thread holding its tasks. Withdrawing public copies never touches this set."""
+        rec = await asyncio.to_thread(privacy.record, self.repo, meeting.id) or {}
+        place = {str(rec["channel"])} if rec.get("channel") else {str(c) for c in self._destination(meeting).targets}
         ptr = await ptrs.load("notes") or {}
         if {str(ptr.get(k)) for k in ("channel", "forum") if ptr.get(k)} & place:
             place |= {str(ptr[k]) for k in ("channel", "forum", "thread") if ptr.get(k)}

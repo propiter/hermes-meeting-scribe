@@ -62,3 +62,28 @@ async def test_rule_edited_to_another_channel_holds_the_meeting_until_the_admin_
     res = await run_deliver(env)
     assert res.ok and SUMMARY_WORD in texts(public.ordered()) and SUMMARY_WORD not in texts(env.private.ordered())
     assert "700" not in await env.make().private_place(env.meeting.id)
+
+
+# F5 -----------------------------------------------------------------------------------------------
+async def test_unusable_rule_never_deletes_the_private_copy_itself(env):
+    """The rule is edited to a channel that cannot be used: a refresh (share all, 📁, a button) keeps the
+    summary, index and transcript in the anchored private channel, and a delivery only waits."""
+    await run_deliver(env)
+    before = texts(env.private.ordered())
+    env.cfg["meeting_routes"] = ["Leadership = 799:private"]
+    await env.make().refresh(env.meeting.id)
+    res = await run_deliver(env)
+    assert res.waiting and SUMMARY_WORD in texts(env.private.ordered())
+    assert texts(env.private.ordered()) == before
+
+
+async def test_withdraw_keeps_the_anchored_channel_even_if_the_rule_points_nowhere(env):
+    """The publisher's own place of a private meeting is its anchor, not the rule's current targets."""
+    await run_deliver(env)
+    env.cfg["meeting_routes"] = []
+    sink = env.make()
+    got = await sink.board(env.meeting.id)
+    assert got is not None
+    pub = got[0]
+    from meeting_scribe.discord_ui.publisher import Pointers
+    assert "700" in await pub.private_place(env.meeting, Pointers(env.svc.repo, env.meeting.id))
