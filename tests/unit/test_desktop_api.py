@@ -208,15 +208,118 @@ def test_dashboard_loader_exposes_the_router():
     assert (path.parent / manifest["entry"]).is_file()
 
 
-def test_several_spaces_are_refused_until_the_desktop_can_choose_one(env):
-    """DESIGN §23: no space selector yet — never a library mixing two teams."""
+def two_spaces(env):
+    """``main`` (the fixture's meeting, server 100) and ``team`` (its own meeting, server 200)."""
     c, mid = env["client"], env["meeting"].id
     assert [m["id"] for m in c.get(f"{PREFIX}/v1/meetings").json()["items"]] == [mid]  # bootstraps ``main``
     repo = Repository(env["root"] / "index.sqlite")
     repo.insert_space("team", "Team")
+    repo.assign_guild("main", "100", "Acme")
+    repo.assign_guild("team", "200", "Other")
+    repo.save_meeting(replace(env["meeting"], id="team0001", space="team", title="Team daily"))
+    repo.set_bot_guilds([("100", "Acme"), ("200", "Other"), ("300", "Stray")])
     repo.close()
-    for path in ("/v1/meetings", f"/v1/meetings/{mid}", f"/v1/meetings/{mid}/transcript", "/v1/status"):
-        assert c.get(f"{PREFIX}{path}").status_code == 409, path
-    assert c.post(f"{PREFIX}/v1/meetings/{mid}/commands",
-                  json={"request_id": "r" * 16, "action": "reprocess", "stage": "analyze", "confirm": True}
-                  ).status_code == 409
+    return c, mid
+
+
+def test_with_several_spaces_every_data_endpoint_needs_space(env):
+    """DESIGN §23: never a library mixing two teams; an unknown space is a plain 404."""
+    c, mid = two_spaces(env)
+    body = {"request_id": "r" * 16, "action": "reprocess", "stage": "analyze", "confirm": True}
+    for path in ("/v1/meetings", f"/v1/meetings/{mid}", f"/v1/meetings/{mid}/transcript",
+                 f"/v1/meetings/{mid}/audio", "/v1/commands/nope"):
+        r = c.get(f"{PREFIX}{path}")
+        assert r.status_code == 409 and "?space=" in r.json()["detail"], path
+        r = c.get(f"{PREFIX}{path}", params={"space": "ghost"})
+        assert r.status_code == 404 and r.json()["detail"] == "there is no space called 'ghost'", path
+    assert c.post(f"{PREFIX}/v1/meetings/{mid}/commands", json=body).status_code == 409
+    assert [m["id"] for m in c.get(f"{PREFIX}/v1/meetings", params={"space": "team"}).json()["items"]] == ["team0001"]
+    assert [m["id"] for m in c.get(f"{PREFIX}/v1/meetings", params={"space": "main"}).json()["items"]] == [mid]
+    assert c.get(f"{PREFIX}/v1/meetings/{mid}", params={"space": "team"}).status_code == 404  # another team's
+    assert c.post(f"{PREFIX}/v1/meetings/{mid}/commands", params={"space": "team"}, json=body).status_code == 404
+    ok = c.post(f"{PREFIX}/v1/meetings/{mid}/commands", params={"space": "main"}, json=body)
+    assert ok.status_code == 200
+    assert c.get(f"{PREFIX}/v1/commands/{'r' * 16}", params={"space": "team"}).status_code == 404
+    assert c.get(f"{PREFIX}/v1/commands/{'r' * 16}", params={"space": "main"}).json()["state"] == "queued"
+
+
+def test_status_is_the_machine_plus_the_spaces_google(env):
+    c, mid = two_spaces(env)
+    gdir = env["root"] / "google" / "team"
+    gdir.mkdir(parents=True)
+    (gdir / "client.json").write_text("{}")
+    (gdir / "token.json").write_text(json.dumps({"refresh_token": "RTOKEN"}))
+    c.post(f"{PREFIX}/v1/meetings/{mid}/commands", params={"space": "main"},
+           json={"request_id": "q" * 16, "action": "reprocess", "stage": "analyze", "confirm": True})
+    machine = c.get(f"{PREFIX}/v1/status").json()
+    assert machine["space"] is None and machine["google"] is None and machine["commands"] == []
+    assert machine["worker"]["state"] == "unknown" and "queue" in machine
+    team = c.get(f"{PREFIX}/v1/status", params={"space": "team"}).json()
+    assert team["google"]["connected"] is True and team["commands"] == []
+    main = c.get(f"{PREFIX}/v1/status", params={"space": "main"}).json()
+    assert main["google"]["connected"] is False and [x["meeting_id"] for x in main["commands"]] == [mid]
+    assert c.get(f"{PREFIX}/v1/status", params={"space": "ghost"}).status_code == 404
+    assert "RTOKEN" not in json.dumps([machine, team, main])
+
+
+def test_spaces_crud_and_servers(env):
+    c, _mid = two_spaces(env)
+    items = c.get(f"{PREFIX}/v1/spaces").json()["items"]
+    assert [(s["slug"], s["guilds"]) for s in items] == [("main", [{"id": "100", "name": "Acme"}]),
+                                                         ("team", [{"id": "200", "name": "Other"}])]
+    team = items[1]
+    assert team["counts"] == {"meetings": 1, "by_state": {"done": 1}}
+    assert team["google"] == {"enabled": False, "connected": False, "last_check": None, "last_import": None,
+                              "error": None}
+    guilds = c.get(f"{PREFIX}/v1/guilds").json()
+    assert {g["id"]: g["space"] for g in guilds["items"]} == {"100": "main", "200": "team", "300": None}
+    assert guilds["seen_at"] is not None
+    new = c.post(f"{PREFIX}/v1/spaces", json={"name": "Ops Crew"})
+    assert new.status_code == 200 and new.json()["slug"] == "ops-crew" and new.json()["guilds"] == []
+    assert c.post(f"{PREFIX}/v1/spaces", json={"name": "Again", "slug": "ops-crew"}).status_code == 409
+    assert c.post(f"{PREFIX}/v1/spaces", json={"name": ""}).status_code == 400
+    assert c.patch(f"{PREFIX}/v1/spaces/ops-crew", json={"name": "Ops"}).json()["name"] == "Ops"
+    assert c.patch(f"{PREFIX}/v1/spaces/ghost", json={"name": "X"}).status_code == 404
+    put = c.put(f"{PREFIX}/v1/spaces/ops-crew/guilds/300")
+    assert put.status_code == 200 and put.json()["guilds"] == [{"id": "300", "name": "Stray"}]
+    assert c.put(f"{PREFIX}/v1/spaces/team/guilds/300").status_code == 409  # already Ops'
+    assert c.put(f"{PREFIX}/v1/spaces/team/guilds/abc").status_code == 400
+    assert c.put(f"{PREFIX}/v1/spaces/ghost/guilds/300").status_code == 404
+    assert c.delete(f"{PREFIX}/v1/spaces/team/guilds/300").status_code == 404  # not team's
+    assert c.delete(f"{PREFIX}/v1/spaces/ops-crew/guilds/300").json()["guilds"] == []
+    assert c.delete(f"{PREFIX}/v1/spaces/team").status_code == 409  # still has a meeting
+    assert c.delete(f"{PREFIX}/v1/spaces/ops-crew").json() == {"deleted": "ops-crew"}
+    assert c.delete(f"{PREFIX}/v1/spaces/ops-crew").status_code == 404
+
+
+def test_settings_have_a_global_and_a_space_scope(env):
+    c, _mid = two_spaces(env)
+    g = c.get(f"{PREFIX}/v1/settings").json()
+    assert "pipeline_workers" in g["global"] and "delivery_discord_channel" in g["space"]
+    assert g["space_slug"] is None and g["overrides"] == {}
+    scopes = {f["key"]: f["scope"] for f in g["schema"]["fields"] if f["storage"] == "plugin"}
+    assert scopes["pipeline_workers"] == "global" and scopes["kanban_mode"] == "space"
+    r = c.put(f"{PREFIX}/v1/settings/kanban_mode", params={"space": "team"}, json={"value": "auto"})
+    assert r.status_code == 200 and r.json() == {"key": "kanban_mode", "value": "auto", "scope": "space",
+                                                 "space": "team", "requeued": 0}
+    assert env["mem"].writes == []  # an override never touches the global config
+    team = c.get(f"{PREFIX}/v1/settings", params={"space": "team"}).json()
+    assert team["values"]["kanban_mode"] == {"value": "auto", "origin": "space"} and team["overrides"] == {
+        "kanban_mode": "auto"}
+    assert c.get(f"{PREFIX}/v1/settings", params={"space": "main"}).json()["values"]["kanban_mode"]["origin"] == "default"
+    bad = c.put(f"{PREFIX}/v1/settings/pipeline_workers", params={"space": "team"}, json={"value": 3})
+    assert bad.status_code == 400 and "machine-wide" in bad.json()["detail"]
+    assert c.put(f"{PREFIX}/v1/settings/kanban_mode", params={"space": "team"}, json={"value": "maybe"}).status_code == 400
+    assert c.put(f"{PREFIX}/v1/settings/kanban_mode", params={"space": "ghost"}, json={"value": "auto"}).status_code == 404
+    assert c.put(f"{PREFIX}/v1/settings/kanban_mode", params={"space": "team"}, json={"value": None}).json()["value"] is None
+    assert c.get(f"{PREFIX}/v1/settings", params={"space": "team"}).json()["overrides"] == {}
+    glob = c.put(f"{PREFIX}/v1/settings/pipeline_workers", json={"value": 3})
+    assert glob.json()["scope"] == "global" and env["mem"].writes == [("pipeline_workers", 3)]
+
+
+def test_doctor_walks_every_space(env):
+    c, _mid = two_spaces(env)
+    doc = c.get(f"{PREFIX}/v1/doctor").json()
+    checks = {x["name"]: x for x in doc["checks"]}
+    assert checks["spaces"]["status"] == "warn" and "Stray (300)" in checks["spaces"]["detail"]
+    assert "[main]" in checks["google_meet"]["detail"] and "[team]" in checks["google_meet"]["detail"]

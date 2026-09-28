@@ -252,7 +252,7 @@ _RANK = {"ok": 0, "warn": 1, "fail": 2}
 def _space_slugs(env: Any) -> list[str]:
     """The install's spaces (``[""]`` for a runtime without spaces: the global settings)."""
     spaces = getattr(env, "spaces", None)
-    return [sp.slug for sp in spaces().all()] if callable(spaces) else [""]
+    return ([sp.slug for sp in spaces().all()] or [""]) if callable(spaces) else [""]
 
 
 def check_google_meet(env: Any) -> Check:
@@ -311,13 +311,12 @@ VOICE_LIMIT_NOTE = ("the bot joins one voice channel per server at a time: diffe
 def check_spaces(env: Any) -> Check:
     """DESIGN §23: spaces and their servers, the bot's servers no space owns, baseline backups."""
     spaces_of = getattr(env, "spaces", None)
-    repo_of = getattr(env, "repo", None)
-    if not callable(spaces_of) or not callable(repo_of):
+    if not callable(spaces_of):
         return Check.ok("no runtime")
     from .storage.baseline import backups
 
-    spaces = spaces_of().all()
-    repo = repo_of()
+    registry_ = spaces_of()
+    spaces, repo = registry_.all(), registry_.repo
     parts = [f"{sp.slug} ({sp.name}): " + (", ".join(f"{n or g} ({g})" if n else g for g, n in sp.guilds)
                                              or "no Discord server") for sp in spaces]
     guilds, seen = repo.bot_guilds()

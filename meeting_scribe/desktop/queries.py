@@ -408,6 +408,21 @@ def _command_fields(row: Any) -> dict[str, Any]:
             "error": redact(row["error"] or ""), "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
 
+def _google_commands(repo: Repository, space: str) -> dict[str, str]:
+    flag = f" --space {space}" if len(repo.list_spaces()) > 1 else ""
+    return {"connect": f"hermes meeting-scribe google connect{flag} --client-secret <client.json>",
+            "status": f"hermes meeting-scribe google status{flag}",
+            "enable": f"hermes meeting-scribe config set google_meet_enabled true{flag}"}
+
+
+def google_summary(status: dict[str, Any]) -> dict[str, Any]:
+    """The short form ``GET /v1/spaces`` shows per space (never a token or client field)."""
+    failing = status.get("last_poll_ok") == "0"
+    return {"enabled": status["enabled"], "connected": status["connected"],
+            "last_check": status.get("last_poll_at"), "last_import": status.get("last_import_at"),
+            "error": status.get("last_error") if failing or status.get("revoked") else None}
+
+
 def only_space(repo: Repository) -> Optional[str]:
     """The install's single space; ``None`` with none or several (the Desktop has no space selector
     yet — DESIGN §23: it never shows one team's data as if it were the only one)."""
@@ -415,14 +430,11 @@ def only_space(repo: Repository) -> Optional[str]:
     return rows[0].slug if len(rows) == 1 else None
 
 
-def google_status(root: Path, repo: Repository, enabled: bool) -> dict[str, Any]:
-    """Connection state from the space's files, WITHOUT any token or client field."""
+def google_status(root: Path, repo: Repository, enabled: bool, space: str) -> dict[str, Any]:
+    """``space``'s Google connection state from its files, WITHOUT any token or client field."""
     from ..google.importer import status_kv
     from ..google.oauth import GoogleFiles
 
-    space = only_space(repo)
-    if space is None:
-        return {"enabled": enabled, "space_required": True}
     KV = status_kv(space)
     files = GoogleFiles(lambda: root, space)
     token = files.read_token() or {}
@@ -435,8 +447,6 @@ def google_status(root: Path, repo: Repository, enabled: bool) -> dict[str, Any]
                            "revoked": bool(token.get("disconnected")),
                            "connected_at": token.get("connected_at") if isinstance(token.get("connected_at"),
                                                                                   (int, float)) else None,
-                           "commands": {"connect": "hermes meeting-scribe google connect --client-secret <client.json>",
-                                        "status": "hermes meeting-scribe google status",
-                                        "enable": "hermes meeting-scribe config set google_meet_enabled true"}}
+                           "commands": _google_commands(repo, space)}
     out.update({k: redact(str(importer[k])) for k in safe_keys if importer.get(k) not in (None, "")})
     return out

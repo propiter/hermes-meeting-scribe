@@ -9,15 +9,17 @@ generated from ``config.config_schema`` — the page holds no copy of the settin
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Optional
 
 from .. import doctor, llm_config
-from ..config import CHANNEL_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
+from ..config import (CHANNEL_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, space_keys,
+                      validate_value)
 from ..llm_config import redact
 from ..storage.repo import Repository
+from ..storage.spaces import SpaceRow
 from .queries import WAITING_KV
 
 PLUGIN_ID = "meeting-scribe"
@@ -45,8 +47,9 @@ class SettingsStore:
                 return node
         return default
 
-    def settings(self) -> Settings:
-        return Settings.load(self._lookup)
+    def settings(self, space: str = "", overrides: Optional[Mapping[str, Any]] = None) -> Settings:
+        """The global values, with ``space``'s ``overrides`` on top when given."""
+        return Settings.load(self._lookup, space, overrides)
 
     def origin(self, key: str) -> str:
         for name in (key, LEGACY_KEYS.get(key)):
@@ -70,16 +73,22 @@ def hermes_settings_store() -> SettingsStore:
     return SettingsStore(read, write)
 
 
-def settings_view(store: SettingsStore, lang: str) -> dict[str, Any]:
-    """Schema (groups, fields, localized labels) + current value/origin of every plugin setting."""
-    settings = store.settings()
-    invalid = {w.split("=", 1)[0] for w in settings.warnings}
+def settings_view(store: SettingsStore, lang: str, space: Optional[SpaceRow] = None) -> dict[str, Any]:
+    """Schema (groups, fields with their ``scope``, localized labels) + current value/origin of every
+    plugin setting. With ``space``, the values that space sees: origin ``space`` for its overrides."""
+    overrides = dict(space.overrides) if space else {}
+    settings = store.settings(space.slug, overrides) if space else store.settings()
+    invalid = {w.split("=", 1)[0].removeprefix(f"space {space.slug}: " if space else "") for w in settings.warnings}
     values = {}
     for key in SPEC:
         value = getattr(settings, key)
-        values[key] = {"value": list(value) if isinstance(value, tuple) else value,
-                       "origin": "invalid" if key in invalid else store.origin(key)}
-    return {"schema": config_schema(lang), "values": values, "warnings": list(settings.warnings)}
+        origin = ("invalid" if key in invalid else "space" if SPEC[key].scope == "space" and overrides.get(key) is not None
+                  else store.origin(key))
+        values[key] = {"value": list(value) if isinstance(value, tuple) else value, "origin": origin}
+    return {"schema": config_schema(lang), "values": values, "warnings": list(settings.warnings),
+            "global": [k for k, o in SPEC.items() if o.scope == "global"], "space": list(space_keys()),
+            "space_slug": space.slug if space else None,
+            "overrides": {k: v for k, v in overrides.items() if k in SPEC}}
 
 
 def set_setting(store: SettingsStore, repo: Optional[Repository], key: str, raw: Any) -> dict[str, Any]:
@@ -89,10 +98,22 @@ def set_setting(store: SettingsStore, repo: Optional[Repository], key: str, raw:
     key = canonical_key(key)
     value = validate_value(key, raw)
     store.write(key, value)
-    nudged = 0
+    return {"key": key, "value": value, "scope": "global", "requeued": _nudge(repo, key)}
+
+
+def set_space_setting(store: SettingsStore, repo: Repository, slug: str, key: str, raw: Any) -> dict[str, Any]:
+    """``slug``'s override of ``key`` (``raw=None`` clears it, the global value applies again), validated
+    like ``hermes meeting-scribe space set``; a machine-wide key is a ``SpaceError`` (400)."""
+    from ..spaces import Spaces
+
+    key, value = Spaces(lambda: repo, store._lookup).set_override(slug, canonical_key(key), raw)
+    return {"key": key, "value": value, "scope": "space", "space": slug, "requeued": _nudge(repo, key)}
+
+
+def _nudge(repo: Optional[Repository], key: str) -> int:
     if repo is not None and (key in CHANNEL_KEYS or key in ("delivery_discord_guild", "delivery_auto_channel_names")):
-        nudged = requeue_waiting(repo)
-    return {"key": key, "value": value, "requeued": nudged}
+        return requeue_waiting(repo)
+    return 0
 
 
 def requeue_waiting(repo: Repository) -> int:
@@ -176,12 +197,14 @@ class DashboardDoctorEnv:
     secret: Callable[[str], Optional[str]] = lambda _name: None
     kanban: Any = None
     aux_store: Any = None
-    _settings: Optional[Settings] = field(default=None, init=False)
 
-    def settings(self) -> Settings:
-        if self._settings is None:
-            self._settings = self.store.settings()
-        return self._settings
+    def settings(self, space: Optional[str] = None) -> Settings:
+        return self.spaces().settings(space)
+
+    def spaces(self) -> Any:
+        from ..spaces import Spaces
+
+        return Spaces(lambda: self.repo, self.store._lookup, lambda: self.root)
 
     def data_dir(self) -> Path:
         return self.root
@@ -205,22 +228,13 @@ class DashboardDoctorEnv:
     def llm_store(self) -> Any:
         return self.aux_store
 
-    def _space(self) -> str:
-        from ..spaces import SpaceAmbiguous
-        from .queries import only_space
-
-        space = only_space(self.repo)
-        if space is None:
-            raise SpaceAmbiguous("several spaces: the Desktop cannot choose one yet")
-        return space
-
-    def google_files(self) -> Any:
+    def google_files(self, space: Optional[str] = None) -> Any:
         from ..google.oauth import GoogleFiles
-        return GoogleFiles(lambda: self.root, self._space())
+        return GoogleFiles(lambda: self.root, self.spaces().resolve(space).slug)
 
-    def google_credentials(self) -> Any:
+    def google_credentials(self, space: Optional[str] = None) -> Any:
         from ..google.oauth import GoogleCredentials
-        return GoogleCredentials(self.google_files())
+        return GoogleCredentials(self.google_files(space))
 
     def service(self) -> Any:
         from ..domain.models import KV_DM_NOTES
@@ -231,10 +245,10 @@ class DashboardDoctorEnv:
             waiting_destination=lambda: {k[len(WAITING_KV):]: v for k, v in repo.kv_prefix(WAITING_KV).items()},
             dm_notes=lambda: {k[len(KV_DM_NOTES):]: v for k, v in repo.kv_prefix(KV_DM_NOTES).items()})
 
-    def meet_importer(self) -> Any:
+    def meet_importer(self, space: Optional[str] = None) -> Any:
         from ..google.importer import status_kv
 
-        KV = status_kv(self._space())
+        KV = status_kv(self.spaces().resolve(space).slug)
         return SimpleNamespace(status=lambda: {k[len(KV):]: v for k, v in self.repo.kv_prefix(KV).items()})
 
 

@@ -212,7 +212,7 @@ def test_status_worker_jobs_waiting_and_commands(repo, tmp_path, meeting):
 def test_google_status_never_exposes_tokens(repo, tmp_path):
     gdir = tmp_path / "google" / "main"  # the only space's connection (DESIGN §23)
     gdir.mkdir(parents=True)
-    st = google_status(tmp_path, repo, enabled=False)
+    st = google_status(tmp_path, repo, enabled=False, space="main")
     assert st["connected"] is False and st["client_stored"] is False
     assert "google connect" in st["commands"]["connect"]
     (gdir / "client.json").write_text(json.dumps({"installed": {"client_id": "cid", "client_secret": "CSECRET"}}))
@@ -220,7 +220,7 @@ def test_google_status_never_exposes_tokens(repo, tmp_path):
                                                  "connected_at": 1700000000.0}))
     repo.kv_set("google.main.last_poll_at", "2026-09-26T10:00:00+00:00")
     repo.kv_set("google.main.last_error", "HTTP 401 Bearer ya29.secretsecret")
-    st = google_status(tmp_path, repo, enabled=True)
+    st = google_status(tmp_path, repo, enabled=True, space="main")
     assert st["connected"] and st["enabled"] and st["connected_at"] == 1700000000.0
     assert st["last_poll_at"].startswith("2026-09-26")
     blob = json.dumps(st)
@@ -288,11 +288,24 @@ def test_history_is_a_readable_timeline(repo, tmp_path, meeting):
     assert d["meeting"]["people"] == 2 and d["projects"] == []
 
 
-def test_google_status_with_several_spaces_names_no_connection(repo, tmp_path):
-    """No space selector yet: with two teams the page must not show either team's Google state."""
+def test_google_status_is_the_asked_spaces_own(repo, tmp_path):
+    """Each space has its own Google connection; the commands name the space once there are several."""
+    from meeting_scribe.desktop.queries import google_summary
+
     repo.insert_space("team", "Team")
-    st = google_status(tmp_path, repo, enabled=True)
-    assert st == {"enabled": True, "space_required": True}
+    (tmp_path / "google" / "team").mkdir(parents=True)
+    (tmp_path / "google" / "team" / "client.json").write_text("{}")
+    (tmp_path / "google" / "team" / "token.json").write_text(json.dumps({"refresh_token": "RTOKEN"}))
+    repo.kv_set("google.team.last_poll_at", "2026-09-26T10:00:00+00:00")
+    repo.kv_set("google.team.last_poll_ok", "0")
+    repo.kv_set("google.team.last_error", "temporary: HTTP 503")
+    team = google_status(tmp_path, repo, enabled=True, space="team")
+    main = google_status(tmp_path, repo, enabled=True, space="main")
+    assert team["connected"] and not main["connected"] and "last_poll_at" not in main
+    assert "--space team" in team["commands"]["connect"]
+    assert google_summary(team) == {"enabled": True, "connected": True, "last_check": "2026-09-26T10:00:00+00:00",
+                                    "last_import": None, "error": "temporary: HTTP 503"}
+    assert google_summary(main)["error"] is None and "RTOKEN" not in json.dumps(team)
 
 
 def test_library_of_one_space_never_shows_another_space(repo, tmp_path, meeting, utterances):
