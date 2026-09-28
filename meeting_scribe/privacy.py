@@ -32,10 +32,17 @@ def record(repo: Any, meeting_id: str) -> Optional[dict[str, Any]]:
     return data if isinstance(data, dict) else {"rule": "", "channel": ""}
 
 
-def remember(repo: Any, meeting_id: str, rule: str, channel: str) -> None:
-    """Sticky: once private, always private (the channel is updated when it becomes known)."""
+def anchor(repo: Any, meeting_id: str, channel: str) -> None:
+    """Move a private meeting to ``channel`` (explicit admin action, CLI ``private-move``)."""
     current = record(repo, meeting_id) or {}
-    wanted = {"rule": rule or current.get("rule", ""), "channel": channel or current.get("channel", "")}
+    repo.kv_set(KV_PRIVATE + meeting_id, json.dumps({"rule": current.get("rule", ""), "channel": channel}))
+
+
+def remember(repo: Any, meeting_id: str, rule: str, channel: str) -> None:
+    """Sticky: once private, always private. The channel is recorded once, when it becomes known, and
+    from then on the meeting is anchored there: only :func:`anchor` (the admin) changes it."""
+    current = record(repo, meeting_id) or {}
+    wanted = {"rule": rule or current.get("rule", ""), "channel": current.get("channel") or channel or ""}
     if wanted != current:
         repo.kv_set(KV_PRIVATE + meeting_id, json.dumps(wanted))
 
@@ -60,17 +67,19 @@ def is_private(repo: Any, settings: Any, meeting: Meeting) -> bool:
 
 
 def allowed_places(repo: Any, meeting: Meeting, settings: Any) -> set[str]:
-    """Chat ids from where a private meeting may be read: its notes channel, the forum post or thread
-    holding it, and the rule's channel when it is an id."""
+    """Chat ids from where a private meeting may be read: its anchored channel (the recorded one) and
+    the forum post or thread holding it. Only before the channel is recorded, the rule's channel id —
+    editing the rule later never opens the meeting to another channel."""
     from .domain.text import is_ascii_digits
 
     out: set[str] = set()
     rec = record(repo, meeting.id) or {}
     if rec.get("channel"):
         out.add(str(rec["channel"]))
-    rule = rule_for(settings, meeting)
-    if rule is not None and rule.private and is_ascii_digits(rule.channel):
-        out.add(rule.channel)
+    else:
+        rule = rule_for(settings, meeting)
+        if marks_private(rule) and is_ascii_digits(rule.channel):
+            out.add(rule.channel)
     row = repo.get_delivery("discord", NOTES_POINTER.format(id=meeting.id))
     if row and row.get("external_id"):
         try:

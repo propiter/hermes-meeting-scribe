@@ -1,4 +1,4 @@
-"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|export|config|google|space`` (DESIGN §10, §17, §23).
+"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|private-move|export|config|google|space`` (DESIGN §10, §17, §23).
 
 ``setup_parser`` / ``dispatch`` are pure (the runtime is injected) so they are unit-tested
 without Hermes; ``register()`` binds them to the plugin runtime. Exit codes: 0 ok, 1 failure /
@@ -71,6 +71,10 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     rp.add_argument("meeting_id")
     rp.add_argument("--from", dest="stage", default="transcribe", choices=["transcribe", "analyze", "deliver"])
     rp.add_argument("--now", action="store_true", help="Process in this process instead of queueing for the gateway")
+    pm = sub.add_parser("private-move", help="Move a private meeting to another private channel (and re-deliver it)")
+    add_space_arg(pm)
+    pm.add_argument("meeting_id")
+    pm.add_argument("channel", help="The new private channel: id or <#id>")
     ex = sub.add_parser("export", help="Export notes + transcript")
     ex.add_argument("meeting_id")
     ex.add_argument("--format", choices=["md", "json"], default="md")
@@ -291,6 +295,32 @@ def _reprocess(args: argparse.Namespace, rt: CliRuntime) -> int:
     hint = service.dm_notes().get(meeting.id)
     if hint:  # notes still in a DM (older version): what is missing to move them (DESIGN §19)
         _print(f"! {hint}")
+    return 0
+
+
+def _private_move(args: argparse.Namespace, rt: CliRuntime) -> int:
+    """The only way a private meeting changes channel (DESIGN §19.2): a rule edit never moves it."""
+    from . import privacy
+    from .config import _channel_value
+
+    meeting = _find(rt, args.meeting_id, selected(args, rt, action=True))
+    if meeting is None:
+        return 1
+    lang = rt.settings().ui_language
+    service = rt.service()
+    try:
+        channel = _channel_value(args.channel)
+    except ValueError:
+        channel = ""
+    if not channel.isdigit():
+        _print(t("cli.private_move_bad_channel", lang))
+        return 2
+    if privacy.record(service.repo, meeting.id) is None:
+        _print(t("cli.private_move_not_private", lang, id=meeting.id))
+        return 1
+    privacy.anchor(service.repo, meeting.id, channel)
+    service.reprocess(meeting.id, Stage.DELIVER)
+    _print(t("cli.private_move_done", lang, id=meeting.id, channel=channel))
     return 0
 
 
@@ -618,7 +648,7 @@ def _llm(args: argparse.Namespace, rt: CliRuntime) -> int:
 
 _COMMANDS: dict[str, Callable[[argparse.Namespace, CliRuntime], int]] = {
     "setup": _setup, "doctor": _doctor, "status": _status, "list": _list, "show": _show,
-    "reprocess": _reprocess, "export": _export, "config": _config, "google": cli_google.dispatch, "llm": _llm,
+    "reprocess": _reprocess, "private-move": _private_move, "export": _export, "config": _config, "google": cli_google.dispatch, "llm": _llm,
     "space": cli_spaces.dispatch}
 
 

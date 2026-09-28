@@ -369,5 +369,8 @@
   "share.already": "That was already done.",
   "share.done_dm": "Sent.",
   "share.done_project": "Published in {channel}.",
-  "sink.private_item_body": "{description}\n\nFrom a private meeting ({date})."
+  "sink.private_item_body": "{description}\n\nFrom a private meeting ({date}).",
+  "cli.private_move_bad_channel": "Give the new private channel as a channel id or <#id>.",
+  "cli.private_move_not_private": "Meeting {id} is not private; nothing to move.",
+  "cli.private_move_done": "Private meeting {id} now belongs to channel {channel}; it is delivered there again and removed from its previous channel. Make sure the channel is private and that meeting_routes points to it, or its delivery waits."
 }

@@ -109,23 +109,38 @@ class DiscordNotesSink:
         return render_transcript_md(meeting, utterances, meeting.language or self._settings(meeting).ui_language)
 
     def destination(self, meeting: Meeting) -> Destination:
-        """Loop-side: notes channel candidates, the server, and the channel for tasks without project."""
+        """Loop-side: notes channel candidates, the server, and the channel for tasks without project.
+
+        A meeting published as private is ANCHORED to its recorded channel (DESIGN §19.2): a rule edited,
+        removed or pointing to a renamed channel never moves it. When the rule now points elsewhere (or
+        cannot be used) the destination is still the anchor — buttons and refreshes keep working there —
+        but ``held`` makes DELIVER wait with the reason until the admin runs ``private-move``."""
         client = getattr(self._adapter(), "_client", None)
         dest = resolve(client, meeting, self._settings(meeting), allowed_guilds=self.allowed_guilds(meeting))
         rec = privacy.record(self._service().repo, meeting.id)
-        if rec is None or dest.private:
+        if rec is None:
             return dest
-        # published as private but no private rule matches any more: only its private channel, never
-        # the channels a normal meeting would use (fail closed)
-        channel = str(rec.get("channel") or "")
-        held = Destination(targets=[channel] if channel else [], guild=dest.guild, guild_source=dest.guild_source,
-                           rule=str(rec.get("rule") or ""), private=True)
-        held.steps.append(Resolved("meeting_routes", str(rec.get("rule") or ""), "ok" if channel else "missing",
-                                   channel or None, detail="" if channel else "the private rule of this meeting "
-                                   "was removed before its channel was known"))
-        if not channel:
+        anchor = str(rec.get("channel") or "")
+        rule = str(rec.get("rule") or dest.rule or "")
+        if not anchor:
+            if dest.private:
+                return dest  # not published yet: the private rule's channel
+            held = Destination(guild=dest.guild, guild_source=dest.guild_source, rule=rule, private=True)
+            held.steps.append(Resolved("meeting_routes", rule, "missing", detail="the private rule of this meeting "
+                                       "was removed before its channel was known"))
             held.problem = ("waiting: this meeting is private and its private channel is unknown; add a private "
                             "rule for it to meeting_routes (it is never published elsewhere)")
+            return held
+        held = Destination(targets=[anchor], guild=dest.guild, guild_source=dest.guild_source, rule=rule, private=True)
+        held.steps.append(Resolved("meeting_routes", rule, "ok", anchor, detail="private meeting anchored to its "
+                                   "channel"))
+        if dest.rule and (not dest.private or anchor not in dest.targets):
+            now = f"<#{dest.targets[0]}>" if dest.targets else "a channel that cannot be used"
+            held.held = True
+            held.problem = (f"waiting: private meeting {meeting.id} stays in its channel <#{anchor}>, but rule "
+                            f"{dest.rule!r} of meeting_routes now points to {now}. Nothing is moved automatically: "
+                            f"restore the rule, or move it with `hermes meeting-scribe private-move {meeting.id} "
+                            "<channel id>`")
         return held
 
     def guild_for(self, meeting: Meeting) -> object:
@@ -167,6 +182,8 @@ class DiscordNotesSink:
             rule = privacy.rule_for(self._settings(meeting), meeting)
             if private and (rule is None or privacy.marks_private(rule)):
                 await asyncio.to_thread(privacy.remember, self._service().repo, meeting.id, dest.rule, "")
+            if dest.held:  # anchored private meeting whose rule changed: nothing moves until the admin says so
+                raise DestinationPending(dest.problem)
             if not dest.targets and (not ptr or private):  # a private meeting never stays outside its channel
                 if ptr:  # remove what is outside its known private channel; what is inside stays
                     place = await asyncio.to_thread(privacy.allowed_places, pub.repo, meeting, self._settings(meeting))

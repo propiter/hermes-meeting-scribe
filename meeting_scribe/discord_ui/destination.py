@@ -199,6 +199,7 @@ class Destination:
     warnings: list[str] = field(default_factory=list)  # usable but worth a look (doctor)
     rule: str = ""  # the ``meeting_routes`` origin that decided the notes channel ("" = none)
     private: bool = False  # that rule is private: nothing leaves the notes channel by itself
+    held: bool = False  # a private meeting anchored to its channel whose rule now says otherwise: DELIVER waits
 
     def report(self) -> dict[str, Any]:
         g = self.guild

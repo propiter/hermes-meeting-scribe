@@ -294,3 +294,18 @@ def test_config_set_and_list_meeting_routes(rt, capsys):
     code, out = run(rt, ["config", "list", "--json"], capsys)
     row = next(r for r in json.loads(out)["settings"] if r["key"] == "meeting_routes")
     assert [r["origin"] for r in row["routes"]] == ["Leadership", "meet:abc-*"]
+
+
+def test_private_move_is_the_explicit_way_to_move_a_private_meeting(rt, capsys):
+    from meeting_scribe import privacy
+
+    code, out = run(rt, ["private-move", rt.mid, "800"], capsys)
+    assert code == 1 and "not private" in out
+    privacy.remember(rt.service().repo, rt.mid, "Daily Sync", "700")
+    privacy.remember(rt.service().repo, rt.mid, "", "800")  # a later delivery never re-anchors it
+    assert privacy.record(rt.service().repo, rt.mid)["channel"] == "700"
+    assert run(rt, ["private-move", rt.mid, "#general"], capsys)[0] == 2
+    code, out = run(rt, ["private-move", rt.mid, "<#800>"], capsys)
+    assert code == 0 and "800" in out
+    assert privacy.record(rt.service().repo, rt.mid) == {"rule": "Daily Sync", "channel": "800"}
+    assert rt.service().repo.get_job(rt.mid).stage is Stage.DELIVER
