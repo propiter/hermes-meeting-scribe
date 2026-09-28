@@ -221,6 +221,22 @@ def test_delivery_check_lists_meetings_left_in_a_dm(tmp_path):
     repo.close()
 
 
+def test_delivery_check_names_unfinished_withdrawals_and_the_missing_permission(tmp_path):
+    from meeting_scribe.discord_ui.withdraw import PENDING_KV
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    repo.kv_set(PENDING_KV + "m1", '{"items": 2, "missing": ["Manage Threads"]}')
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {}, dm_notes=lambda: {})
+    e = env(tmp_path)
+    e.service = lambda: svc
+    res = check_delivery(e)
+    assert res.status == "warn" and "private meeting m1: 2 public copy(ies)" in res.detail
+    assert "Manage Threads" in res.detail
+    repo.close()
+
+
 # -- spaces (DESIGN §23) --------------------------------------------------------------------------
 def test_spaces_check_lists_servers_unassigned_ones_backups_and_the_voice_limit(tmp_path):
     from meeting_scribe.doctor import check_google_meet, check_spaces

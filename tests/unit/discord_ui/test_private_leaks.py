@@ -87,3 +87,104 @@ async def test_withdraw_keeps_the_anchored_channel_even_if_the_rule_points_nowhe
     pub = got[0]
     from meeting_scribe.discord_ui.publisher import Pointers
     assert "700" in await pub.private_place(env.meeting, Pointers(env.svc.repo, env.meeting.id))
+
+
+# F1 / F2 / F3: withdrawing public copies ---------------------------------------------------------
+from .fakes import FakeChannel, FakeHTTPError  # noqa: E402
+from .test_private_routes import QUOTE  # noqa: E402
+
+
+def forbid_thread_delete(monkeypatch):
+    """Discord refuses deleting threads/posts without Manage Threads, even the bot's own."""
+    orig = FakeChannel.delete
+
+    async def delete(self):
+        if self.parent is not None:
+            raise FakeHTTPError(403, 50013, "Missing Permissions")
+        await orig(self)
+    monkeypatch.setattr(FakeChannel, "delete", delete)
+
+
+def public_threads(env):
+    return [c for c in env.bot.channels.values() if c.parent is not None and c.parent is not env.private
+            and not c.is_dm]
+
+
+async def test_public_forum_post_is_emptied_and_renamed_when_it_cannot_be_deleted(env, monkeypatch):
+    forum = env.bot.add_forum(730, "meeting-notes")
+    env.cfg.update({"meeting_routes": [], "delivery_discord_channel": "730"})
+    await run_deliver(env)
+    [post] = forum.posts
+    forbid_thread_delete(monkeypatch)
+    env.cfg["meeting_routes"] = ["Leadership = 700:private"]
+    assert (await run_deliver(env)).ok
+    assert SUMMARY_WORD not in texts(post.ordered()) and QUOTE not in texts(post.ordered())
+    assert all(m.content == "🔒 Content withdrawn." and m.view is None and m.file is None for m in post.ordered())
+    assert post.name == "Content withdrawn" and post.archived and post.thread_edits[-1].get("locked")
+    assert SUMMARY_WORD in texts(env.private.ordered())
+
+
+async def test_notes_and_project_threads_are_emptied_and_renamed_when_they_cannot_be_deleted(env, monkeypatch):
+    env.cfg["meeting_routes"] = []
+    env.chat.threads_ok = True
+    await run_deliver(env)
+    assert public_threads(env)
+    forbid_thread_delete(monkeypatch)
+    env.cfg["meeting_routes"] = ["Leadership = 700:private"]
+    assert (await run_deliver(env)).ok
+    for thread in public_threads(env):
+        assert thread.name == "Content withdrawn"
+        assert all(m.content == "🔒 Content withdrawn." for m in thread.ordered()), thread.name
+    assert SUMMARY_WORD not in texts(public_msgs(env)) and QUOTE not in texts(public_msgs(env))
+
+
+async def test_messages_that_cannot_be_deleted_or_emptied_are_retried_and_reported(env, monkeypatch):
+    from meeting_scribe.discord_ui.withdraw import PENDING_KV
+    from .fakes import FakeMessage
+
+    env.cfg.update({"meeting_routes": [], "delivery_project_threads": False})
+    await run_deliver(env)
+    orion = [m.id for m in env.orion.ordered()]
+    real_delete, real_edit = FakeMessage.delete, FakeMessage.edit
+
+    async def refuse(self, **kw):
+        if self.id in orion:
+            raise FakeHTTPError(503, 0, "Service Unavailable")
+        return await real_edit(self, **kw)
+
+    async def refuse_delete(self):
+        if self.id in orion:
+            raise FakeHTTPError(503, 0, "Service Unavailable")
+        await real_delete(self)
+    monkeypatch.setattr(FakeMessage, "edit", refuse)
+    monkeypatch.setattr(FakeMessage, "delete", refuse_delete)
+    env.cfg["meeting_routes"] = ["Leadership = 700:private"]
+    await run_deliver(env)
+    pending = env.svc.repo.kv_get(PENDING_KV + env.meeting.id)
+    assert pending and "Manage Messages" in pending
+    monkeypatch.setattr(FakeMessage, "edit", real_edit)
+    monkeypatch.setattr(FakeMessage, "delete", real_delete)
+    await run_deliver(env)
+    assert env.orion.ordered() == [] and env.svc.repo.kv_get(PENDING_KV + env.meeting.id) is None
+
+
+async def test_rule_to_an_unusable_channel_withdraws_public_task_messages(env):
+    env.cfg.update({"meeting_routes": [], "delivery_project_threads": False})
+    await run_deliver(env)
+    assert QUOTE in texts(env.orion.ordered())
+    env.cfg["meeting_routes"] = ["Leadership = 799:private"]
+    res = await run_deliver(env)
+    assert res.waiting and privacy.record(env.svc.repo, env.meeting.id) is not None
+    assert QUOTE not in texts(public_msgs(env)) and "Landing page" not in texts(public_msgs(env))
+
+
+@pytest.mark.parametrize("fallback", ["", "600"])  # the voice chat, or the fallback channel
+async def test_unrouted_task_is_withdrawn_while_the_meeting_waits(env, fallback):
+    env.cfg.update({"meeting_routes": [], "delivery_fallback_channel": fallback})
+    await run_deliver(env)
+    assert "Budget" in texts(public_msgs(env))
+    env.cfg["meeting_routes"] = ["Leadership = #leadership-notez:private"]
+    res = await run_deliver(env)
+    assert res.waiting and "Budget" not in texts(public_msgs(env))
+    assert all(not dm.ordered() or "Landing page" not in texts(dm.ordered())
+               for dm in (u.dm for u in env.bot.users.values()))

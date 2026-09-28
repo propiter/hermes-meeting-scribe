@@ -206,6 +206,7 @@ def check_delivery(env: Any) -> Check:
     route_parts, route_problems = routes_summary(s, svc.repo)
     parts += route_parts
     problems += route_problems
+    problems += withdraw_problems(svc.repo)
     dm_getter = getattr(svc, "dm_notes", None)
     dm_notes = dm_getter() if callable(dm_getter) else {}
     if dm_notes:
@@ -216,6 +217,26 @@ def check_delivery(env: Any) -> Check:
     if problems:
         return Check.warn("; ".join(parts + problems))
     return Check.ok("; ".join(parts))
+
+
+def withdraw_problems(repo: Any) -> list[str]:
+    """Private meetings whose public copies could not be fully withdrawn yet (DESIGN §19.2): they are
+    emptied/renamed where possible and retried on every delivery; the bot needs the named permissions."""
+    import json
+
+    from .discord_ui.withdraw import PENDING_KV
+
+    out = []
+    for key, raw in sorted(repo.kv_prefix(PENDING_KV).items()):
+        try:
+            data = json.loads(raw or "{}")
+        except ValueError:
+            data = {}
+        missing = ", ".join(data.get("missing") or ()) or "Manage Messages, Manage Threads"
+        out.append(f"private meeting {key[len(PENDING_KV):]}: {data.get('items', '?')} public copy(ies) not fully "
+                   f"withdrawn yet (retried on each delivery); give the bot {missing} in those channels, then run "
+                   f"`hermes meeting-scribe reprocess {key[len(PENDING_KV):]} --from deliver`")
+    return out
 
 
 def route_rows(s: Settings, repo: Optional[Any]) -> list[dict[str, Any]]:

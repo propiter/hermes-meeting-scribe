@@ -182,11 +182,11 @@ class DiscordNotesSink:
             rule = privacy.rule_for(self._settings(meeting), meeting)
             if private and (rule is None or privacy.marks_private(rule)):
                 await asyncio.to_thread(privacy.remember, self._service().repo, meeting.id, dest.rule, "")
-            if dest.held:  # anchored private meeting whose rule changed: nothing moves until the admin says so
-                raise DestinationPending(dest.problem)
-            if not dest.targets and (not ptr or private):  # a private meeting never stays outside its channel
-                if ptr:  # remove what is outside its known private channel; what is inside stays
-                    place = await asyncio.to_thread(privacy.allowed_places, pub.repo, meeting, self._settings(meeting))
+            # a private meeting that waits (anchored and its rule changed, or no usable channel) still leaves
+            # every public place; what is inside its private channel stays
+            if dest.held or (not dest.targets and (not ptr or private)):
+                if ptr and private:
+                    place = await pub.private_place(meeting, Pointers(pub.repo, meeting.id))
                     await withdraw_public(pub, Pointers(pub.repo, meeting.id), place)
                 raise DestinationPending(dest.problem)
             # the only path that attaches the transcript (and may move notes out of a DM): DELIVER

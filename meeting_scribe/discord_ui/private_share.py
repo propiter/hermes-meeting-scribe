@@ -24,6 +24,7 @@ from .board import Board
 from .destination import is_forum, pick_tags, tag_rejected
 from .publisher import Pointers, is_missing
 from .render_tasks import Sharing, TaskView, render_shared_dm, render_shared_task
+from .withdraw import Withdrawal
 
 if TYPE_CHECKING:
     from .task_publisher import TaskPublisher
@@ -125,10 +126,10 @@ async def share_project(pub: "TaskPublisher", board: Board, item_id: str, ptrs: 
     spec = render_shared_task(board.meeting, view, pub.o.lang)
     ptr = await ptrs.load(COPY + item_id)
     if is_forum(channel):
-        new = await _forum_copy(pub, channel, view, spec, ptr, s.target)
+        new = await _forum_copy(pub, channel, view, spec, ptr, s.target, ptrs)
     else:
         if ptr and ptr.get("forum"):  # the task moved from a forum to a text channel: drop the old post
-            await remove_copy(pub, ptr)
+            await remove_copy(pub, ptr, ptrs)
             ptr = None
         placed = await pub.msgs.edit_or_send(ptr, channel, spec=spec)
         new = {**placed, "target": s.target}
@@ -138,7 +139,7 @@ async def share_project(pub: "TaskPublisher", board: Board, item_id: str, ptrs: 
 
 
 async def _forum_copy(pub: "TaskPublisher", forum: Any, view: TaskView, spec: Any, ptr: Optional[dict],
-                      target: str) -> dict[str, Any]:
+                      target: str, ptrs: Pointers) -> dict[str, Any]:
     """A project forum: the shared task is a post of its own (named after the task)."""
     if ptr and str(ptr.get("forum")) == str(forum.id):
         try:
@@ -150,7 +151,7 @@ async def _forum_copy(pub: "TaskPublisher", forum: Any, view: TaskView, spec: An
         if post is not None and await _edited(pub, post, ptr, spec):
             return {**ptr, "target": target}
     elif ptr:
-        await remove_copy(pub, ptr)
+        await remove_copy(pub, ptr, ptrs)
     wanted = [n for n in (view.route.project, *pub.settings.delivery_forum_tags) if n]
     tags = pick_tags(forum, wanted, pub.settings.delivery_forum_default_tag)
     try:
@@ -197,7 +198,7 @@ async def sync_copies(pub: "TaskPublisher", board: Board, ptrs: Pointers) -> Non
         for item_id, ptr in (await ptrs.with_prefix(prefix)).items():
             view = alive.get(item_id)
             if view is None:
-                await remove_copy(pub, ptr)
+                await remove_copy(pub, ptr, ptrs)
                 await ptrs.drop(prefix + item_id)
                 await ptrs.drop(SHARE + item_id)
                 continue
@@ -211,45 +212,58 @@ async def sync_copies(pub: "TaskPublisher", board: Board, ptrs: Pointers) -> Non
                 log.info("meeting-scribe: shared copy of task %s gone (%s)", item_id, exc)
 
 
-async def remove_copy(pub: "TaskPublisher", ptr: dict) -> None:
-    """Delete a message we posted; a post/thread of ours (``forum`` set: its parent) goes whole."""
+async def remove_copy(pub: "TaskPublisher", ptr: dict, ptrs: Pointers) -> None:
+    """Remove a shared copy: its own forum post (``forum`` set) whole, else its message. Refused
+    deletes are emptied and retried (:mod:`withdraw`)."""
+    w = Withdrawal(pub, ptrs)
     if ptr.get("forum"):
-        try:
-            post = await pub.msgs.channel(ptr["channel"])
-            await post.delete()
-            return
-        except Exception as exc:
-            if is_missing(exc):
-                return
-            log.info("meeting-scribe: could not delete forum post %s (%s); deleting its message", ptr["channel"], exc)
-    await pub.msgs.delete(ptr.get("channel"), ptr.get("message"))
+        await w.thread(ptr["channel"])
+    elif ptr.get("channel") and ptr.get("message"):
+        await w.message(ptr["channel"], ptr["message"])
+
+
+def _outside(ptr: dict, place: set[str]) -> bool:
+    return bool(ptr.get("channel")) and not ({str(ptr.get(k)) for k in ("channel", "forum") if ptr.get(k)} & place)
+
+
+def _message_ids(ptr: dict) -> list:
+    return list(ptr.get("messages") or ()) + ([ptr["message"]] if ptr.get("message") else [])
 
 
 async def withdraw_public(pub: "TaskPublisher", ptrs: Pointers, place: set[str]) -> None:
     """A meeting published before it became private (a rule added later): remove everything it left
-    outside the private channel ``place`` — summary, transcript, index, assignee panels, project anchors.
-    The task messages move by themselves (``place_task``) and the rest is posted again in the private
-    channel."""
+    outside its private channel ``place`` — summary, transcript, index, task messages (project channels,
+    the fallback channel, the voice chat), assignee panels, project anchors and the threads/posts named
+    after the meeting. The private channel itself is never touched (``place`` is never empty for a
+    published private meeting: its anchor). What Discord refuses to delete is emptied and renamed, and
+    retried on every later publish until done (:mod:`withdraw`)."""
+    w = Withdrawal(pub, ptrs)
+    await w.retry()
     for suffix in ("notes", "index", "transcript"):
         ptr = await ptrs.load(suffix)
-        if not ptr or not ptr.get("channel") or {str(ptr.get(k)) for k in ("channel", "forum") if ptr.get(k)} & place:
+        if not ptr or not _outside(ptr, place):
             continue
-        if ptr.get("forum") and suffix == "notes":
-            await remove_copy(pub, ptr)
+        if ptr.get("forum") and suffix == "notes":  # the meeting's own post: whole
+            await w.thread(ptr["channel"])
         else:
-            for mid in list(ptr.get("messages") or ()) + ([ptr["message"]] if ptr.get("message") else []):
-                await pub.msgs.delete(ptr["channel"], mid)
+            for mid in _message_ids(ptr):
+                await w.message(ptr["channel"], mid)
             if suffix == "notes" and ptr.get("thread"):  # the thread that held its tasks
-                await remove_copy(pub, {"forum": ptr["channel"], "channel": ptr["thread"]})
+                await w.thread(ptr["thread"])
         await ptrs.drop(suffix)
+    for item_id, ptr in (await ptrs.with_prefix("task:")).items():  # posted again in the private channel
+        if _outside(ptr, place):
+            await w.message(ptr["channel"], ptr.get("message"))
+            await ptrs.drop(f"task:{item_id}")
     for uid, ptr in (await ptrs.with_prefix("dm:")).items():
-        await pub.msgs.delete(ptr.get("channel"), ptr.get("message"))
+        await w.message(ptr.get("channel"), ptr.get("message"), panel=True)
         await ptrs.drop(f"dm:{uid}")
     for suffix, ptr in (await ptrs.with_prefix("thread:")).items():
         if ptr.get("forum"):  # a project forum: the meeting's post, whole
-            await remove_copy(pub, {**ptr, "channel": ptr.get("thread") or ptr.get("channel")})
+            await w.thread(ptr.get("thread") or ptr.get("channel"))
         else:  # the anchor message and the thread named after the meeting
-            await pub.msgs.delete(ptr.get("channel"), ptr.get("message"))
+            await w.message(ptr.get("channel"), ptr.get("message"))
             if ptr.get("thread"):
-                await remove_copy(pub, {"forum": ptr["channel"], "channel": ptr["thread"]})
+                await w.thread(ptr["thread"])
         await ptrs.drop(f"thread:{suffix}")
+    await w.report()

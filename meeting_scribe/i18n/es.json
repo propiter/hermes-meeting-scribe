@@ -372,5 +372,7 @@
   "sink.private_item_body": "{description}\n\nDe una reunión privada ({date}).",
   "cli.private_move_bad_channel": "Indica el nuevo canal privado como id de canal o <#id>.",
   "cli.private_move_not_private": "La reunión {id} no es privada; no hay nada que mover.",
-  "cli.private_move_done": "La reunión privada {id} pasa al canal {channel}; se vuelve a entregar allí y se retira de su canal anterior. Comprueba que el canal es privado y que meeting_routes apunta a él, o su entrega queda en espera."
+  "cli.private_move_done": "La reunión privada {id} pasa al canal {channel}; se vuelve a entregar allí y se retira de su canal anterior. Comprueba que el canal es privado y que meeting_routes apunta a él, o su entrega queda en espera.",
+  "share.withdrawn": "🔒 Contenido retirado.",
+  "share.withdrawn_name": "Contenido retirado"
 }

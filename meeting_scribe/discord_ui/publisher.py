@@ -101,25 +101,27 @@ class Messages:
         return thread, message
 
     async def edit(self, channel: Any, message_id: Any, *, spec: Optional[MessageSpec] = None,
-                   panel: Optional[TaskPanel] = None) -> Any:
+                   panel: Optional[TaskPanel] = None, attachments: Optional[list] = None) -> Any:
+        """``attachments=[]`` also removes the message's files (a withdrawn transcript part)."""
         try:
-            return await self._edit(channel, message_id, spec=spec, panel=panel)
+            return await self._edit(channel, message_id, spec=spec, panel=panel, attachments=attachments)
         except Exception as exc:
             if not is_archived(exc) or not callable(getattr(channel, "edit", None)):
                 raise
         log.info("meeting-scribe: thread %s is archived; unarchiving it to edit message %s",
                  getattr(channel, "id", "?"), message_id)
         await channel.edit(archived=False)
-        return await self._edit(channel, message_id, spec=spec, panel=panel)
+        return await self._edit(channel, message_id, spec=spec, panel=panel, attachments=attachments)
 
     async def _edit(self, channel: Any, message_id: Any, *, spec: Optional[MessageSpec] = None,
-                    panel: Optional[TaskPanel] = None) -> Any:
+                    panel: Optional[TaskPanel] = None, attachments: Optional[list] = None) -> Any:
         msg = channel.get_partial_message(int(message_id))
+        extra = {} if attachments is None else {"attachments": attachments}
         if panel is not None:
-            await msg.edit(view=self.views.panel_view(panel))
+            await msg.edit(view=self.views.panel_view(panel), **extra)
         else:
             assert spec is not None
-            await msg.edit(content=spec.content, view=self.views.view(spec.buttons))
+            await msg.edit(content=spec.content, view=self.views.view(spec.buttons), **extra)
         return msg
 
     async def delete(self, channel_id: Any, message_id: Any, *, notice: str = "") -> bool:

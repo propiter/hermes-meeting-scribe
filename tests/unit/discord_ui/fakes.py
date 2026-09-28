@@ -33,6 +33,8 @@ class FakeMessage:
         if self.channel.archived:
             raise FakeHTTPError(400, 50083, "Operation cannot be performed on an archived thread")
         self.content, self.view = content if content is not None else self.content, view
+        if kw.get("attachments") == []:
+            self.file = None
         self.edits += 1
         return self
 
