@@ -440,3 +440,94 @@ test('a private meeting shows a lock in the list and a "private" pill in the det
   }, 'es')
   assert.doesNotMatch(plain, /Privada/)
 })
+
+// -- meeting rules editor (DESIGN §19.3) ---------------------------------------------------------
+const CHANNELS = [
+  { id: '900', name: 'Board', type: 'category', parent_id: '', parent_name: '', public: true },
+  { id: '300', name: 'Leadership', type: 'voice', parent_id: '900', parent_name: 'Board', public: true },
+  { id: '501', name: 'orion', type: 'text', parent_id: '', parent_name: '', public: true },
+  { id: '700', name: 'board-notes', type: 'text', parent_id: '900', parent_name: 'Board', public: false },
+  { id: '502', name: 'nebula', type: 'forum', parent_id: '', parent_name: '', public: true }
+]
+
+test('rule helpers: grouped targets, origin options, dm body, public warning', () => {
+  const groups = mod.groupTargets(CHANNELS, 'none')
+  assert.deepEqual(groups.map(g => [g.name, g.items.map(c => c.id)]), [['none', ['501', '502']], ['Board', ['700']]])
+  assert.deepEqual(mod.originOptions(CHANNELS, 'voice').map(c => c.id), ['300'])
+  assert.deepEqual(mod.originOptions(CHANNELS, 'category').map(c => c.id), ['900'])
+  assert.deepEqual(mod.ruleBody({ kind: 'voice', origin: ' 300 ', target: '501', mode: 'dm' }), { origin_kind: 'voice', origin: '300', mode: 'dm' })
+  assert.deepEqual(mod.ruleBody({ kind: 'meet', origin: 'retro-*', target: '700', mode: 'private' }), { origin_kind: 'meet', origin: 'retro-*', mode: 'private', target: '700' })
+  assert.equal(mod.ruleReady({ kind: 'voice', origin: '300', target: '', mode: 'dm' }), true)
+  assert.equal(mod.ruleReady({ kind: 'voice', origin: '300', target: '', mode: 'normal' }), false)
+  assert.equal(mod.ruleReady({ kind: 'voice', origin: '', target: '501', mode: 'normal' }), false)
+  assert.equal(mod.privateWarning('private', CHANNELS[2]), true)
+  assert.equal(mod.privateWarning('private', CHANNELS[3]), false)
+  assert.equal(mod.privateWarning('normal', CHANNELS[2]), false)
+  assert.deepEqual(mod.RULE_MODES, ['normal', 'private', 'dm'])
+})
+
+test('the rule editor only uses SDK components and host tokens', () => {
+  const body = SOURCE.slice(SOURCE.indexOf('export function RoutesEditor'), SOURCE.indexOf('export function ModelsSection'))
+  assert.doesNotMatch(body, /h\('(select|input|textarea|option)'/)
+  assert.doesNotMatch(body, /#[0-9a-f]{3,6}\b/i)
+})
+
+const RULES = {
+  space: '', scope: 'global', catalog_seen_at: 1,
+  items: [
+    { position: 1, text: '300=700:private', mode: 'private', status: 'ok', sentence: 'Canal de voz «Leadership» → canal «board-notes» · Privada', target_check: { name: 'board-notes' } },
+    { position: 2, text: 'category:900=501:private', mode: 'private', status: 'ok', warning: 'x', sentence: 'Categoría «Board» → canal «orion» · Privada', target_check: { name: 'orion' } },
+    { position: 3, text: 'meet:retro-*=:dm', mode: 'dm', status: 'ok', sentence: 'Google Meet «retro-*» → mensajes directos a cada participante · Solo mensajes directos' },
+    { position: 4, text: 'Old=gone', mode: 'normal', status: 'problem', detail: 'no text/forum/media channel named \'gone\'', sentence: 'Canal de voz «Old» → canal «gone» · Normal' }
+  ]
+}
+
+test('rule editor lists readable rules with status, warnings and move/remove buttons', opts, async () => {
+  const { createElement } = await import('react')
+  const html = await render(createElement(mod.RoutesEditor, { lang: 'es' }), {
+    '/v1/spaces': { items: [{ slug: 'main', name: 'Main' }] },
+    '/v1/routes?lang=es': RULES,
+    '/v1/discord/channels': { items: CHANNELS, seen_at: 1 }
+  }, 'es')
+  assert.match(html, /Reglas por reunión/)
+  assert.match(html, /Canal de voz «Leadership» → canal «board-notes» · Privada/)
+  assert.match(html, /Solo mensajes directos/)
+  assert.match(html, /#orion lo ve todo el servidor/)
+  assert.match(html, /no text\/forum\/media channel named/)
+  assert.match(html, /aria-label="Subir — Regla 1"[^>]*disabled|disabled=""[^>]*aria-label="Subir — Regla 1"/)
+  assert.match(html, /aria-label="Quitar regla — Regla 4"/)
+  assert.match(html, /Añadir regla/)
+  assert.ok(globalThis.__MS_QUERIED.includes('/v1/discord/channels'))
+})
+
+test('rule editor with several spaces asks for the space and scopes every query', opts, async () => {
+  const { createElement } = await import('react')
+  globalThis.__MS_QUERIED = []
+  const html = await render(createElement(mod.RoutesEditor, { lang: 'en' }), {
+    '/v1/spaces': { items: [{ slug: 'alpha', name: 'Alpha' }, { slug: 'beta', name: 'Beta' }] },
+    '/v1/routes?space=alpha&lang=en': { ...RULES, items: [] },
+    '/v1/discord/channels?space=alpha': { items: [], seen_at: null }
+  }, 'en')
+  assert.match(html, /id="ms-routes-space"/)
+  assert.match(html, /No rules yet/)
+  assert.ok(globalThis.__MS_QUERIED.includes('/v1/routes?space=alpha&lang=en'))
+})
+
+test('rule form: pickers from the catalog, lock on private channels, mode help and public warning', opts, async () => {
+  const { createElement } = await import('react')
+  const base = { channels: CHANNELS, known: true, busy: false, setDraft() {}, onAdd() {}, onCancel() {} }
+  let html = await render(createElement(mod.RuleForm, { ...base, draft: { kind: 'voice', origin: '300', target: '501', mode: 'private' } }), {}, 'es')
+  assert.match(html, /data-value="300"[^>]*>Leadership · Board/)
+  assert.match(html, />Board</)  // targets grouped by category
+  assert.match(html, /data-value="700"><i data-codicon="lock"><\/i> #board-notes/)
+  assert.match(html, /data-value="501"> #orion/)
+  assert.match(html, /Todo se queda en ese canal/)
+  assert.match(html, /#orion lo ve todo el servidor/)
+  html = await render(createElement(mod.RuleForm, { ...base, draft: { kind: 'meet', origin: 'retro-*', target: '', mode: 'dm' } }), {}, 'en')
+  assert.doesNotMatch(html, /id="ms-rule-target"/)
+  assert.match(html, /Nothing is posted in any channel/)
+  assert.match(html, /value="retro-\*"/)
+  html = await render(createElement(mod.RuleForm, { ...base, channels: [], known: false, draft: { kind: 'voice', origin: '', target: '', mode: 'normal' } }), {}, 'en')
+  assert.match(html, /has not reported its channels yet/)
+  assert.match(html, /<input[^>]*id="ms-rule-target"/)
+})

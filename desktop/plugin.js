@@ -278,6 +278,28 @@ export const LOCALES = {
       save: 'Save project channels', saved: 'Project channels saved.',
       row: n => `Project ${n}`
     },
+    routes: {
+      title: 'Meeting rules',
+      intro: 'Send the meetings of a voice channel, a category or a Google Meet to their own channel, keep them private or send them only by direct message. The first matching rule wins; without rules every meeting goes to the notes channel.',
+      space: 'Space',
+      none: 'No rules yet: every meeting goes to the notes channel of its server.',
+      add: 'Add rule', adding: 'Adding…', cancel: 'Cancel', remove: 'Remove rule', up: 'Move up', down: 'Move down',
+      origin: 'Meetings from', target: 'Send to', mode: 'Mode',
+      originKind: { voice: 'Voice channel', category: 'Category', meet: 'Google Meet' },
+      originPick: { voice: 'Choose a voice channel', category: 'Choose a category', meet: 'Meeting code or title, * as wildcard' },
+      targetPick: 'Choose a text channel or forum', noCategory: 'No category', privateChannel: 'private channel',
+      modes: { normal: 'Normal', private: 'Private', dm: 'Direct messages only' },
+      modeHelp: {
+        normal: 'The notes go to the channel you choose; tasks go to their project channels and the board as usual.',
+        private: 'Everything stays in that channel: no project channels, no board and no copies anywhere else. Each person can share their own tasks with a button.',
+        dm: 'Nothing is posted in any channel: each participant gets the whole meeting by direct message and can share their own tasks with a button.'
+      },
+      publicWarning: name => `#${name} is visible to the whole server. A private rule keeps the meeting there, so everyone who sees that channel reads it: choose a private channel.`,
+      noCatalog: 'The bot has not reported its channels yet (it does when it connects to Discord). Type the ids or names; they are checked later.',
+      manualOrigin: 'Channel or category name or id', manualTarget: 'Text channel or forum name or id',
+      status: { ok: 'Checked', not_checked: 'Not checked yet', problem: 'Problem', invalid: 'Invalid' },
+      rule: n => `Rule ${n}`
+    },
     llm: {
       title: 'Models',
       intro: 'The model that writes the notes, and the backups tried in order when it fails (limits, connection or billing).',
@@ -486,6 +508,28 @@ export const LOCALES = {
       duplicate: name => `«${name}» aparece dos veces.`,
       save: 'Guardar canales por proyecto', saved: 'Canales por proyecto guardados.',
       row: n => `Proyecto ${n}`
+    },
+    routes: {
+      title: 'Reglas por reunión',
+      intro: 'Envía las reuniones de un canal de voz, una categoría o un Google Meet a su propio canal, mantenlas privadas o mándalas solo por mensaje directo. Gana la primera regla que encaje; sin reglas, todas van al canal de notas.',
+      space: 'Espacio',
+      none: 'Todavía no hay reglas: cada reunión va al canal de notas de su servidor.',
+      add: 'Añadir regla', adding: 'Añadiendo…', cancel: 'Cancelar', remove: 'Quitar regla', up: 'Subir', down: 'Bajar',
+      origin: 'Reuniones de', target: 'Enviar a', mode: 'Modo',
+      originKind: { voice: 'Canal de voz', category: 'Categoría', meet: 'Google Meet' },
+      originPick: { voice: 'Elige un canal de voz', category: 'Elige una categoría', meet: 'Código o título de la reunión, * como comodín' },
+      targetPick: 'Elige un canal de texto o foro', noCategory: 'Sin categoría', privateChannel: 'canal privado',
+      modes: { normal: 'Normal', private: 'Privada', dm: 'Solo mensajes directos' },
+      modeHelp: {
+        normal: 'Las notas van al canal que elijas; las tareas van a los canales de sus proyectos y al tablero como siempre.',
+        private: 'Todo se queda en ese canal: sin canales de proyecto, sin tablero y sin copias en otro sitio. Cada persona puede compartir sus tareas con un botón.',
+        dm: 'No se publica nada en ningún canal: cada participante recibe la reunión completa por mensaje directo y puede compartir sus tareas con un botón.'
+      },
+      publicWarning: name => `#${name} lo ve todo el servidor. Una regla privada deja la reunión ahí, así que la lee cualquiera que vea ese canal: elige un canal privado.`,
+      noCatalog: 'El bot todavía no ha informado de sus canales (lo hace al conectarse a Discord). Escribe los ids o nombres; se comprueban después.',
+      manualOrigin: 'Nombre o id del canal o categoría', manualTarget: 'Nombre o id del canal de texto o foro',
+      status: { ok: 'Comprobada', not_checked: 'Sin comprobar', problem: 'Problema', invalid: 'No válida' },
+      rule: n => `Regla ${n}`
     },
     llm: {
       title: 'Modelos',
@@ -1585,7 +1629,8 @@ export function SettingsView() {
     const own = fields.filter(f => f.group === current && f.storage !== 'hermes')
     panel = h(Fragment, null,
       current === 'projects' ? h(ProjectChannelsEditor, { value: d.values?.project_channels?.value || [], onSaved: refetch }) : null,
-      h('div', { className: 'ms-fields' }, own.filter(f => f.format !== 'project_channel').map(f =>
+      current === 'delivery' ? h(RoutesEditor, { lang }) : null,
+      h('div', { className: 'ms-fields' }, own.filter(f => !EDITED_ELSEWHERE.includes(f.format)).map(f =>
         h(SettingField, { key: f.key, field: f, current: d.values?.[f.key] || {}, onSaved: refetch }))))
   }
   return h('div', { className: 'ms-settings' },
@@ -1715,6 +1760,176 @@ export function ProjectChannelsEditor({ value, onSaved }) {
       state === 'saved' && !dirty ? h('span', { className: 'ms-saved', role: 'status' }, h(Codicon, { name: 'check', size: '0.75rem' }), t('projects.saved')) : null,
       h(Button, { type: 'button', size: 'sm', disabled: !dirty || state === 'saving', onClick: save }, state === 'saving' ? t('common.saving') : t('projects.save'))),
     error ? h('p', { className: 'ms-error', role: 'alert' }, error) : null)
+}
+
+// -- meeting rules (DESIGN §19.3): meeting_routes as a list of plain sentences --------------------
+const EDITED_ELSEWHERE = ['project_channel', 'meeting_route']
+export const ORIGIN_KINDS = ['voice', 'category', 'meet']
+export const RULE_MODES = ['normal', 'private', 'dm']
+const TARGET_TYPES = ['text', 'forum', 'media']
+
+/** Destination channels grouped by category, in the server's order (categories without targets drop). */
+export function groupTargets(channels, noCategory = '') {
+  const groups = new Map()
+  for (const c of channels || []) {
+    if (!TARGET_TYPES.includes(c.type)) continue
+    const key = c.parent_id || ''
+    if (!groups.has(key)) groups.set(key, { id: key, name: c.parent_name || noCategory, items: [] })
+    groups.get(key).items.push(c)
+  }
+  return [...groups.values()]
+}
+
+/** What the origin picker offers: voice channels, or categories. */
+export function originOptions(channels, kind) {
+  const type = kind === 'category' ? 'category' : 'voice'
+  return (channels || []).filter(c => c.type === type)
+}
+
+/** The public-channel warning of a private rule (the same check the backend makes). */
+export function privateWarning(mode, channel) {
+  return mode === 'private' && channel && channel.public === true
+}
+
+/** The POST /v1/routes body of a draft (dm carries no target). */
+export function ruleBody(draft) {
+  const body = { origin_kind: draft.kind, origin: String(draft.origin || '').trim(), mode: draft.mode }
+  if (draft.mode !== 'dm') body.target = String(draft.target || '').trim()
+  return body
+}
+
+export function ruleReady(draft) {
+  const body = ruleBody(draft)
+  return Boolean(body.origin) && (body.mode === 'dm' || Boolean(body.target))
+}
+
+function channelLabel(c) {
+  return `${c.type === 'forum' || c.type === 'media' ? '' : '#'}${c.name}`
+}
+
+export function RoutesEditor({ lang }) {
+  const t = usePluginI18n(ID)
+  const spacesQuery = useRest('/v1/spaces', { staleTime: 30_000 })
+  const spaces = spacesQuery.data?.items || []
+  const [picked, setPicked] = useState('')
+  const space = spaces.length > 1 ? (picked || spaces[0].slug) : ''
+  const ready = !spacesQuery.isLoading
+  const rules = useRest(ready ? `/v1/routes${qs({ space, lang })}` : '', { staleTime: 10_000 })
+  const catalog = useRest(ready ? `/v1/discord/channels${qs({ space })}` : '', { staleTime: 30_000 })
+  const [draft, setDraft] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [warning, setWarning] = useState('')
+  const channels = catalog.data?.items || []
+  const known = channels.length > 0
+  const items = rules.data?.items || []
+
+  const call = async (path, opts) => {
+    setBusy(true)
+    setError('')
+    try {
+      const out = await rest(`${path}${qs({ space, lang })}`, opts)
+      setWarning(out?.warning || '')
+      rules.refetch()
+      return true
+    } catch (e) {
+      setError(parseError(e).message)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+  const add = async () => {
+    if (await call('/v1/routes', { method: 'POST', body: ruleBody(draft) })) setDraft(null)
+  }
+  const move = (n, to) => call(`/v1/routes/${n}/move`, { method: 'POST', body: { to } })
+  const remove = n => call(`/v1/routes/${n}`, { method: 'DELETE' })
+
+  const statusTone = { ok: 'good', not_checked: 'muted', problem: 'bad', invalid: 'bad' }
+  const list = rules.isLoading
+    ? h(ListSkeleton, { rows: 2 })
+    : rules.isError
+      ? h(Failure, { error: rules.error, onRetry: () => rules.refetch() })
+      : items.length
+        ? h('ol', { className: 'ms-rules', 'aria-label': t('routes.title') }, items.map((r, i) =>
+          h('li', { key: `${r.position}-${r.text}`, className: 'ms-rule' },
+            h('div', { className: 'ms-rule-main' },
+              h('span', { className: 'ms-rule-text' },
+                r.mode === 'private' || r.mode === 'dm' ? h(Codicon, { name: 'lock', size: '0.8rem', 'aria-hidden': 'true' }) : null,
+                r.sentence),
+              h(Pill, { tone: statusTone[r.status] || 'muted' }, tOr(t, `routes.status.${r.status}`, r.status)),
+              h('span', { className: 'ms-grow' }),
+              h(Button, { type: 'button', variant: 'ghost', size: 'icon-xs', disabled: busy || i === 0, 'aria-label': `${t('routes.up')} — ${t('routes.rule', i + 1)}`, onClick: () => move(r.position, r.position - 1) }, h(Codicon, { name: 'arrow-up', size: '0.8rem' })),
+              h(Button, { type: 'button', variant: 'ghost', size: 'icon-xs', disabled: busy || i === items.length - 1, 'aria-label': `${t('routes.down')} — ${t('routes.rule', i + 1)}`, onClick: () => move(r.position, r.position + 1) }, h(Codicon, { name: 'arrow-down', size: '0.8rem' })),
+              h(Button, { type: 'button', variant: 'ghost', size: 'icon-xs', disabled: busy, 'aria-label': `${t('routes.remove')} — ${t('routes.rule', i + 1)}`, onClick: () => remove(r.position) }, h(Codicon, { name: 'trash', size: '0.8rem' }))),
+            r.status === 'problem' || r.status === 'invalid' ? h('p', { className: 'ms-error' }, r.detail) : null,
+            r.warning ? h('p', { className: 'ms-warn-text' }, h(Codicon, { name: 'warning', size: '0.75rem' }), ' ', t('routes.publicWarning', r.target_check?.name || r.channel)) : null)))
+        : h('p', { className: 'ms-muted' }, t('routes.none'))
+
+  return h('section', { className: 'ms-card ms-editor', 'aria-labelledby': 'ms-routes-title' },
+    h('h3', { className: 'ms-card-title', id: 'ms-routes-title' }, t('routes.title')),
+    h('p', { className: 'ms-hint' }, t('routes.intro')),
+    spaces.length > 1
+      ? h('div', { className: 'ms-inline' },
+        h('label', { className: 'ms-field-label', htmlFor: 'ms-routes-space' }, t('routes.space')),
+        h(Select, { value: space, onValueChange: v => { setPicked(v); setDraft(null) } },
+          h(SelectTrigger, { id: 'ms-routes-space', size: 'sm', className: 'ms-select' }, h(SelectValue, null)),
+          h(SelectContent, null, spaces.map(sp => h(SelectItem, { key: sp.slug, value: sp.slug }, sp.name)))))
+      : null,
+    list,
+    draft ? h(RuleForm, { draft, setDraft, channels, known, busy, onAdd: add, onCancel: () => { setDraft(null); setError('') } }) : null,
+    !draft
+      ? h('div', { className: 'ms-inline' },
+        h(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: () => setDraft({ kind: 'voice', origin: '', target: '', mode: 'normal' }) },
+          h(Codicon, { name: 'add', size: '0.8rem' }), t('routes.add')))
+      : null,
+    warning ? h('p', { className: 'ms-warn-text', role: 'status' }, h(Codicon, { name: 'warning', size: '0.75rem' }), ' ', warning) : null,
+    error ? h('p', { className: 'ms-error', role: 'alert' }, error) : null)
+}
+
+export function RuleForm({ draft, setDraft, channels, known, busy, onAdd, onCancel }) {
+  const t = usePluginI18n(ID)
+  const set = patch => setDraft({ ...draft, ...patch })
+  const target = channels.find(c => c.id === draft.target)
+  let origin
+  if (draft.kind === 'meet' || !known) {
+    origin = h(Input, { id: 'ms-rule-origin', size: 'sm', value: draft.origin, placeholder: draft.kind === 'meet' ? t('routes.originPick.meet') : t('routes.manualOrigin'), onChange: e => set({ origin: e.target.value }) })
+  } else {
+    origin = h(Select, { value: draft.origin, onValueChange: v => set({ origin: v }) },
+      h(SelectTrigger, { id: 'ms-rule-origin', size: 'sm', className: 'ms-select' }, h(SelectValue, { placeholder: t(`routes.originPick.${draft.kind}`) })),
+      h(SelectContent, null, originOptions(channels, draft.kind).map(c =>
+        h(SelectItem, { key: c.id, value: c.id }, c.parent_name ? `${c.name} · ${c.parent_name}` : c.name))))
+  }
+  let destination = null
+  if (draft.mode !== 'dm') {
+    destination = known
+      ? h(Select, { value: draft.target, onValueChange: v => set({ target: v }) },
+        h(SelectTrigger, { id: 'ms-rule-target', size: 'sm', className: 'ms-select' }, h(SelectValue, { placeholder: t('routes.targetPick') })),
+        h(SelectContent, null, groupTargets(channels, t('routes.noCategory')).map(g => h(Fragment, { key: `g${g.id}` },
+          h('div', { className: 'ms-select-group', role: 'presentation' }, g.name),
+          g.items.map(c => h(SelectItem, { key: c.id, value: c.id },
+            c.public === false ? h(Codicon, { name: 'lock', size: '0.75rem', 'aria-label': t('routes.privateChannel') }) : null,
+            ' ', channelLabel(c)))))))
+      : h(Input, { id: 'ms-rule-target', size: 'sm', value: draft.target, placeholder: t('routes.manualTarget'), onChange: e => set({ target: e.target.value }) })
+  }
+  return h('div', { className: 'ms-rule-form', role: 'group', 'aria-label': t('routes.add') },
+    known ? null : h(Callout, { tone: 'muted' }, t('routes.noCatalog')),
+    h('div', { className: 'ms-field' },
+      h('span', { className: 'ms-field-label' }, t('routes.origin')),
+      h(SegmentedControl, { value: draft.kind, options: ORIGIN_KINDS.map(k => ({ id: k, label: t(`routes.originKind.${k}`) })), onChange: v => set({ kind: v, origin: '' }) }),
+      origin),
+    h('div', { className: 'ms-field' },
+      h('span', { className: 'ms-field-label' }, t('routes.mode')),
+      h(SegmentedControl, { value: draft.mode, options: RULE_MODES.map(m => ({ id: m, label: t(`routes.modes.${m}`) })), onChange: v => set({ mode: v }) }),
+      h('p', { className: 'ms-field-help' }, t(`routes.modeHelp.${draft.mode}`))),
+    destination
+      ? h('div', { className: 'ms-field' }, h('label', { className: 'ms-field-label', htmlFor: 'ms-rule-target' }, t('routes.target')), destination)
+      : null,
+    privateWarning(draft.mode, target) ? h(Callout, { tone: 'warn' }, t('routes.publicWarning', target.name)) : null,
+    h('div', { className: 'ms-inline' },
+      h('span', { className: 'ms-grow' }),
+      h(Button, { type: 'button', variant: 'ghost', size: 'sm', onClick: onCancel }, t('routes.cancel')),
+      h(Button, { type: 'button', size: 'sm', disabled: busy || !ruleReady(draft), onClick: onAdd }, busy ? t('routes.adding') : t('routes.add'))))
 }
 
 export function ModelsSection({ llm, onSaved }) {
@@ -1951,6 +2166,14 @@ export const CSS = `
 .ms-mini-meta{font-size:12px;color:var(--ui-text-tertiary);white-space:nowrap;text-align:right}
 .ms-audio-block{padding:12px 14px;border-radius:10px;background:transparent;border:1px solid var(--ui-stroke-tertiary)}
 .ms-audio{width:100%;height:36px;color-scheme:light dark}
+.ms-rules{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;border:1px solid var(--ui-stroke-tertiary);border-radius:8px}
+.ms-rule{display:flex;flex-direction:column;gap:4px;padding:8px 12px;border-top:1px solid var(--ui-stroke-tertiary)}
+.ms-rule:first-child{border-top:0}
+.ms-rule-main{display:flex;align-items:center;gap:8px;min-width:0}
+.ms-rule-text{display:inline-flex;align-items:center;gap:6px;color:var(--ui-text-primary);min-width:0;overflow-wrap:anywhere}
+.ms-rule-form{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--ui-stroke-tertiary);border-radius:8px}
+.ms-select-group{padding:6px 8px 2px;font-size:11px;font-weight:600;color:var(--ui-text-tertiary)}
+.ms-warn-text{margin:0;font-size:12px;color:var(--ui-text-secondary)}
 .ms-callout{display:flex;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--ui-stroke-tertiary);background:transparent}
 .ms-callout p{margin:0}
 .ms-callout-icon{margin-top:2px;flex-shrink:0;color:var(--ui-text-tertiary)}
