@@ -16,6 +16,11 @@ The plugin runs on any server, so nothing here knows a particular naming scheme:
 * Ratios use a normalised Levenshtein distance on the text and on a light phonetic key (doubled
   letters collapsed, ``c/q/k``, ``v/b``, ``z/s``, ``y/i``, silent ``h``) to absorb transcription errors.
 
+* :func:`match_person` resolves a person's name as SPOKEN (a task owner the LLM wrote down) to one
+  participant: exact name, then a whole-word part of it (given name, surname), then a phonetic
+  match for Spanish/English spellings (``Dayana``/``Dahiana``, ``Cristian``/``Christian``,
+  ``Yohana``/``Johanna``). Each tier must give ONE participant; two is ambiguous and stops there.
+
 Standard library only: ``rapidfuzz`` is not in Hermes' venv and a guild has at most 500 channels.
 """
 from __future__ import annotations
@@ -141,3 +146,61 @@ def match_name(spoken: str, names: Iterable[str], threshold: float, *,
         return None
     (name, score), rest = ranked[0], ranked[1:]
     return NameMatch(name, score, bool(rest) and score - rest[0][1] < UNCERTAIN_MARGIN)
+
+
+PERSON_THRESHOLD = 0.85
+
+
+def _person_key(word: str) -> str:
+    """The phonetic key of a person's name: :func:`_phonetic` plus Spanish ``ll``≈``y`` (yeísmo) and
+    ``j``≈``y`` (``Johanna`` is said "Yohana")."""
+    return _phonetic(word.replace("ll", "y").replace("j", "y"))
+
+
+def _gendered_pair(a: str, b: str) -> bool:
+    """``luis``/``luisa``, ``mario``/``maria``, ``daniel``/``daniela``: different people, one letter apart."""
+    def stem(w: str) -> str:
+        return w[:-1] if w[-1:] in "aeo" else w
+    return a != b and stem(a) == stem(b)
+
+
+def _person_ratio(a: str, b: str) -> float:
+    if len(a) < MIN_TOKEN_LEN or len(b) < MIN_TOKEN_LEN:
+        return 1.0 if a == b else 0.0
+    ka, kb = _person_key(a), _person_key(b)
+    if _gendered_pair(a, b) or _gendered_pair(ka, kb):
+        return 0.0
+    return max(levenshtein_ratio(a, b), levenshtein_ratio(ka, kb))
+
+
+def _contains(words: list[str], name: list[str]) -> bool:
+    n = len(words)
+    return any(name[i:i + n] == words for i in range(len(name) - n + 1))
+
+
+def _fuzzy(words: list[str], name: list[str]) -> float:
+    whole = _person_ratio(" ".join(words), " ".join(name)) if len(words) > 1 else 0.0
+    if len(words) == 1:
+        return max([whole, *(_person_ratio(words[0], w) for w in name)])
+    if len(words) == len(name):  # "Kristofer Rios" ~ "Cristofer Ríos": every word must match
+        return max(whole, min(_person_ratio(a, b) for a, b in zip(words, name)))
+    return whole
+
+
+def match_person(spoken: str, people: Sequence[tuple[str, Sequence[str]]]) -> Optional[str]:
+    """The key of the ONE person ``spoken`` names, or ``None`` (nobody, or several).
+
+    ``people`` is ``(key, names)``: display name first, then aliases (username, nickname…). Emoji,
+    accents and case are ignored. Tiers, each needing a single person: the exact name; a whole-word
+    part of it (``Ana`` of ``Ana María``); a phonetic/edit match of ``PERSON_THRESHOLD``. Two people
+    in a tier (two ``Ana``) leave the owner unassigned rather than guess."""
+    words = fold(spoken).split()
+    if not words:
+        return None
+    forms = [(key, [fold(n).split() for n in names if fold(n)]) for key, names in people]
+    for tier in (lambda n: n == words, lambda n: _contains(words, n),
+                 lambda n: _fuzzy(words, n) >= PERSON_THRESHOLD):
+        hits = {key for key, names in forms if any(tier(n) for n in names)}
+        if hits:
+            return next(iter(hits)) if len(hits) == 1 else None
+    return None

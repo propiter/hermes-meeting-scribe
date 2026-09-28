@@ -87,6 +87,16 @@ def mute_playback(vc: Any) -> None:
         log.debug("meeting-scribe: cannot mute playback: %s", exc)
 
 
+def _member_speaker(member: Any) -> Speaker:
+    """A Discord member as a speaker: the display name, plus the other names they go by (username,
+    global name, server nickname) as ``aliases`` for owner matching."""
+    key = str(member.id)
+    name = getattr(member, "display_name", None) or key
+    others = (getattr(member, a, None) for a in ("nick", "global_name", "name"))
+    aliases = tuple(dict.fromkeys(str(n) for n in others if isinstance(n, str) and n and n != name))
+    return Speaker(key, name, aliases=aliases)
+
+
 def _muted(member: Any) -> bool:
     voice = getattr(member, "voice", None)
     return bool(getattr(voice, "self_mute", False) or getattr(voice, "mute", False))
@@ -199,8 +209,10 @@ class RecordingSession:
         return [m for m in getattr(self.channel, "members", []) if not getattr(m, "bot", False)]
 
     def _note_members(self) -> None:
+        """Everyone in the channel is a participant, audio or not: the analysis may name any of them
+        as a task owner (DESIGN §7)."""
         for m in self.humans():
-            self._speakers.setdefault(str(m.id), Speaker(str(m.id), m.display_name))
+            self._speakers.setdefault(str(m.id), _member_speaker(m))
 
     def _update_presence(self) -> None:
         """Tell the receiver who may own an unannounced SSRC: everyone in the channel but us (another
@@ -224,7 +236,7 @@ class RecordingSession:
         member = self.guild.get_member(int(user_id))
         if member is not None and getattr(member, "bot", False):
             return None
-        sp = Speaker(key, getattr(member, "display_name", None) or key)
+        sp = _member_speaker(member) if member is not None else Speaker(key, key)
         self._speakers[key] = sp
         return sp
 

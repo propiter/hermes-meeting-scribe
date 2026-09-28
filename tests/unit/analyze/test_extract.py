@@ -207,3 +207,51 @@ def test_missing_decisions_still_normalise_to_empty(meeting, utterances):
     del data["decisions"], data["open_questions"]
     notes = analyzer(FakeLLM(lambda n, t: data)).analyze(meeting, utterances, CANDS)
     assert notes.decisions == () and notes.open_questions == ()
+
+
+# Anonymised from a real meeting: the transcript says the name as it sounds ("Yoana"), the
+# participant is written "Johanna …"; one participant never spoke (no audio track).
+TEAM = (Speaker("21", "Marco Aldana"), Speaker("22", "Johanna Quintero"), Speaker("23", "🐺 Ramón Vidal"),
+        Speaker("24", "Kristofer V", aliases=("kris.v",)))
+
+
+@pytest.mark.parametrize("said,uid", [
+    ("Yoana", "22"), ("Yohana", "22"), ("johanna", "22"), ("Johana Quintero", "22"),
+    ("Cristofer", "24"), ("Christopher", "24"), ("kris.v", "24"),
+    ("Ramon", "23"), ("Ramón Vidal", "23"), ("ramón", "23"), ("Marco", "21"), ("Aldana", "21"),
+])
+def test_owner_tolerates_spelling_accents_emoji_and_nicknames(said, uid):
+    assert match_owner(None, said, TEAM).user_id == uid
+
+
+@pytest.mark.parametrize("said", ["Pedro", "Mar", "Yo", "el equipo", ""])
+def test_owner_unknown_or_too_short_stays_unassigned(said):
+    assert match_owner(None, said, TEAM) is None
+
+
+def test_ambiguous_owner_stays_unassigned():
+    two = (Speaker("1", "Ana Ruiz"), Speaker("2", "Ana Gómez"), Speaker("3", "Luis Paz"), Speaker("4", "Luisa Mora"))
+    assert match_owner(None, "Ana", two) is None  # two Ana: never guess
+    assert match_owner(None, "Ana Gómez", two).user_id == "2"
+    assert match_owner(None, "Luis", two).user_id == "3"  # Luisa is someone else
+    assert match_owner(None, "Luisa", two).user_id == "4"
+    near = (Speaker("5", "Yohana"), Speaker("6", "Johanna"))
+    assert match_owner(None, "Yoana", near) is None  # both sound like it
+
+
+def test_bots_are_never_owners():
+    assert match_owner(None, "Scribe", (Speaker("9", "Scribe", is_bot=True),)) is None
+
+
+def test_prompt_lists_every_participant_with_id_and_the_spoken_name_resolves(meeting, utterances):
+    from dataclasses import replace
+    m = replace(meeting, speakers=TEAM)
+    item = {"title": "Preparar la demo", "owner_speaker_id": None, "owner_name": "Yoana"}
+    llm = FakeLLM(lambda n, t: full(action_items=[item]))
+    notes = analyzer(llm).analyze(m, utterances, CANDS)
+    text = llm.calls[0]["text"]
+    assert "<participants>" in text and "- id=24: Kristofer V (also: kris.v)" in text
+    assert "- id=22: Johanna Quintero" in text
+    assert "<participants>" in llm.calls[0]["instructions"]
+    (a,) = notes.action_items
+    assert (a.owner_speaker_id, a.owner_name) == ("22", "Johanna Quintero")

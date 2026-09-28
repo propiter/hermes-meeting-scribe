@@ -1,14 +1,13 @@
 """LLM analysis (implements the ``Analyzer`` port): single call or map-reduce, then strict
 normalisation so downstream sinks can trust the shape regardless of the provider.
 
-Normalisation rules (DESIGN §7): owners are matched to real speakers (id, then name/fuzzy);
+Normalisation rules (DESIGN §7): owners are matched to the meeting's participants (id, then name);
 ``due`` survives only as a valid ISO date (the prompt forbids guessing, we enforce it); the
 project must be one of the offered candidates and above ``projects.min_confidence``; action-item
 ids are content-derived so re-analysis keeps the same idempotency keys.
 """
 from __future__ import annotations
 
-import difflib
 import json
 import re
 from dataclasses import replace
@@ -18,6 +17,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from ..config import Settings
 from ..domain.text import fold
 from ..domain.ids import action_item_id
+from ..domain.names import match_person
 from ..domain.models import ActionItem, Candidate, Meeting, Notes, Speaker, Topic, Utterance
 from ..domain.ports import StructuredLLM
 from . import prompts
@@ -25,7 +25,6 @@ from .chunking import chunk_utterances, render_lines
 from .projects import hints_for
 from .schemas import CHUNK_SCHEMA, NOTES_SCHEMA
 
-FUZZY_RATIO = 0.85
 _SOURCE_SUFFIX_RE = re.compile(r"\s*\([^()]*\)\s*$")
 
 
@@ -34,23 +33,14 @@ def _norm(text: str) -> str:
 
 
 def match_owner(speaker_id: Optional[str], name: Optional[str], speakers: Sequence[Speaker]) -> Optional[Speaker]:
+    """The participant owning a task: the id the LLM chose from the participant list, else the ONE
+    participant the spoken name designates (:func:`match_person`: accents, emoji, given name,
+    nicknames and phonetic spellings tolerated; ambiguity leaves it unassigned)."""
     by_id = {s.user_id: s for s in speakers}
     if speaker_id and str(speaker_id) in by_id:
         return by_id[str(speaker_id)]
-    wanted = _norm(name or "")
-    if not wanted:
-        return None
-    exact = [s for s in speakers if _norm(s.name) == wanted]
-    if len(exact) == 1:
-        return exact[0]
-    first = [s for s in speakers if _norm(s.name).split()[:1] == wanted.split()[:1]]
-    if len(first) == 1 and len(wanted.split()) == 1:
-        return first[0]
-    scored = sorted(((difflib.SequenceMatcher(None, wanted, _norm(s.name)).ratio(), s) for s in speakers),
-                    key=lambda x: -x[0])
-    if scored and scored[0][0] >= FUZZY_RATIO and (len(scored) == 1 or scored[1][0] < scored[0][0]):
-        return scored[0][1]
-    return None
+    key = match_person(name or "", [(s.user_id, (s.name, *s.aliases)) for s in speakers if not s.is_bot])
+    return by_id.get(key) if key is not None else None
 
 
 def _iso_date(value: Any) -> Optional[str]:
@@ -158,7 +148,8 @@ class LlmAnalyzer:
         if not utterances:
             return Notes(meeting_title=meeting.title or meeting.channel_name, tldr="", summary="",
                          language=lang_setting if lang_setting != "auto" else (meeting.language or "en"))
-        context = prompts.candidates_block(candidates, hints_for(meeting), meeting.started_at.date())
+        context = (prompts.participants_block(meeting.speakers) + "\n" +
+                   prompts.candidates_block(candidates, hints_for(meeting), meeting.started_at.date()))
         chunks = chunk_utterances(utterances, settings.analysis_chunk_chars)
         required = ("meeting_title", "tldr", "summary", "action_items")
         if len(chunks) == 1:

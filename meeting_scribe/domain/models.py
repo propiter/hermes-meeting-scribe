@@ -144,6 +144,9 @@ class Speaker:
     # (``signedinUser.user``, ``users/<id>``). The only identity of an imported speaker that can be
     # linked to a Discord member (DESIGN §19.3); the display name is typed by the attendee.
     google_user: str = ""
+    # Other names the person goes by on the platform (Discord username, global name, server nickname
+    # — whichever differ from ``name``): a task owner said as "Sebas" still finds "Sebastián Ortega".
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -341,7 +344,8 @@ class Meeting:
         data["started_at"] = datetime.fromisoformat(data["started_at"])
         data["ended_at"] = datetime.fromisoformat(data["ended_at"]) if data.get("ended_at") else None
         data["speakers"] = tuple(Speaker(str(s["user_id"]), str(s["name"]), bool(s.get("is_bot")),
-                                         str(s.get("google_user") or ""))
+                                         str(s.get("google_user") or ""),
+                                         tuple(str(a) for a in s.get("aliases") or ()))
                                  for s in data.get("speakers") or ())
         data["missing_audio"] = tuple(str(u) for u in data.get("missing_audio") or ())
         known = set(cls.__dataclass_fields__)

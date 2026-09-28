@@ -324,3 +324,16 @@ async def test_speaking_after_unidentified_names_that_track(world):
     speakers = {sp.user_id: sp.name for sp in world["service"].finished[0][1]}
     assert speakers["unidentified-1"] == "Luis"
     assert "43" not in s.missing_audio
+
+
+async def test_every_participant_is_a_speaker_with_the_names_they_go_by(world):
+    """Task owners resolve against everyone present — including people never heard — and their
+    nickname, global name and username too (DESIGN §7)."""
+    luis = world["guild"].members[43]
+    luis.nick, luis.global_name, luis.name = "Luis", "Luis Paz", "lpaz"
+    s = await started(world)
+    await s.stop("stopped")
+    speakers = {sp.user_id: sp for sp in world["service"].finished[0][1]}
+    assert set(speakers) == {"42", "43"}
+    assert speakers["43"].aliases == ("Luis Paz", "lpaz")  # the nick equals the display name
+    assert speakers["42"].aliases == ()
