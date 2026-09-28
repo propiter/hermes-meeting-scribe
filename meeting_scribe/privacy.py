@@ -7,7 +7,8 @@ private channel into public ones). Everything that could show a meeting outside 
 the chat commands. Local files (the meeting folder, Obsidian) are not affected.
 
 A private meeting is readable from chat only in its own place: the notes channel (or the forum post /
-the thread holding its tasks), see :func:`allowed_places` — the CLI and Desktop always see it.
+the thread holding its tasks), see :func:`allowed_places` — the CLI and Desktop always see it; a cron
+job or any context without a known local source never does (:class:`Reader`).
 """
 from __future__ import annotations
 
@@ -102,24 +103,36 @@ def visible_from(repo: Any, settings: Any, meeting: Meeting, places: Iterable[st
     return bool(here) and bool(here & allowed_places(repo, meeting, settings))
 
 
-LOCAL_PLATFORMS = frozenset({"", "cli", "local"})  # the operator's own terminal (no chat session)
+# The operator's own surfaces (DESIGN §19.2): the Hermes CLI/TUI in a terminal and Desktop. Hermes binds
+# ``HERMES_SESSION_SOURCE`` for them; everything else — a cron job (empty platform and source), a
+# webhook, the API server, an unknown or future surface — is NOT local and fails closed.
+LOCAL_SOURCES = frozenset({"cli", "tui", "desktop"})
 
 
 @dataclass(frozen=True)
 class Reader:
-    """Who asks, for the chat surfaces (agent tools, slash commands): the platform and the chat ids."""
+    """Who asks, for the chat surfaces (agent tools, slash commands): the chat platform, the chat ids, the
+    session source and whether it is a cron job. The default reader sees no private meeting."""
     platform: str = ""
     places: frozenset[str] = frozenset()
+    source: str = ""
+    cron: bool = False
+
+    @classmethod
+    def operator(cls) -> "Reader":
+        """The operator at the terminal (the ``hermes meeting-scribe`` CLI, Desktop's own API)."""
+        return cls(source="cli")
 
     @property
     def local(self) -> bool:
-        return (self.platform or "").lower() in LOCAL_PLATFORMS
+        return (not self.cron and not (self.platform or "").strip()
+                and (self.source or "").strip().lower() in LOCAL_SOURCES)
 
     def may_read(self, repo: Any, settings: Any, meeting: Meeting) -> bool:
-        """The CLI sees everything; a chat sees a private meeting only from its private channel (and
-        only on Discord: no other platform has that channel)."""
+        """The operator (CLI, Desktop) sees everything; a Discord chat sees a private meeting only from its
+        private channel; any other context (cron, other platforms, unknown) never sees one."""
         if self.local:
             return True
-        if (self.platform or "").lower() != "discord":
+        if self.cron or (self.platform or "").lower() != "discord":
             return not is_private(repo, settings, meeting)
         return visible_from(repo, settings, meeting, self.places)

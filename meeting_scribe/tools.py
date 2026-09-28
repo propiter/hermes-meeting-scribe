@@ -51,12 +51,13 @@ def _session_guild() -> str:
 
 def _session_reader() -> Reader:
     """Who the agent answers (DESIGN §19.2): a chat sees a private meeting only from its private
-    channel; without a gateway session (the operator's CLI) everything is readable."""
+    channel, the Hermes CLI/TUI and Desktop see everything, and a cron job or an unknown context sees
+    none (the operator reads them with ``hermes meeting-scribe show``)."""
     try:
         from .commands import caller_from_session
 
         return caller_from_session().reader
-    except Exception:  # no Hermes gateway session (CLI, tests)
+    except ImportError:  # outside Hermes: nobody is known, so no private meeting
         return Reader()
 
 

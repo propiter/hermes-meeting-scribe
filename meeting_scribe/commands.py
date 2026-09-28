@@ -56,6 +56,8 @@ class Caller:
     # decides the space the command acts in (DESIGN §23).
     scope_id: str = ""
     parent_chat_id: str = ""  # a thread's / forum post's channel (private meetings, DESIGN §19.2)
+    source: str = ""  # Hermes' session source (cli, tui, desktop, ...): who the operator is without a chat
+    cron: bool = False  # a scheduled job: its output goes wherever the job delivers (never private meetings)
 
     @property
     def guild_id(self) -> str:
@@ -65,7 +67,7 @@ class Caller:
     def reader(self) -> Reader:
         """Who reads, for private meetings: a chat sees one only from its private channel."""
         places = frozenset(str(x) for x in (self.chat_id, self.thread_id, self.parent_chat_id) if x)
-        return Reader(self.platform or "", places)
+        return Reader(self.platform or "", places, source=self.source, cron=self.cron)
 
 
 def _labels(spaces: Sequence[Any]) -> str:
@@ -78,7 +80,9 @@ def caller_from_session() -> Caller:
     return Caller(platform=get_session_env("HERMES_SESSION_PLATFORM"), chat_id=get_session_env("HERMES_SESSION_CHAT_ID"),
                   user_id=get_session_env("HERMES_SESSION_USER_ID"), thread_id=get_session_env("HERMES_SESSION_THREAD_ID"),
                   scope_id=get_session_env("HERMES_SESSION_SCOPE_ID", "") or "",
-                  parent_chat_id=get_session_env("HERMES_SESSION_PARENT_CHAT_ID", "") or "")
+                  parent_chat_id=get_session_env("HERMES_SESSION_PARENT_CHAT_ID", "") or "",
+                  source=get_session_env("HERMES_SESSION_SOURCE", "") or "",
+                  cron=bool(get_session_env("HERMES_CRON_SESSION", "")))
 
 
 class CaptureController(Protocol):

@@ -46,7 +46,7 @@ def test_tools_hide_a_private_meeting_outside_its_channel(world):
     outside = MeetingTools(lambda: service, reader=lambda: OUTSIDE.reader)
     assert json.loads(outside.search({"query": "informe"}))["results"] == []
     assert json.loads(outside.get({"meeting_id": mid})) == {"error": f"no meeting '{mid}'; use meeting_search"}
-    for reader in (INSIDE.reader, IN_ITS_THREAD.reader, Reader()):  # its channel, its thread, the CLI
+    for reader in (INSIDE.reader, IN_ITS_THREAD.reader, Reader.operator(), Reader(source="desktop")):
         tools = MeetingTools(lambda: service, reader=lambda r=reader: r)
         assert json.loads(tools.search({"query": "informe"}))["results"][0]["meeting_id"] == mid
         assert json.loads(tools.get({"meeting_id": mid}))["meeting"]["id"] == mid
@@ -77,4 +77,37 @@ def test_a_private_meeting_published_in_a_forum_post_is_readable_there(world):
                                  external_id=json.dumps({"channel": "7201", "forum": "720", "message": 1}), url=None)
     post = Reader("discord", frozenset({"7201", "720"}))
     tools = MeetingTools(lambda: service, reader=lambda: post)
+    assert json.loads(tools.get({"meeting_id": mid}))["meeting"]["id"] == mid
+
+
+@pytest.mark.parametrize("reader", [
+    Reader(),  # no session at all: nobody known
+    Reader(source="", cron=True),  # a cron job: Hermes clears the platform and sets HERMES_CRON_SESSION
+    Reader(source="cli", cron=True),  # a cron job never counts as the operator
+    Reader(source="webhook"), Reader(source="api_server"), Reader(source="something-new"),
+    Reader("api_server", frozenset({PRIVATE_CHANNEL})),
+])
+def test_contexts_without_a_known_local_source_never_read_a_private_meeting(world, reader):
+    service, _, mid = world
+    tools = MeetingTools(lambda: service, reader=lambda: reader)
+    assert "error" in json.loads(tools.get({"meeting_id": mid, "part": "transcript"}))
+    assert json.loads(tools.search({"query": "informe"}))["results"] == []
+
+
+def test_cron_session_from_hermes_fails_closed(world, monkeypatch):
+    """What Hermes' scheduler binds for a job: empty platform/source and HERMES_CRON_SESSION=1."""
+    import sys
+    import types
+
+    vals = {"HERMES_SESSION_PLATFORM": "", "HERMES_SESSION_SOURCE": "", "HERMES_CRON_SESSION": "1"}
+    mod = types.ModuleType("gateway.session_context")
+    mod.get_session_env = lambda name, default="": vals.get(name, default)
+    pkg = types.ModuleType("gateway")
+    pkg.session_context = mod
+    monkeypatch.setitem(sys.modules, "gateway", pkg)
+    monkeypatch.setitem(sys.modules, "gateway.session_context", mod)
+    service, _, mid = world
+    tools = MeetingTools(lambda: service)
+    assert "error" in json.loads(tools.get({"meeting_id": mid, "part": "transcript"}))
+    vals.update(HERMES_SESSION_SOURCE="desktop", HERMES_CRON_SESSION="")
     assert json.loads(tools.get({"meeting_id": mid}))["meeting"]["id"] == mid
