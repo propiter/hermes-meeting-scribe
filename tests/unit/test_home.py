@@ -63,6 +63,17 @@ def test_a_checkout_outside_plugins_uses_the_process_home_not_the_request_overri
     assert home.data_dir(checkout) == hermes["process"] / "plugin-data" / "meeting-scribe"
 
 
+def test_a_profile_that_links_to_the_owners_copy_is_not_an_owner(hermes):
+    root = hermes["root"]
+    real = root / "profiles" / "team" / "plugins" / "meeting-scribe"
+    real.mkdir(parents=True)
+    for linked in (root / "plugins", root / "profiles" / "other" / "plugins"):
+        linked.mkdir(parents=True)
+        (linked / "meeting-scribe").symlink_to(real)
+        assert home.owner(linked / "meeting-scribe") == home.Owner("team", root / "profiles" / "team", False)
+    assert home.role(root / "profiles" / "other", root / "plugins" / "meeting-scribe").owner is False
+
+
 def test_one_root_install_with_a_declared_owner_gives_every_profile_the_owners_data(hermes):
     """The multi-profile shape: installed ONCE in <root>/plugins, owner named in the root config."""
     root = hermes["root"]

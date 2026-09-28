@@ -12,7 +12,8 @@ Which profile is the owner:
    default profile's file). Every profile can find the root, just as the Desktop backend scans the
    root ``plugins/`` folder whatever profile it was launched with. Required when the plugin is used
    from several profiles.
-2. Otherwise, where the plugin is installed: ``<home>/plugins/meeting-scribe`` → ``<home>``. When the
+2. Otherwise, where the plugin's real files are: ``<home>/plugins/meeting-scribe`` → ``<home>``
+   (symlinks resolved, so a profile that links to the owner's copy is not an owner). When the
    package runs from anywhere else (a development checkout, tests) the owner is the home the PROCESS
    was started with (``get_process_hermes_home``, which ignores per-request overrides).
 
@@ -106,7 +107,7 @@ def _profile_home(name: str) -> Path:
 
 
 def _install_home(root: Optional[Path]) -> Path:
-    root = Path(root or plugin_root())
+    root = Path(root or plugin_root()).resolve()  # a linked profile's symlink → the real copy
     if root.parent.name == "plugins":
         return root.parent.parent
     from hermes_constants import get_process_hermes_home
