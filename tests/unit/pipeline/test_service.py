@@ -120,3 +120,16 @@ def test_move_item_files_the_task_under_a_channel_and_learns(prepo, layout, sett
     assert next(a for a in notes.action_items if a.id == "a1").project == "nebula"
     with pytest.raises(KeyError):
         service.move_item(m.id, "nope", "502", "nebula")
+
+
+def test_moving_a_task_of_a_private_meeting_never_teaches_routing(prepo, layout, settings, clock, meeting):
+    """📁 in a private meeting files that task only: a global project→channel mapping would reveal where
+    the room's topics go and route other meetings (DESIGN §19.2)."""
+    from meeting_scribe import privacy
+
+    service, runner, _ = svc(prepo, layout, settings, clock)
+    m = _processed(service, runner, prepo, layout, meeting)
+    privacy.remember(prepo, m.id, "Daily Sync", "700")
+    moved = service.move_item(m.id, "a1", "502", "nebula", learn=True)
+    assert moved.project_key == "discord:502"
+    assert prepo.project_channel("main", "nebula") is None

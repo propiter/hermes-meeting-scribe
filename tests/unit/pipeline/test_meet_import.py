@@ -184,3 +184,19 @@ def test_poller_thread_starts_and_stops_cleanly(world, prepo):
     assert p.running
     p.stop(timeout=5)
     assert not p.running
+
+
+def test_an_import_a_private_rule_covers_is_private_from_the_start(prepo, layout, clock):
+    """The row is private as soon as it exists: no window before the first persist (DESIGN §19.2)."""
+    from meeting_scribe import privacy
+
+    s = settings_from_mapping({"meeting_routes": ["meet:abc-* = 700:private"]})
+    runner, *_ = build(prepo, layout, lambda space=None: s, clock)
+    service = MeetingService(prepo, layout, runner, lambda space=None: s, clock=clock, item_sinks=lambda: {},
+                             catalogs=lambda: runner.stages.catalogs())
+    meet = FakeMeet()
+    meet.add("r1")
+    client = MeetClient(Creds(), transport=FakeTransport(meet))
+    importer = MeetImporter(space="main", service=lambda: service, client=lambda: client, clock=lambda: NOW)
+    [mid] = importer.sync(ended_after=since()).imported
+    assert privacy.record(prepo, mid) == {"rule": "meet:abc-*", "channel": ""}

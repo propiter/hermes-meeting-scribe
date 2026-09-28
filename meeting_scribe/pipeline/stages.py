@@ -96,7 +96,7 @@ class Stages:
             folder.mkdir(parents=True, exist_ok=True)
             meeting = replace(meeting, folder=self.layout.relative(folder))
         self.repo.save_meeting(meeting)
-        self._mark_private(meeting)
+        self.mark_private(meeting)
         stored = self.repo.get_meeting(meeting.id)
         if stored is not None and (stored.source, stored.external_id) != (meeting.source, meeting.external_id):
             # the row's source is fixed at insert: a stale copy never rewrites it (DB nor meta.json)
@@ -104,7 +104,7 @@ class Stages:
         write_meta(folder, meeting)
         return meeting
 
-    def _mark_private(self, meeting: Meeting) -> None:
+    def mark_private(self, meeting: Meeting) -> None:
         """A private rule matching the meeting while it is recorded makes it private for good (DESIGN
         §19.2): editing the rule later never publishes it elsewhere."""
         from ..privacy import marks_private, remember, rule_for

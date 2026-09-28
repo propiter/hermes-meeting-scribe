@@ -211,6 +211,7 @@ class MeetingService:
         if not self.repo.create_imported_meeting(meeting, utterances):
             shutil.rmtree(folder, ignore_errors=True)
             return None
+        self.runner.stages.mark_private(meeting)  # before its job exists: never delivered as a normal meeting
         self.runner.enqueue(meeting.id, Stage.ANALYZE)
         return meeting
 
@@ -299,8 +300,11 @@ class MeetingService:
 
     def move_item(self, meeting_id: str, item_id: str, channel_id: str, name: str, *,
                   learn: bool = True) -> ActionItem:
-        """📁: pin one task to a Discord channel; ``learn`` (owners) also teaches routing (DESIGN §16)."""
+        """📁: pin one task to a Discord channel; ``learn`` (owners) also teaches routing (DESIGN §16), never
+        from a private meeting (DESIGN §19.2)."""
         meeting = self.require(meeting_id)
+        # a private meeting never teaches routing: it would reveal the room's topics and route other meetings
+        learn = learn and not self.is_private(meeting)
         return apply_move(self.repo, self.folder(meeting), meeting, item_id, channel_id, name, learn=learn)
 
     # -- projects & people --------------------------------------------------------------------
