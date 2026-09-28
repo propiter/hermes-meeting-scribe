@@ -800,14 +800,16 @@ function Callout({ tone = 'muted', icon, title, children }) {
 }
 
 function ListSkeleton({ rows = 6 }) {
-  return h('div', { className: 'ms-skel-list', role: 'status', 'aria-label': 'Loading' },
+  const t = usePluginI18n(ID)
+  return h('div', { className: 'ms-skel-list', role: 'status', 'aria-label': t('common.loading') },
     Array.from({ length: rows }, (_, i) => h('div', { key: i, className: 'ms-skel-row' },
       h(Skeleton, { className: 'ms-skel-dot' }),
       h('div', { className: 'ms-skel-lines' }, h(Skeleton, { className: 'ms-skel-a' }), h(Skeleton, { className: 'ms-skel-b' })))))
 }
 
 function DetailSkeleton() {
-  return h('div', { className: 'ms-detail-pad', role: 'status', 'aria-label': 'Loading' },
+  const t = usePluginI18n(ID)
+  return h('div', { className: 'ms-detail-pad', role: 'status', 'aria-label': t('common.loading') },
     h(Skeleton, { className: 'ms-skel-title' }), h(Skeleton, { className: 'ms-skel-meta' }),
     h(Skeleton, { className: 'ms-skel-tabs' }),
     Array.from({ length: 4 }, (_, i) => h(Skeleton, { key: i, className: 'ms-skel-para' })))
