@@ -904,8 +904,9 @@ their notes in the group's own channel or forum. Tasks still go to their project
 
 - **channel**: a text, announcement, forum or media channel, given as an id, `<#id>` or name, and resolved like the §19 settings (inside the meeting's space servers only).
 - **`:private`**: `:privado`/`:privada` are accepted too and stored canonically as `:private`.
-- **CLI**: `config set meeting_routes "Leadership = #leadership-notes:private, category:Design = design-meetings"`.
-- **Desktop**: the generic list field. The schema has `format: meeting_route`.
+- **CLI**: `config set meeting_routes "Leadership = #leadership-notes:private, category:Design = design-meetings"`, or one rule at a time with `route add` (§19.3).
+- **Desktop**: the rule editor of §19.3. The schema has `format: meeting_route`.
+- **`:dm`**: direct messages only, no channel (§19.3).
 - **Validation on write is strict**: a clear `ValueError` for a missing `=`, an empty channel, an unknown option, a mention used as the origin, a private mark (`private`/`privado`/`privada`) anywhere but as the `:private` option, or the same origin twice (`routes.validate_entries`).
 - **Loading is lenient but fails closed**:
   - An entry whose origin is readable but whose rest is not (hand-edited YAML) becomes a *broken* rule. It still matches and its meetings wait with the reason.
@@ -983,6 +984,106 @@ their notes in the group's own channel or forum. Tasks still go to their project
 - Whether `interaction.permissions` is always populated for component clicks in threads and forum posts. If it is not, the code falls back to `channel.permissions_for(user)`, and without either the click is refused.
 - That `Thread.delete` needs Manage Threads even on the bot's own threads and posts (assumed: the withdrawal empties, renames, archives and locks them when refused). Renaming and locking a thread also needs Manage Threads unless the bot created it; archiving its own thread does not.
 - The exact error Discord returns for a deleted DM channel while a shared DM copy is being edited. It is treated as "gone" through `is_missing`.
+
+### 19.3 Direct-messages-only meetings and easy rule editing
+
+Request: some meetings (a 1:1, a small private conversation) should not live in any channel at all;
+each participant should get the whole meeting privately. And anyone installing the plugin should be
+able to write rules without knowing ids or the rule syntax.
+
+**Syntax.** `origin = :dm` (also `origin = dm`, `:directo`/`directo`, `:mensajes`/`mensajes`; stored
+canonically as `origin=:dm`). The right side carries NO channel: `:dm` together with a channel or
+another option (`#x:dm`, `:dm:private`) is refused on write with the reason. A channel literally
+called `dm` is written `#dm`; names that merely contain the word (`dm-notes`, `mensajes-equipo`) are
+ordinary channels. `MeetingRoute.dm` is true and `MeetingRoute.private` is true too: a DM meeting is
+private for every purpose of §19.2. An unreadable entry mentioning `dm` fails closed exactly like one
+mentioning `private` (a broken rule of kind `any`).
+
+**Recipients.** The humans of the meeting (`Meeting.human_speakers`: who spoke or was in the call,
+as captured). A Discord speaker is its user id. An imported speaker (Google Meet) counts when exactly
+one person link of the space (`/meeting link`) matches its name or email (`fold`, whitespace
+collapsed); ambiguous or unknown names are counted as unmapped (`privacy.participants`).
+
+**Delivery** (`discord_ui/dm_delivery.DmDelivery`, reached from `DiscordNotesSink.publish` when the
+destination is `dm`; the destination has no channel keys, so it never waits for one):
+- Each recipient gets in their DM: the notes (summary, decisions, questions — the normal render), the
+  transcript `.md` when `delivery_discord_transcript` is on, an index of every task with its
+  assignee (`render_dm_index`, no buttons) and one message per task **assigned to that recipient**,
+  with the usual Kanban / Linear (as configured) / Dismiss buttons and `📣 Publish in #<project>`
+  (`shp`, the §19.2 share: only the task text leaves).
+- Pointers `pdm:<user>:notes|transcript|index|task:<item>` are saved as soon as each message exists;
+  a reprocess or a refresh edits them in place, a task reassigned to someone else is deleted from
+  the old assignee's DM, and a refresh never creates a copy that was not delivered.
+- **Anchor.** The first delivery records `privacy.private.<id>` = `{rule, channel:"", mode:"dm",
+  recipients:[…]}` (`privacy.anchor_dm`). From then on the meeting is a DM meeting whatever the rules
+  say (removing or editing the rule never publishes it in a channel) and its recipient list is
+  fixed. A meeting already anchored to a private channel is never turned into a DM meeting.
+- **Closed DMs.** A recipient whose DMs are closed (or who is unknown to Discord) is skipped; the
+  others get their copy. `privacy.dm_unreachable.<id>` lists who and why; `status`, `doctor` (check
+  `delivery`) and Desktop's status show it. Nothing is ever posted to a channel instead.
+- **Nobody reachable.** No recipient mapped, or every DM closed: the delivery is PENDING
+  (`DestinationPending`, no attempts used) with the reason (link people with `/meeting link`, or open
+  DMs), and nothing is anchored until someone got it.
+- **Withdrawal.** A meeting that was published before the `:dm` rule existed is withdrawn from every
+  public place first (`private_share.withdraw_public`, §19.2), then delivered by DM.
+- **Everything else of §19.2 applies:** no project channels, no fallback channel, no assignee panel
+  (everyone already has the whole meeting), Kanban/Linear `auto` behaves as `approve`, no
+  project→channel learning.
+
+**Buttons** (`auth.check_dm`, `ButtonActions._dm_gate`): a click counts only in the DM the bot sent
+to the clicker (`interaction.channel` is the clicker's recorded DM channel, never a server) and only
+on a task assigned to the clicker. Meeting-wide buttons (share all, move) are refused. Decision: a
+participant can NOT send another participant's task to them — every participant already received
+their own copy with their own tasks, so there is nothing to forward, and letting one DM act on
+someone else's task would let a participant decide what leaves for another.
+
+**Reads** (`privacy.allowed_places`): a DM meeting is readable by the agent and `/meeting` only from
+the DM channels of its recipients' copies; before any copy exists, from nowhere. Operator surfaces
+(CLI/TUI, Desktop) as in §19.2.
+
+**Channel catalog.** The gateway (the process connected to Discord) writes, per server, a snapshot of
+the bot's channels in `kv` `discord.channels.<guild>` = `[{id, name, type: voice|text|forum|media|category, parent_id,
+parent_name, public}]` (`public`: @everyone has View Channel; the row's `updated_at` is `seen_at`).
+A corrupt value reads as no catalog for that server (rules stay `not_checked`, never silently ok). It is written at every connect (next to `set_bot_guilds`) and, debounced 5 s per server,
+on `on_guild_channel_create|delete|update` and `on_guild_join` (`discord_ui/channel_watch.py`).
+Threads are not listed. Every other process only reads it (`channel_catalog.Catalog`); nothing
+outside the gateway talks to Discord.
+
+**Using it.** `doctor.route_rows` resolves each rule against the catalog of its space's servers
+(every catalogued server when the space has none assigned): a rule becomes `ok` (with ids, names,
+kinds and visibility), `problem` (missing, ambiguous, wrong kind) or stays `not_checked` without a
+catalog; a private rule on a channel @everyone sees gets the warning. The delivery report of §19.2
+still refines it when present. `config list`, `doctor`, `route list` and Desktop print
+`Leadership (voice channel, 300) → forum #leadership-notes (700, private channel), private`.
+
+**Editing rules** (`route_editor.py`, shared by CLI, REST and Desktop): a rule is three choices —
+origin kind (`voice`, `category`, `meet`) and value, destination (text/forum/media channel; none
+for `dm`) and mode (`normal`, `private`, `dm`). With a catalog, names become ids (renaming a channel
+never breaks the rule) and wrong names are refused with the reason; without one, the rule is stored
+as written and checked later. The list is validated as a whole (`validate_entries`: same origin
+twice, …); removing never needs the rest to be valid. It is written to the space's override when
+the install has several spaces or the space already has its own list, else to the global value.
+- **CLI** (`cli_routes.py`): `route list [--json]`, `route add --voice|--category|--meet … [--to …]
+  [--private|--dm] [--position N]`, `route remove <n|origin>`, `route move <n|origin> <position>`,
+  all with `--space`. A change re-queues deliveries waiting for a rule.
+- **Setup** asks, optionally, for rules one at a time (with several spaces it points to `route add
+  --space`).
+- **REST**: Appendix A.
+- **Desktop** (Settings → Delivery, `RoutesEditor`): the rules as sentences («Voice channel
+  "Leadership" → forum "notes" · Private») with their status, ↑/↓ and remove; «Add rule» opens a
+  form with a SegmentedControl for the origin kind, a Select of voice channels or categories (an
+  Input for Meet patterns or when there is no catalog), a SegmentedControl Normal / Private / Direct
+  messages only with one plain sentence per mode, and a Select of text channels and forums grouped
+  by category with a lock on private ones (hidden for DM). A private rule to a channel everyone sees
+  shows the warning before saving. With several spaces a Select picks the space. The raw
+  `meeting_routes` list field is no longer shown there (the editor replaces it).
+
+**Not verifiable without real Discord.**
+- That `on_guild_channel_update` fires for permission-overwrite changes (a channel made private)
+  as documented; if not, the catalog catches up at the next connect or channel event.
+- `DMChannel` ids stay stable across bot restarts for the same user (assumed; pointers and reads use
+  them).
+- The exact error for a user with closed DMs (`Forbidden` 50007) — treated as unreachable.
 
 ## 20. Configuration schema for UIs (unreleased)
 
@@ -1221,7 +1322,7 @@ Authentication is the host's (session token / OAuth gate). All bodies are JSON. 
 
 | Method, path | Params | Response |
 |---|---|---|
-| `GET /v1/status` | `space` (optional) | `{worker:{state:"recent"\|"stale"\|"unknown", last_seen}, queue:{running,queued,failed} (machine), space, counts, jobs, waiting_destination, dm_notes, commands, google, settings_warnings}`. With a space: `counts/jobs/…` are that space's and `google` is its connection (`{enabled, client_stored, connected, revoked, connected_at, commands:{connect,status,enable}, last_poll_at?, last_poll_ok?, last_error?, last_import_at?, last_import_meeting?, records_given_up?, records_given_up_last?, retry_after_until?}`). Several spaces and no `space`: `space:null, google:null`, lists empty, `counts` = `queue`. |
+| `GET /v1/status` | `space` (optional) | `{worker:{state:"recent"\|"stale"\|"unknown", last_seen}, queue:{running,queued,failed} (machine), space, counts, jobs, waiting_destination, dm_notes, dm_unreachable, commands, google, settings_warnings}`. With a space: `counts/jobs/…` are that space's and `google` is its connection (`{enabled, client_stored, connected, revoked, connected_at, commands:{connect,status,enable}, last_poll_at?, last_poll_ok?, last_error?, last_import_at?, last_import_meeting?, records_given_up?, records_given_up_last?, retry_after_until?}`). Several spaces and no `space`: `space:null, google:null`, lists empty, `counts` = `queue`. |
 | `GET /v1/doctor` | – | `{exit_code, checks:[{name, status:"ok"\|"warn"\|"fail", detail}]}`; walks every space; the first check, `owner`, names the owner profile whose data is served |
 
 ### Spaces and servers
@@ -1243,3 +1344,17 @@ Authentication is the host's (session token / OAuth gate). All bodies are JSON. 
 | `GET /v1/settings` | `lang`, `space` (optional) | `{schema:{language, groups, fields:[{key, group, type, scope:"global"\|"space", storage, label, …}]}, values:{key:{value, origin:"default"\|"configured"\|"space"\|"invalid"}}, warnings, global:[keys], space:[keys], space_slug, overrides:{key:value}, llm}`. Without `space`: global values. With it: what that space sees. |
 | `PUT /v1/settings/{key}` | `space` (optional); `{value}` | without `space`: `{key, value, scope:"global", requeued}` (Hermes config). With it: the space's override, `{key, value, scope:"space", space, requeued}`; `value:null` removes it; a `global` key → 400 |
 | `PUT /v1/llm` | `{provider?, model?, base_url?, timeout?, fallback_chain?}` | the LLM view (machine-wide) |
+
+### Channels and meeting rules (§19.3)
+
+| Method, path | Params / body | Response |
+|---|---|---|
+| `GET /v1/discord/channels` | `space` | `{items:[{id, name, type:"voice"\|"text"\|"forum"\|"media"\|"category", parent_id, parent_name, public, guild_id, guild_name}], seen_at}` from the gateway's catalog of the space's servers; `items:[]`, `seen_at:null` before it reported |
+| `GET /v1/routes` | `space`, `lang` | `{space, scope:"global"\|"space", catalog_seen_at, items:[rule]}` with `rule = {position, text, origin, kind, channel, private, mode:"normal"\|"private"\|"dm", status:"ok"\|"not_checked"\|"problem"\|"invalid", detail, warning?, sentence, origin_check, target_check, channel_id?, channel_name?, target_kind?, public?}` |
+| `POST /v1/routes` | `space`, `lang`; `{origin_kind:"voice"\|"category"\|"meet", origin, target? (not with dm), mode, position?}` | the list plus `{added, warning}`; 400 with the reason (unknown or ambiguous name, wrong kind, a channel with `dm`, same origin twice) |
+| `PUT /v1/routes/{position}` | same body | the list plus `{warning}` |
+| `DELETE /v1/routes/{position}` | `space`, `lang` | the list |
+| `POST /v1/routes/{position}/move` | `{to}` (1 = first) | the list |
+
+With several spaces `space` is required (409) on these endpoints. Writes go to the space's override
+when the install has several spaces or the space already has its own list, else to the global value.

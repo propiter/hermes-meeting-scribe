@@ -426,14 +426,76 @@ hermes meeting-scribe config set delivery_discord_guild "My Team"    # only if t
 hermes meeting-scribe doctor
 ```
 
-### Notes per voice channel and private meetings
+### Meeting rules: where each meeting goes
 
-`meeting_routes` sends the notes of some meetings to their own channel. It has one rule per entry,
-`origin = #channel`, with an optional `:private`:
+Rules decide, meeting by meeting, where the notes go. Each rule has three parts:
+
+- **Which meetings**: a voice channel, every voice channel of a category, or Google Meet meetings
+  whose code or title matches a pattern (`*` as wildcard).
+- **Mode**:
+  - **Normal**: the notes go to the channel you choose; tasks go to their project channels and the
+    board as usual.
+  - **Private**: everything (summary, transcript, every task) stays in that channel. Each task can be
+    shared by a button.
+  - **Direct messages only**: nothing is posted in any channel. Each participant gets the whole
+    meeting in a direct message (summary, decisions, questions, the transcript file, the list of
+    tasks) and their own tasks with buttons, including one to publish the task in its project
+    channel.
+- **Where**: a text channel or forum (not for direct messages).
+
+The easiest way is Hermes Desktop → **Meetings** → **Settings** → **Delivery** → **Meeting rules**.
+Each rule is shown as a sentence, for example *Voice channel «Team room» → forum «team-notes» ·
+Normal*, with a ✓ when the bot has checked its channels. **Add rule** opens a small form: pick the
+kind of meeting with the buttons at the top, choose the voice channel or category from a list (or
+type a Meet pattern), choose the mode — a one-line explanation under it says what that mode does —
+and pick the channel from a list grouped by category, where private channels carry a lock. If you
+choose **Private** and a channel everyone in the server can see, a warning tells you so before you
+save. The same is available from the terminal:
+
+```bash
+hermes meeting-scribe route list
+hermes meeting-scribe route add --voice "Team room" --to "#team-notes"
+hermes meeting-scribe route remove 2          # by its number in `route list`, or by its origin
+hermes meeting-scribe route move 3 1          # make rule 3 the first one
+```
+
+Names are turned into ids when the bot has reported its channels (it does so when it connects and
+whenever channels change), so renaming a channel later never breaks a rule. `hermes meeting-scribe
+setup` offers to add rules too. With several spaces, add `--space <id>`.
+
+**Three recipes**
+
+1. **Each team's meetings in its own forum.** A team meets in the voice channel «Design room»:
+   `route add --voice "Design room" --to "#design-notes"`. In Desktop: *Voice channel* → «Design
+   room», *Normal*, → «design-notes». Tasks still go to their project channels.
+2. **Management meetings in a private channel.** Everything said in the «Management» category stays
+   in a channel only managers see: `route add --category "Management" --to "#management-notes"
+   --private`. In Desktop: *Category* → «Management», *Private*, → «management-notes» (shown with a
+   lock). Nothing reaches project channels, other people's DMs or the board unless someone in that
+   channel presses a share button.
+3. **One-to-ones only by direct message.** `route add --voice "1on1" --dm`. In Desktop: *Voice
+   channel* → «1on1», *Direct messages only* (no channel to pick). Both people get the meeting in
+   their DMs and nothing appears in the server.
+
+**Direct messages only, in detail.** The participants are the people the capture saw (who spoke or
+was in the call). For Google Meet, a participant counts when their name or email matches exactly one
+person linked with `/meeting link`. Someone with closed DMs is skipped and `status`/`doctor` say
+who; the others get it anyway, and it is never posted in a channel instead. If nobody can be reached
+the meeting waits and says why. Reprocessing edits the same messages. Buttons only work in your own
+copy and only on your own tasks (nobody can act on or forward someone else's task). The meeting
+stays in direct messages even if the rule is removed later, and the agent only finds it from those
+DMs. A meeting published before the rule existed is withdrawn from the channels first.
+
+### Notes per voice channel and private meetings (rule syntax)
+
+The rules above are stored in `meeting_routes`, one rule per entry, `origin = #channel`, with an
+optional `:private`, or `origin = :dm` (also `origin = dm`) for direct messages only — no channel;
+a channel literally called `dm` is written `#dm`:
 
 - `Leadership = #leadership-notes:private`: the voice channel "Leadership" (by name or id).
 - `category:Design = design-meetings`: every voice channel of the Discord category "Design".
 - `meet:abc-* = #meet-notes`: Google Meet meetings whose code, room or title matches (`*`, `?`).
+- `category:Board = :dm`: every meeting of the category "Board", only by direct message.
 
 A voice channel rule wins over a category rule. Otherwise the first matching rule wins. A matching
 rule's channel is the only place the notes may go: if the bot cannot use it, the meeting waits and

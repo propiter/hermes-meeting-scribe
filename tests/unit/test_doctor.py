@@ -299,3 +299,17 @@ def test_delivery_check_lists_each_meeting_route_and_its_risks(tmp_path):
     assert "Leadership (voice channel) → forum #leadership-notes (700, visible to everyone), private" in res.detail
     assert "visible to @everyone" in res.detail and "channel 710 not found; its meetings wait" in res.detail
     repo.close()
+
+
+def test_delivery_check_names_dm_meetings_that_missed_a_participant(tmp_path):
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {}, dm_notes=lambda: {},
+                          dm_unreachable=lambda: {"m1": "10 (direct messages closed)"})
+    e = env(tmp_path)
+    e.service = lambda: svc
+    res = check_delivery(e)
+    assert res.status == "warn" and "did not reach every participant (m1: 10 (direct messages closed))" in res.detail
+    repo.close()

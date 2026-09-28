@@ -8,6 +8,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Direct-messages-only meetings** (`origin = :dm` in `meeting_routes`; `route add … --dm`; "Direct
+  messages only" in Desktop). Nothing is posted in any channel: each participant (who spoke or was in
+  the call; Meet attendees mapped through `/meeting link`) gets the whole meeting by DM — summary,
+  decisions, questions, the transcript file, the task list and their own tasks with Kanban/Linear/
+  Dismiss and **Publish in #project** buttons. Private for every purpose (no project channels, no
+  fallback, no automatic Kanban/Linear, reads only from those DMs, earlier public copies withdrawn,
+  unreadable rules mentioning `dm` fail closed), anchored to its recipients, idempotent on
+  reprocess. Closed DMs are skipped and reported by `status`/`doctor`; with nobody reachable the
+  delivery waits with the reason. Buttons act only in the clicker's own copy and on their own tasks.
+- **Channel catalog**: the gateway stores each server's channels (name, kind, category, visible to
+  @everyone) at connect and on channel changes. `config list`, `doctor` and the new editors show
+  names instead of ids and mark each rule checked, with a problem, or not checked yet.
+- **`hermes meeting-scribe route list|add|remove|move`** (`--voice|--category|--meet`, `--to`,
+  `--private|--dm`, `--position`, `--space`), resolving names to ids; an optional rules step in
+  `setup`.
+- **REST** `GET /v1/discord/channels` and `/v1/routes` (list, add, replace, delete, move) with plain
+  400 errors.
+- **Desktop rule editor** (Settings → Delivery): rules as sentences, add/move/remove, origin and
+  destination pickers from the catalog (grouped by category, lock on private channels), the three
+  modes with a plain explanation each and a warning for a private rule on a channel everyone sees.
+
 - **Notes per voice channel, category or Meet meeting, and private meetings** (`meeting_routes`,
   e.g. `Leadership = #leadership-notes:private, category:Design = design-meetings, meet:abc-* =
   #meet-notes`). A matching rule decides the notes channel (it wins over

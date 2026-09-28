@@ -297,3 +297,10 @@ def test_dm_record_is_json(env):
     privacy.anchor_dm(env.svc.repo, env.meeting.id, "Leadership", ["11", "11", "10"])
     raw = json.loads(env.svc.repo.kv_get(privacy.KV_PRIVATE + env.meeting.id))
     assert raw == {"rule": "Leadership", "channel": "", "mode": "dm", "recipients": ["11", "10"]}
+
+
+def test_a_dm_rule_is_private_for_every_other_sink_before_any_delivery(env):
+    """Kanban/Linear ``auto`` becomes ``approve`` and nothing is learned: the ItemSink gate is is_private."""
+    s = settings_from_mapping(env.cfg)
+    assert privacy.record(env.svc.repo, env.meeting.id) is None
+    assert privacy.is_private(env.svc.repo, s, env.meeting) and privacy.is_dm(env.svc.repo, s, env.meeting)

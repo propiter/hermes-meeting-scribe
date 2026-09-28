@@ -260,6 +260,16 @@ def test_status_and_doctor_explain_notes_left_in_a_dm(rt, capsys):
     assert json.loads(out)["dm_notes"] == {rt.mid: hint}
 
 
+def test_status_names_dm_meetings_that_missed_a_participant(rt, capsys):
+    from meeting_scribe import privacy
+
+    rt.service().repo.kv_set(privacy.DM_UNREACHABLE_KV + rt.mid, "10 (direct messages closed)")
+    code, out = run(rt, ["status"], capsys)
+    assert code == 0 and rt.mid in out and "10 (direct messages closed)" in out
+    code, out = run(rt, ["status", "--json"], capsys)
+    assert json.loads(out)["dm_unreachable"] == {rt.mid: "10 (direct messages closed)"}
+
+
 def test_llm_set_to_the_default_says_so(lrt, capsys):
     code, out = run(lrt, ["llm", "set", "--provider", "auto"], capsys)
     assert code == 0 and "default" in out and "Saved" not in out
