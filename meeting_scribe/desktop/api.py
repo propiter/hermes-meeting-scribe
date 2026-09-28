@@ -4,10 +4,10 @@
 Authentication is the host's: the web server's auth middleware guards every ``/api/`` route
 (session token / OAuth gate) and its runtime gate 404s this namespace while the plugin is disabled.
 
-Profile isolation: every request resolves the data dir and config through ``get_hermes_home()``
-at call time. Desktop sends ``?profile=<name>`` when a profile shares the host backend; the handler
-enters Hermes' own request scope for it (the same helper the core routes use). Mutating requests are
-routed by Desktop to a backend already launched under the profile's HERMES_HOME.
+Owner profile: the data dir and config always resolve to the Hermes profile where the plugin is
+INSTALLED (``meeting_scribe.home``), whatever ``?profile=`` Desktop adds for its active profile, so
+the page shows the same library in every profile. Each request enters Hermes' own request scope for
+that owner profile (the helper the core routes use), which also scopes secrets to it.
 
 This process never starts a pipeline, worker or capture: reads come from SQLite/files, settings go
 through Hermes' config writer and ``reprocess`` is a queued command the gateway's worker executes.
@@ -28,14 +28,13 @@ from ..llm_config import redact
 router = APIRouter()
 _REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 _MEETING_ID = re.compile(r"[A-Za-z0-9_.:-]{1,200}")
-_PROFILE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
 # -- seams (tests replace them; production resolves Hermes lazily per request) -------------------
 def _default_data_dir() -> Path:
-    from plugins.plugin_storage import plugin_data_dir
+    from .. import home
 
-    return plugin_data_dir("meeting-scribe")
+    return home.data_dir()
 
 
 def _default_settings_store() -> Any:
@@ -62,35 +61,31 @@ def _default_secret(name: str) -> Optional[str]:
 
 
 @contextlib.contextmanager
-def _default_profile_scope(profile: Optional[str]) -> Iterator[None]:
-    if not profile:
-        yield
-        return
-    from hermes_cli.web_server_profiles import _config_profile_scope  # the core routes' own scope
+def _default_owner_scope() -> Iterator[None]:
+    from .. import home
 
-    with _config_profile_scope(profile):
+    with home.owner_scope():
         yield
 
 
 SEAMS: dict[str, Callable[..., Any]] = {
     "data_dir": _default_data_dir, "settings_store": _default_settings_store, "aux_store": _default_aux_store,
-    "secret": _default_secret, "profile_scope": _default_profile_scope, "kanban": lambda: None,
+    "secret": _default_secret, "owner_scope": _default_owner_scope, "kanban": lambda: None,
 }
 
 
 # -- helpers --------------------------------------------------------------------------------------
 @contextlib.contextmanager
 def _ctx(request: Request) -> Iterator[dict[str, Any]]:
-    """Profile scope + an open repository for one request; domain errors become HTTP errors."""
+    """The OWNER profile's scope + an open repository for one request; domain errors become HTTP errors.
+
+    The ``?profile=`` Desktop adds for its active profile is deliberately not used: the plugin's data
+    and settings belong to the profile where it is installed (``meeting_scribe.home``), so every
+    profile shows the same library."""
     from ..storage.repo import Repository
 
-    profile = (request.query_params.get("profile") or "").strip()
-    if profile and (profile.lower() == "current"):
-        profile = ""
-    if profile and not _PROFILE.fullmatch(profile):
-        raise HTTPException(400, "invalid profile")
     try:
-        with SEAMS["profile_scope"](profile or None):
+        with SEAMS["owner_scope"]():
             root = Path(SEAMS["data_dir"]())
             repo = Repository(root / "index.sqlite")
             try:
@@ -279,7 +274,7 @@ def put_llm(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any
 def reset_seams() -> None:  # tests
     SEAMS.update({"data_dir": _default_data_dir, "settings_store": _default_settings_store,
                   "aux_store": _default_aux_store, "secret": _default_secret,
-                  "profile_scope": _default_profile_scope, "kanban": lambda: None})
+                  "owner_scope": _default_owner_scope, "kanban": lambda: None})
 
 
 __all__ = ["router", "SEAMS", "reset_seams"]

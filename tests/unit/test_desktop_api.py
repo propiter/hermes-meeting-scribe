@@ -23,29 +23,18 @@ PREFIX = "/api/plugins/meeting-scribe"
 
 @pytest.fixture
 def env(tmp_path, meeting, notes, utterances):
-    homes = {"": tmp_path / "default", "other": tmp_path / "other"}
-    for h in homes.values():
-        h.mkdir()
-    current = {"home": homes[""]}
+    root = tmp_path / "owner"
+    root.mkdir()
     scopes = []
 
     @contextlib.contextmanager
-    def scope(profile):
-        scopes.append(profile)
-        if (profile or "") not in homes:
-            from fastapi import HTTPException
-            raise HTTPException(404, "no such profile")  # what Hermes' scope raises
-        before = current["home"]
-        current["home"] = homes[profile or ""]
-        try:
-            yield
-        finally:
-            current["home"] = before
+    def scope():
+        scopes.append("owner")
+        yield
     mem, aux = MemSettings({"transcribe_language": "es"}), MemStore({"provider": "a", "model": "m"})
-    api.SEAMS.update({"data_dir": lambda: current["home"], "settings_store": mem.store,
-                      "aux_store": lambda: aux, "profile_scope": scope, "secret": lambda n: None,
+    api.SEAMS.update({"data_dir": lambda: root, "settings_store": mem.store,
+                      "aux_store": lambda: aux, "owner_scope": scope, "secret": lambda n: None,
                       "kanban": lambda: type("K", (), {"list_boards": staticmethod(lambda: [])})()})
-    root = homes[""]
     layout = Layout(lambda: root)
     folder = layout.meeting_folder(meeting)
     folder.mkdir(parents=True)
@@ -59,7 +48,7 @@ def env(tmp_path, meeting, notes, utterances):
     app = FastAPI()
     app.include_router(api.router, prefix=PREFIX)
     yield {"client": TestClient(app), "meeting": m, "folder": folder, "mem": mem, "aux": aux,
-           "scopes": scopes, "homes": homes}
+           "scopes": scopes, "root": root}
     api.reset_seams()
 
 
@@ -79,14 +68,12 @@ def test_library_detail_and_transcript(env):
     assert c.get(f"{PREFIX}/v1/meetings/..%2F..%2Fetc").status_code == 404
 
 
-def test_profile_query_scopes_the_request_and_is_validated(env):
+def test_every_request_reads_the_owner_profile_whatever_profile_desktop_sends(env):
     c = env["client"]
-    assert c.get(f"{PREFIX}/v1/meetings", params={"profile": "other"}).json()["items"] == []
-    assert env["scopes"][-1] == "other"
-    assert c.get(f"{PREFIX}/v1/meetings", params={"profile": "current"}).json()["facets"]["total"] == 1
-    assert env["scopes"][-1] is None
-    assert c.get(f"{PREFIX}/v1/meetings", params={"profile": "../x"}).status_code == 400
-    assert c.get(f"{PREFIX}/v1/meetings", params={"profile": "ghost"}).status_code == 404
+    for profile in ("", "other", "current", "../x", "ghost"):
+        page = c.get(f"{PREFIX}/v1/meetings", params={"profile": profile} if profile else None)
+        assert page.status_code == 200 and page.json()["facets"]["total"] == 1
+    assert env["scopes"] == ["owner"] * 5
 
 
 def test_audio_streams_with_range_and_refuses_symlinks(env, tmp_path):
@@ -148,7 +135,7 @@ def test_reprocess_requires_confirmation_and_is_only_queued(env):
     assert c.post(url, json={**body, "confirm": True}).json()["id"] == "req-1"  # retry is inert
     assert c.get(f"{PREFIX}/v1/commands/req-1").json()["state"] == "queued"
     assert c.get(f"{PREFIX}/v1/commands/nope").status_code == 404
-    repo = Repository(env["homes"][""] / "index.sqlite")
+    repo = Repository(env["root"] / "index.sqlite")
     assert repo.get_job(mid) is None  # the dashboard never ran or queued a stage itself
     repo.close()
     assert c.post(f"{PREFIX}/v1/meetings/missing/commands", json={**body, "confirm": True,
@@ -158,7 +145,7 @@ def test_reprocess_requires_confirmation_and_is_only_queued(env):
 def test_acknowledge_requires_confirmation_and_never_executes(env):
     c, mid = env["client"], env["meeting"].id
     c.post(f"{PREFIX}/v1/meetings/{mid}/commands", json={"request_id": "uncertain", "action": "reprocess", "stage": "deliver", "confirm": True})
-    repo = Repository(env["homes"][""] / "index.sqlite")
+    repo = Repository(env["root"] / "index.sqlite")
     repo._x("UPDATE desktop_commands SET state='unknown' WHERE id='uncertain'")
     url = f"{PREFIX}/v1/commands/uncertain/acknowledge"
     assert c.post(url, json={}).status_code == 400
@@ -169,7 +156,7 @@ def test_acknowledge_requires_confirmation_and_never_executes(env):
 
 def test_status_google_and_doctor_leak_no_secrets(env):
     c = env["client"]
-    gdir = env["homes"][""] / "google"
+    gdir = env["root"] / "google"
     gdir.mkdir()
     (gdir / "client.json").write_text(json.dumps({"installed": {"client_id": "CID", "client_secret": "CSECRET"}}))
     (gdir / "token.json").write_text(json.dumps({"refresh_token": "RTOKEN", "access_token": "ATOKEN"}))

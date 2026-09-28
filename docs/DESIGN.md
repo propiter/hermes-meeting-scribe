@@ -20,12 +20,37 @@ faster-whisper 1.2.1, Python 3.11–3.14.
 3. **Durable & idempotent**: every meeting is a state machine persisted in
    SQLite; a gateway restart resumes unfinished work. Every external side
    effect carries an idempotency key; reprocessing never duplicates.
-4. **Multi-profile safe**: never cache `get_hermes_home()` at import; paths
-   resolved per call; secrets via `agent.secret_scope.get_secret`; threads via
-   `agent.memory_provider.spawn_context_thread`.
+4. **Owned by one profile**: the plugin's data and configuration belong to the
+   Hermes home where it is INSTALLED (`<home>/plugins/meeting-scribe` → `<home>`),
+   resolved by one function, `meeting_scribe.home` (see §1.5). Nothing follows a
+   request's profile scope. Secrets via `agent.secret_scope.get_secret`; threads
+   via `agent.memory_provider.spawn_context_thread`.
 5. **Local-first**: audio never leaves the machine. Only transcript text goes to
    the user's own configured LLM.
 6. **Strict TDD**: tests first, fakes for Discord/RTP/LLM/Linear.
+
+### 1.5 Where data lives: the owner profile
+
+Hermes Desktop runs ONE backend (`hermes serve`, launched with Desktop's primary profile) and scopes
+plugin REST calls to the page's active profile with `?profile=<name>` (a context-local HERMES_HOME
+override). Resolving the data dir through `get_hermes_home()` therefore showed an empty library as
+soon as another profile was active. `meeting_scribe.home` is the single resolver:
+
+- `owner_home()`: `<home>` when the package sits at `<home>/plugins/meeting-scribe`; otherwise (a
+  checkout, tests) the process home (`get_process_hermes_home`, which ignores request overrides).
+- `data_dir()`: `<owner home>/plugin-data/meeting-scribe`, used by the gateway, the CLI and the REST
+  API alike.
+- `owner_scope()`: the REST API enters Hermes' own request scope (`_config_profile_scope`) for the
+  owner profile on every request, so settings and secrets are the owner's too. The `?profile=` Desktop
+  sends is ignored on purpose.
+
+**Hermes limit (cannot be changed from a plugin).** Hermes' runtime gate
+(`hermes_cli/web_server.py::_plugin_api_runtime_gate`) and its dashboard plugin discovery
+(`web_server_dashboard.py::_dashboard_plugin_search_dirs`) look at the profile the backend was
+LAUNCHED with. If that profile does not have meeting-scribe enabled, every call answers
+`404 Plugin not found`, whatever profile is active. The page then says, in plain words, to open
+Hermes Desktop with the profile where Meetings is installed. It must never suggest enabling the plugin
+in the other profile: that would load a second copy with its own Discord bot and its own data.
 
 ## 2. Architecture
 
@@ -798,8 +823,9 @@ so the tab and the selected meeting live in module atoms. Styling uses only the 
 The page's texts are its own `ctx.i18n.register({en, es})` bundles, separate from the bot's
 `meeting_scribe/i18n` catalogs. Field labels come from the schema (`/v1/settings?lang=`).
 
-**Data.** Every call goes through `ctx.rest` (profile-aware, namespace-scoped) and the SDK's React
-Query. Query keys carry the connection and profile, and switching either closes the open meeting.
+**Data.** Every call goes through `ctx.rest` (namespace-scoped) and the SDK's React Query. The data is
+the owner profile's (§1.5), so a Desktop profile switch changes nothing on this page; query keys carry
+the connection (another Hermes install), and a connection switch closes the open meeting.
 Updates come from polling, not events (`broadcast_plugin_event` is process-local): the library every
 30 s, status every 15 s, an unfinished meeting every 10 s, and a pending command every 2 s until it
 is `done`, `failed` or `unknown`. Reprocess sends a client-generated `request_id` with

@@ -145,9 +145,10 @@ def secret(name: str) -> Optional[str]:
 
 
 def data_dir() -> Path:
-    from plugins.plugin_storage import plugin_data_dir
+    """The owner profile's data dir (``meeting_scribe.home``: one resolver for every process)."""
+    from . import home
 
-    return plugin_data_dir("meeting-scribe")
+    return home.data_dir()
 
 
 def context_spawner(target: Callable[[], None], *, name: str, daemon: bool = True) -> threading.Thread:

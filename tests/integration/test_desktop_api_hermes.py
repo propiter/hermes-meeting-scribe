@@ -185,8 +185,17 @@ def test_status_doctor_and_reprocess_queue(served):
     assert c.get(f"{PREFIX}/v1/commands/int-1").json()["state"] == "queued"  # waits for the gateway
 
 
-def test_profile_query_uses_hermes_scope(served):
-    c = served["client"]
-    assert c.get(f"{PREFIX}/v1/meetings", params={"profile": "current"}).status_code == 200
-    assert c.get(f"{PREFIX}/v1/meetings", params={"profile": "no-such-profile"}).status_code == 404
-    assert c.get(f"{PREFIX}/v1/meetings", params={"profile": "../etc"}).status_code == 400
+def test_every_profile_desktop_sends_reads_the_owner_profiles_data(served):
+    """Desktop adds ?profile=<active>: the library is the installing profile's whatever that is."""
+    c, home = served["client"], served["home"]
+    mid = _seed(home)
+    other = home / "profiles" / "other"
+    other.mkdir(parents=True)
+    (other / "config.yaml").write_text(yaml.safe_dump({"model": {"default": "x"}}), encoding="utf-8")
+    for params in ({}, {"profile": "current"}, {"profile": "other"}):
+        r = c.get(f"{PREFIX}/v1/meetings", params=params)
+        assert r.status_code == 200, (params, r.text)
+        assert [m["id"] for m in r.json()["items"]] == [mid], params
+    s = c.get(f"{PREFIX}/v1/settings", params={"profile": "other"}).json()
+    assert s["values"]["transcribe_language"] == {"value": "es", "origin": "configured"}
+    assert not (other / "plugin-data").exists()

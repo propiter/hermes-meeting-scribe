@@ -669,7 +669,14 @@ default). A **Meetings** row appears in the sidebar and in the command palette.
   whether it is the default, a custom value or invalid; and **Models** (main model plus ordered
   backups you can add, remove and reorder).
 
-The page reads the profile's own files and database and never starts a recording or a pipeline:
+**One library in every profile.** The page always shows the data of the profile where the plugin is
+installed, whichever profile you switch to in Desktop. Hermes only serves a plugin's page API when
+Desktop was *opened* with a profile that has the plugin enabled. If Desktop was opened with another
+profile, the page says so: close it and open it with the profile where Meetings is installed. Do not
+enable the plugin in a second profile to "fix" this; that starts a second copy of the bot with its own
+separate data.
+
+The page reads the owner profile's files and database and never starts a recording or a pipeline:
 **Reprocess** is carried out by the gateway's worker, so the gateway must be running. Settings are
 written with the same rules as `hermes meeting-scribe config set` and `llm set`.
 

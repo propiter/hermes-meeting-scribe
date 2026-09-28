@@ -16,8 +16,9 @@
  * Every read and write goes through `ctx.rest` to this plugin's backend
  * (`/api/plugins/meeting-scribe/v1/...`, meeting_scribe/desktop/api.py). The page never runs the
  * pipeline: «Reprocess» and «Prepare audio» queue a command that the gateway's worker executes,
- * and the page polls it. Query keys carry connection + profile, so a switch never shows another
- * profile's meetings; polling runs only while something is in progress and stops on a 4xx.
+ * and the page polls it. The data belongs to the profile where the plugin is installed, so every
+ * Desktop profile shows the same library; query keys carry the connection (a different Hermes) and
+ * polling runs only while something is in progress and stops on a 4xx.
  */
 
 import {
@@ -99,9 +100,9 @@ export const LOCALES = {
       refresh: 'Refresh', none: '—', open: 'Open', details: 'Technical details', saving: 'Saving…', close: 'Close'
     },
     disabled: {
-      title: 'Meetings is not set up in this profile',
-      body: profile => `The profile “${profile}” does not have the meeting-scribe plugin enabled, so there are no meetings to show here. Switch to the profile where the bot records your meetings, or enable the plugin in this profile and restart Hermes.`,
-      steps: 'To enable it in this profile, run in a terminal:'
+      title: 'Meetings is not available in this window',
+      body: 'Hermes was opened with a profile that does not have Meetings installed, so there is nothing to show here. Your meetings are safe.',
+      steps: 'Close Hermes and open it again with the profile where Meetings is installed. Once it is open, you can switch to any profile and keep seeing the same meetings.'
     },
     error: {
       title: 'Could not load this',
@@ -307,9 +308,9 @@ export const LOCALES = {
       refresh: 'Actualizar', none: '—', open: 'Abrir', details: 'Detalles técnicos', saving: 'Guardando…', close: 'Cerrar'
     },
     disabled: {
-      title: 'Reuniones no está configurado en este perfil',
-      body: profile => `El perfil «${profile}» no tiene activado el plugin meeting-scribe, así que aquí no hay reuniones que mostrar. Cambia al perfil donde el bot graba tus reuniones, o activa el plugin en este perfil y reinicia Hermes.`,
-      steps: 'Para activarlo en este perfil, ejecuta en una terminal:'
+      title: 'Reuniones no está disponible en esta ventana',
+      body: 'Hermes se abrió con un perfil que no tiene Reuniones instalado, así que aquí no hay nada que mostrar. Tus reuniones siguen a salvo.',
+      steps: 'Cierra Hermes y vuelve a abrirlo con el perfil donde está instalado Reuniones. Una vez abierto, puedes cambiar a cualquier perfil y seguirás viendo las mismas reuniones.'
     },
     error: {
       title: 'No se pudo cargar',
@@ -528,8 +529,10 @@ export function parseError(error) {
   return { status: Number(m[1]), message }
 }
 
-/** The host answers `404 {"detail":"Plugin not found"}` when this profile has no meeting-scribe
- *  backend (plugin not enabled / Hermes not restarted): a guided empty state, not an error. */
+/** The host answers `404 {"detail":"Plugin not found"}` when the profile Desktop's backend was
+ *  LAUNCHED with does not have meeting-scribe enabled (Hermes gates plugin routes on the launch
+ *  profile, whatever profile is active): a guided empty state, not an error. Enabling the plugin in
+ *  that other profile would be wrong advice — it would start a second bot. */
 export function isPluginMissing(error) {
   const { status, message } = parseError(error)
   if (status === 404 && /plugin not found/i.test(message)) return true
@@ -550,8 +553,7 @@ function rest(path, opts) {
 
 function useScope() {
   const connection = useValue(host.state.connectionId)
-  const profile = useValue(host.state.profile)
-  return `${connection || 'local'}|${profile || ''}`
+  return connection || 'local'
 }
 
 /** Poll every `ms` while `active(data)` holds; never after a client error (401/404: gone/disabled). */
@@ -823,14 +825,12 @@ function Empty({ icon = 'inbox', title, children, action }) {
     action ? h('div', { className: 'ms-empty-action' }, action) : null)
 }
 
-/** A profile without the backend: guided, calm, not an error. */
+/** A backend launched without the plugin: guided, calm, not an error. */
 function PluginMissing() {
   const t = usePluginI18n(ID)
-  const profile = useValue(host.state.profile) || 'default'
   return h(Empty, { icon: 'mic', title: t('disabled.title') },
-    h('p', null, t('disabled.body', profile)),
-    h('p', { className: 'ms-muted' }, t('disabled.steps')),
-    h('pre', { className: 'ms-code' }, 'hermes plugins enable meeting-scribe\nhermes gateway restart'))
+    h('p', null, t('disabled.body')),
+    h('p', { className: 'ms-muted' }, t('disabled.steps')))
 }
 
 function Failure({ error, onRetry, missingIsMeeting = false }) {
@@ -1806,14 +1806,14 @@ export function MeetingsPage() {
   const selected = useValue($selected)
   const scope = useScope()
   const firstScope = useRef(scope)
-  // A connection/profile switch drops the open meeting: it belongs to the previous profile.
+  // A connection switch (another Hermes) drops the open meeting: it belongs to that other install.
   useEffect(() => {
     if (firstScope.current !== scope) {
       firstScope.current = scope
       $selected.set(null)
     }
   }, [scope])
-  // Probe once: a profile without the backend gets the guided empty state for the whole page.
+  // Probe once: a backend launched without the plugin gets the guided empty state for the whole page.
   const probe = useRest('/v1/status', { staleTime: 30_000 })
   const missing = probe.isError && isPluginMissing(probe.error)
   const select = id => { $selected.set(id); if (id !== selected) $tab.set('summary') }
