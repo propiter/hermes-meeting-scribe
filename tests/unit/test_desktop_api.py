@@ -34,6 +34,7 @@ def env(tmp_path, meeting, notes, utterances):
     mem, aux = MemSettings({"transcribe_language": "es"}), MemStore({"provider": "a", "model": "m"})
     api.SEAMS.update({"data_dir": lambda: root, "settings_store": mem.store,
                       "aux_store": lambda: aux, "owner_scope": scope, "secret": lambda n: None,
+                      "owner": lambda: "profile 'team' (the profile where the plugin is installed)",
                       "kanban": lambda: type("K", (), {"list_boards": staticmethod(lambda: [])})()})
     layout = Layout(lambda: root)
     folder = layout.meeting_folder(meeting)
@@ -74,6 +75,18 @@ def test_every_request_reads_the_owner_profile_whatever_profile_desktop_sends(en
         page = c.get(f"{PREFIX}/v1/meetings", params={"profile": profile} if profile else None)
         assert page.status_code == 200 and page.json()["facets"]["total"] == 1
     assert env["scopes"] == ["owner"] * 5
+
+
+def test_an_unusable_owner_declaration_is_a_503_with_the_reason_not_another_profiles_data(env):
+    from meeting_scribe.home import OwnerError
+
+    @contextlib.contextmanager
+    def broken():
+        raise OwnerError("plugins.entries.meeting-scribe.owner_profile names the profile 'ghost', which does not exist")
+        yield
+    api.SEAMS["owner_scope"] = broken
+    r = env["client"].get(f"{PREFIX}/v1/meetings")
+    assert r.status_code == 503 and "'ghost', which does not exist" in r.json()["detail"]
 
 
 def test_audio_streams_with_range_and_refuses_symlinks(env, tmp_path):
@@ -164,6 +177,8 @@ def test_status_google_and_doctor_leak_no_secrets(env):
     assert st["worker"]["state"] == "unknown" and st["google"]["connected"] is True
     doc = c.get(f"{PREFIX}/v1/doctor").json()
     assert {"storage", "google_meet"} <= {x["name"] for x in doc["checks"]}
+    owner = next(x for x in doc["checks"] if x["name"] == "owner")
+    assert owner["status"] == "ok" and "profile 'team'" in owner["detail"]
     blob = json.dumps([st, doc, c.get(f"{PREFIX}/v1/settings").json()])
     for secret in ("RTOKEN", "ATOKEN", "CSECRET", "CID"):
         assert secret not in blob

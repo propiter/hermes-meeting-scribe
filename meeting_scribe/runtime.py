@@ -66,6 +66,7 @@ class Host:
     llm_ready: Callable[[], tuple[bool, str]]
     is_gateway: Callable[[], bool] = lambda: True
     llm_store: Callable[[], Any] = lambda: None  # ``llm_config.AuxStore`` over Hermes' config (None in tests)
+    role: str = ""  # ``home.role(...).detail``: why this profile runs the plugin (DESIGN §1.5)
 
 
 class Runtime:
@@ -353,6 +354,9 @@ class Runtime:
 
     def llm_store(self) -> Any:
         return self.host.llm_store()
+
+    def owner_status(self) -> str:
+        return self.host.role
 
     def doctor_env(self) -> "Runtime":
         return self

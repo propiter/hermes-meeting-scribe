@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import cli, hermes_adapters
+from . import cli, hermes_adapters, home
 from .analyze.projects import CallableCatalog
 from .commands import Caller, MeetingCommands, caller_from_session
 from .config import PRIMARY_COMMAND
@@ -54,7 +54,7 @@ def _llm_ready(ctx: Any) -> Callable[[], tuple[bool, str]]:
     return probe
 
 
-def build_host(ctx: Any) -> Host:
+def build_host(ctx: Any, role: home.Role) -> Host:
     o = _host_overrides()
 
     def call_mcp() -> Optional[Callable[[str, str, dict], Any]]:
@@ -67,7 +67,7 @@ def build_host(ctx: Any) -> Host:
     return Host(get_config=ctx.get_config, set_config=ctx.set_config, data_dir=o["data_dir"], llm=lambda: ctx.llm,
                 secret=o["secret"], spawner=hermes_adapters.context_spawner, call_mcp=call_mcp,
                 kanban=HermesKanban(), project_sources=project_sources, llm_ready=_llm_ready(ctx),
-                is_gateway=hermes_adapters.is_gateway_process, llm_store=_llm_store)
+                is_gateway=hermes_adapters.is_gateway_process, llm_store=_llm_store, role=role.detail)
 
 
 def _llm_store() -> Any:
@@ -124,9 +124,35 @@ def _register_aux_task(ctx: Any) -> None:
         ctx.register_auxiliary_task(hermes_adapters.AUX_TASK, **kw)
 
 
-def register(ctx: Any, plugin_root: Path) -> Runtime:
+def _profile_role() -> home.Role:
+    """The role of the profile this plugin context was loaded for (Hermes binds discovery to it)."""
+    from hermes_constants import get_hermes_home
+
+    return home.role(get_hermes_home())
+
+
+def _register_non_owner(ctx: Any, role: home.Role) -> None:
+    """Another profile owns the plugin: no runtime, no worker, no capture, no tools or chat commands
+    (they would write to this profile's own data). Only the CLI stays, to say where to go; the
+    Desktop page is served by the dashboard backend, which always reads the owner's data."""
+    log.info("meeting-scribe: %s", role.detail)
+
+    def handler(args: Any) -> int:
+        print(f"meeting-scribe: {role.detail}")
+        return 0 if getattr(args, "ms_command", None) in (None, "doctor") else 2
+
+    ctx.register_cli_command(name=PLUGIN_ID, help="Meeting scribe: setup, doctor, meetings",
+                             setup_fn=cli.setup_parser, handler_fn=handler,
+                             description="Configure and inspect the meeting-scribe plugin")
+
+
+def register(ctx: Any, plugin_root: Path) -> Optional[Runtime]:
+    role = _profile_role()
+    if not role.owner:
+        _register_non_owner(ctx, role)
+        return None
     _register_aux_task(ctx)
-    runtime = Runtime(build_host(ctx))
+    runtime = Runtime(build_host(ctx, role))
     RUNTIMES[id(ctx)] = runtime
     on_unload = getattr(ctx, "on_unload", None)
     if callable(on_unload):

@@ -241,6 +241,13 @@ def check_obsidian(env: DoctorEnv) -> Check:
     return Check.ok(str(path)) if path.is_dir() else Check.fail(f"vault not found: {path}")
 
 
+def check_owner(env: Any) -> Check:
+    """DESIGN §1.5: which profile owns the installation (records, processes, keeps the data)."""
+    status = getattr(env, "owner_status", None)
+    detail = status() if callable(status) else ""
+    return Check.ok(detail) if detail else Check.ok("single profile")
+
+
 def check_capture(env: DoctorEnv) -> Check:
     ok, detail = env.capture_status()
     return Check.ok(detail) if ok else Check.warn(detail)
@@ -336,7 +343,7 @@ def check_spaces(env: Any) -> Check:
 
 
 registry = CheckRegistry()
-for _name, _fn in (("settings", check_settings), ("ffmpeg", check_ffmpeg), ("faster_whisper", check_faster_whisper),
+for _name, _fn in (("owner", check_owner), ("settings", check_settings), ("ffmpeg", check_ffmpeg), ("faster_whisper", check_faster_whisper),
                    ("storage", check_storage), ("disk", check_disk), ("llm", check_llm), ("kanban", check_kanban),
                    ("linear", check_linear), ("obsidian", check_obsidian), ("capture", check_capture),
                    ("google_meet", check_google_meet), ("delivery", check_delivery), ("spaces", check_spaces)):

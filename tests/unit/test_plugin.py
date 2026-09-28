@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from meeting_scribe import plugin
+from meeting_scribe import home, plugin
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -52,6 +52,15 @@ class FakeCtx:
 
     def on_unload(self, callback):
         self.unload.append(callback)
+
+
+OWNER = home.Role(True, "this is the owner: profile 'team' (the profile where the plugin is installed)")
+
+
+@pytest.fixture(autouse=True)
+def _owner_profile(monkeypatch):
+    """Unit tests load the plugin as the owner profile unless a test says otherwise (no Hermes here)."""
+    monkeypatch.setattr(plugin, "_profile_role", lambda: OWNER)
 
 
 @pytest.fixture
@@ -214,3 +223,35 @@ def test_aux_task_registration_works_on_hosts_without_defaults(ctx, monkeypatch)
     monkeypatch.setattr(ctx, "register_auxiliary_task", old_api)
     plugin.register(ctx, ROOT)
     assert seen == {"meeting_scribe": "Meeting Scribe"}
+
+
+# -- DESIGN §1.5: one owner profile; any other profile only serves the Desktop page -----------------
+GUEST = home.Role(False, "the owner is profile 'team' (set by plugins.entries.meeting-scribe.owner_profile in the "
+                         "Hermes root config.yaml); this profile only serves the Desktop page with the owner's "
+                         "meetings. Run meeting-scribe commands with `hermes -p team meeting-scribe …`")
+
+
+def test_a_non_owner_gateway_starts_nothing_and_registers_nothing_that_writes(tmp_path, monkeypatch, capsys):
+    import argparse
+    monkeypatch.setattr(plugin, "_profile_role", lambda: GUEST)
+    monkeypatch.setattr(plugin.hermes_adapters, "is_gateway_process", lambda: True)
+    monkeypatch.setattr(plugin, "_host_overrides", lambda: pytest.fail("a non-owner must not build a runtime"))
+    c = FakeCtx(tmp_path)
+    assert plugin.register(c, ROOT) is None
+    assert id(c) not in plugin.RUNTIMES
+    assert not c.tools and not c.commands and not c.skills and not c.aux and not c.platform_handlers and not c.unload
+    setup_fn, handler_fn = c.cli["meeting-scribe"]
+    parser = argparse.ArgumentParser()
+    setup_fn(parser)
+    assert handler_fn(parser.parse_args(["doctor"])) == 0
+    assert "hermes -p team meeting-scribe" in capsys.readouterr().out
+    assert handler_fn(parser.parse_args(["config", "set", "kanban_mode", "off"])) == 2
+    assert not (tmp_path / "d").exists() and not list(tmp_path.iterdir())
+
+
+def test_the_owner_runtime_reports_its_role_to_doctor(ctx):
+    from meeting_scribe import doctor
+
+    rt = plugin.register(ctx, ROOT)
+    assert rt.owner_status() == OWNER.detail
+    assert doctor.check_owner(rt.doctor_env()) == doctor.Check.ok(OWNER.detail)

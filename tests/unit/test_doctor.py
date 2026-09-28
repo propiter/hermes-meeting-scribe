@@ -221,3 +221,13 @@ def test_spaces_check_lists_servers_unassigned_ones_backups_and_the_voice_limit(
     assert g.status == "fail" and "[main] disabled" in g.detail
     assert "[team] no OAuth client" in g.detail and "google connect --space team" in g.detail
     rt.close()
+
+
+def test_owner_check_names_the_owner_or_says_single_profile():
+    from types import SimpleNamespace
+
+    from meeting_scribe.doctor import Check, check_owner, registry
+
+    assert registry.names()[0] == "owner"
+    assert check_owner(SimpleNamespace(owner_status=lambda: "this is the owner: x")) == Check.ok("this is the owner: x")
+    assert check_owner(SimpleNamespace()) == Check.ok("single profile")

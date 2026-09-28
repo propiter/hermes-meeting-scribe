@@ -197,6 +197,10 @@ class DashboardDoctorEnv:
     secret: Callable[[str], Optional[str]] = lambda _name: None
     kanban: Any = None
     aux_store: Any = None
+    owner: str = ""  # ``home.Owner.describe()``: the profile whose data this backend serves
+
+    def owner_status(self) -> str:
+        return f"this page shows the data of the owner, {self.owner}" if self.owner else ""
 
     def settings(self, space: Optional[str] = None) -> Settings:
         return self.spaces().settings(space)

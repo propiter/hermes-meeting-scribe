@@ -4,13 +4,14 @@
 Authentication is the host's: the web server's auth middleware guards every ``/api/`` route
 (session token / OAuth gate) and its runtime gate 404s this namespace while the plugin is disabled.
 
-Owner profile: the data dir and config always resolve to the Hermes profile where the plugin is
-INSTALLED (``meeting_scribe.home``), whatever ``?profile=`` Desktop adds for its active profile, so
-the page shows the same library in every profile. Each request enters Hermes' own request scope for
-that owner profile (the helper the core routes use), which also scopes secrets to it.
+Owner profile (DESIGN §1.5): the data dir and config always resolve to the profile that owns the
+installation (``meeting_scribe.home``), whatever profile Desktop was launched with and whatever
+``?profile=`` it adds for its active profile, so the page shows the same library everywhere. Each
+request enters Hermes' own request scope for the owner (the helper the core routes use), which also
+scopes secrets to it. An owner that cannot be resolved answers 503 with the reason.
 
 This process never starts a pipeline, worker or capture: reads come from SQLite/files, settings go
-through Hermes' config writer and ``reprocess`` is a queued command the gateway's worker executes.
+through Hermes' config writer and ``reprocess`` is a queued command the owner's gateway worker runs.
 """
 from __future__ import annotations
 
@@ -68,10 +69,18 @@ def _default_owner_scope() -> Iterator[None]:
         yield
 
 
-SEAMS: dict[str, Callable[..., Any]] = {
+def _default_owner() -> str:
+    from .. import home
+
+    return home.owner().describe()
+
+
+_DEFAULT_SEAMS: dict[str, Callable[..., Any]] = {
     "data_dir": _default_data_dir, "settings_store": _default_settings_store, "aux_store": _default_aux_store,
     "secret": _default_secret, "owner_scope": _default_owner_scope, "kanban": lambda: None,
+    "owner": _default_owner,
 }
+SEAMS: dict[str, Callable[..., Any]] = dict(_DEFAULT_SEAMS)
 
 
 # -- helpers --------------------------------------------------------------------------------------
@@ -85,6 +94,7 @@ def _ctx(request: Request) -> Iterator[dict[str, Any]]:
     The ``?profile=`` Desktop adds for its active profile is deliberately not used: the plugin's data
     and settings belong to the profile where it is installed (``meeting_scribe.home``), so every
     profile shows the same library."""
+    from ..home import OwnerError
     from ..spaces import SpaceError, bootstrap
     from ..storage.repo import Repository
 
@@ -100,6 +110,8 @@ def _ctx(request: Request) -> Iterator[dict[str, Any]]:
                 repo.close()
     except HTTPException:
         raise
+    except OwnerError as exc:  # a broken owner_profile: say so, never serve another profile's data
+        raise HTTPException(503, redact(str(exc))) from exc
     except KeyError as exc:
         raise HTTPException(404, "not found") from exc
     except PermissionError as exc:
@@ -307,7 +319,8 @@ def get_doctor(request: Request) -> dict[str, Any]:
 
     with _ctx(request) as c:
         env = DashboardDoctorEnv(store=SEAMS["settings_store"](), root=c["root"], repo=c["repo"],
-                                 secret=SEAMS["secret"], kanban=SEAMS["kanban"](), aux_store=SEAMS["aux_store"]())
+                                 secret=SEAMS["secret"], kanban=SEAMS["kanban"](), aux_store=SEAMS["aux_store"](),
+                                 owner=SEAMS["owner"]())
         return run_doctor(env)
 
 
@@ -440,9 +453,7 @@ def put_llm(request: Request, body: dict[str, Any] = Body(...)) -> dict[str, Any
 
 
 def reset_seams() -> None:  # tests
-    SEAMS.update({"data_dir": _default_data_dir, "settings_store": _default_settings_store,
-                  "aux_store": _default_aux_store, "secret": _default_secret,
-                  "owner_scope": _default_owner_scope, "kanban": lambda: None})
+    SEAMS.update(_DEFAULT_SEAMS)
 
 
 __all__ = ["router", "SEAMS", "reset_seams"]
