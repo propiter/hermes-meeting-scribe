@@ -426,6 +426,36 @@ hermes meeting-scribe config set delivery_discord_guild "My Team"    # only if t
 hermes meeting-scribe doctor
 ```
 
+### Notes per voice channel and private meetings
+
+`meeting_routes` sends the notes of some meetings to their own channel. It has one rule per entry,
+`origin = #channel`, with an optional `:private`:
+
+- `Leadership = #leadership-notes:private`: the voice channel "Leadership" (by name or id).
+- `category:Design = design-meetings`: every voice channel of the Discord category "Design".
+- `meet:abc-* = #meet-notes`: Google Meet meetings whose code, room or title matches (`*`, `?`).
+
+A voice channel rule wins over a category rule. Otherwise the first matching rule wins. A matching
+rule's channel is the only place the notes may go: if the bot cannot use it, the meeting waits and
+`status`/`doctor` explain why. It is never posted anywhere more public.
+
+- **Normal rule**: only the notes move. Tasks still go to their project channels and to their
+  assignees, as usual.
+- **Private rule**: everything (summary, transcript, every task) stays in that channel. No task is
+  sent to a project channel, to the fallback channel, to anyone's DMs, or to Kanban/Linear on its
+  own. Each task gets buttons to **send it to its assignee** or **publish it in its project channel**.
+  The index has **Share all tasks**, which asks for confirmation first. Only people who can see the
+  private channel can press them. What is shared is just the task (title, description, assignee, due
+  date): never the summary, the quotes or a link to the private channel. A meeting published as
+  private stays private even if the rule is later removed. The agent and `/meeting` only find it
+  from its own channel. The CLI and Desktop always see it, and Desktop marks it 🔒.
+
+```bash
+hermes meeting-scribe config set meeting_routes "Leadership = #leadership-notes:private, category:Design = design-meetings"
+hermes meeting-scribe config list      # each rule, its channel, forum or not, private or not
+hermes meeting-scribe doctor           # warns if a private rule points to a channel @everyone can see
+```
+
 **Notes an older version posted in a DM.** Earlier versions could post a meeting to the gateway's
 home channel when it was a DM. Those meetings keep working there (buttons, 📋 My tasks) and are
 never moved by themselves; `status` and `doctor` list them. To move one to a server channel,

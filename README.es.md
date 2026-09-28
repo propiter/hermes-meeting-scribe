@@ -434,6 +434,37 @@ hermes meeting-scribe config set delivery_discord_guild "Mi Equipo"   # solo si 
 hermes meeting-scribe doctor
 ```
 
+### Notas por canal de voz y reuniones privadas
+
+`meeting_routes` envía las notas de ciertas reuniones a su propio canal. Cada entrada es una regla
+`origen = #canal`, con `:private` opcional (también vale `:privado`/`:privada`):
+
+- `Dirección = #notas-direccion:private`: el canal de voz "Dirección" (por nombre o id).
+- `category:Design = design-meetings`: todos los canales de voz de la categoría de Discord "Design".
+- `meet:abc-* = #notas-meet`: reuniones de Google Meet cuyo código, sala o título coinciden (`*`, `?`).
+
+Una regla de canal de voz gana a una de categoría. En los demás casos gana la primera regla que
+coincide. El canal de esa regla es el único sitio donde pueden ir las notas: si el bot no puede
+usarlo, la reunión espera y `status`/`doctor` explican por qué. Nunca se publica en un sitio más
+público.
+
+- **Regla normal**: solo cambia el canal de las notas. Las tareas siguen yendo a los canales de sus
+  proyectos y a sus responsables, como siempre.
+- **Regla privada**: todo (resumen, transcripción, todas las tareas) se queda en ese canal. Ninguna
+  tarea se envía por sí sola a canales de proyecto, al canal de respaldo, a mensajes directos ni a
+  Kanban/Linear. Cada tarea tiene botones para **enviarla a su responsable** o **publicarla en el
+  canal de su proyecto**. El índice tiene **Compartir todas las tareas**, que pide confirmación antes.
+  Solo quien puede ver el canal privado puede pulsarlos. Lo que se comparte es solo la tarea (título,
+  descripción, responsable, fecha): nunca el resumen, las citas ni un enlace al canal privado. Una
+  reunión publicada como privada sigue privada aunque luego se quite la regla. El agente y `/meeting`
+  solo la encuentran desde su propio canal. La CLI y Desktop siempre la ven, y Desktop la marca con 🔒.
+
+```bash
+hermes meeting-scribe config set meeting_routes "Dirección = #notas-direccion:private, category:Design = design-meetings"
+hermes meeting-scribe config list      # cada regla, su canal, si es foro y si es privada
+hermes meeting-scribe doctor           # avisa si una regla privada apunta a un canal que ve @everyone
+```
+
 **Notas que una versión anterior publicó en un DM.** Versiones anteriores podían publicar una reunión
 en el canal home del gateway cuando era un DM. Esas reuniones siguen funcionando allí (botones,
 📋 Mis tareas) y nunca se mueven solas; `status` y `doctor` las listan. Para mover una a un canal del

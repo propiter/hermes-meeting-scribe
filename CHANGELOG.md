@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Notes per voice channel, category or Meet meeting, and private meetings** (`meeting_routes`,
+  e.g. `Leadership = #leadership-notes:private, category:Design = design-meetings, meet:abc-* =
+  #meet-notes`). A matching rule decides the notes channel (it wins over
+  `google_meet_discord_channel`, `delivery_discord_channel`, the voice chat and the automatic choice).
+  If its channel cannot be used, the meeting waits and is never posted to a more public place. A
+  normal rule only moves the notes. A **private** rule keeps the summary, the transcript and every
+  task in its channel: nothing goes to project channels, the fallback channel, DMs or Kanban/Linear
+  on its own. Members who can see that channel press **Send to <assignee>**, **Publish in
+  #<project>** or **Share all tasks** (with confirmation), and only the task text leaves. Privacy
+  is sticky (removing the rule never publishes a private meeting elsewhere), idempotent and survives
+  reprocessing. The agent's tools and `/meeting` only read a private meeting from its own channel.
+  `doctor` and `config list` show each rule resolved and warn about a private rule on a channel
+  @everyone can see (and the opposite). Desktop marks private meetings. `scripts/gen_manifest.py
+  --check` verifies the manifest without writing.
+
 - **Forum and media channels** as destinations for notes (`delivery_discord_channel`,
   `google_meet_discord_channel`, automatic by name), for `delivery_fallback_channel` and for project
   channels. Each meeting is one post `<date> · <title>`: the summary is its first message; the

@@ -886,6 +886,105 @@ and automatically, and a configured id failed on `channel.send` (a forum has non
   channels' requirement of an attachment on the first message (Discord currently accepts text-only
   posts via the API; if it did not, the post would fail and be retried as a normal error).
 
+### 19.2 Meeting routes and private meetings
+
+Request: some voice channels hold conversations that the rest of the server must not see (a
+leadership group, a team's own room). The team wants to choose where those notes go and, for private
+rooms, keep everything there and decide what leaves by pressing buttons. Group meetings can also post
+their notes in the group's own channel or forum. Tasks still go to their project channels.
+
+**Setting** `meeting_routes` (list, group `delivery`, space-scoped like every setting, format
+`meeting_route`; module `routes.py`, pure). There is one rule per entry, `origin = channel[:private]`:
+
+| origin | covers |
+|---|---|
+| `<voice channel id>` / `<name>` / `#name` | that voice channel (names normalized as in §19) |
+| `category:<id or name>` | every voice channel of that Discord category (`Meeting.category_id`, recorded at capture) |
+| `meet:<pattern>` | Google Meet: meeting code, Meet room id or title; `*`/`?`, case ignored |
+
+- **channel**: a text, announcement, forum or media channel, given as an id, `<#id>` or name, and resolved like the §19 settings (inside the meeting's space servers only).
+- **`:private`**: `:privado`/`:privada` are accepted too and stored canonically as `:private`.
+- **CLI**: `config set meeting_routes "Leadership = #leadership-notes:private, category:Design = design-meetings"`.
+- **Desktop**: the generic list field. The schema has `format: meeting_route`.
+- **Validation on write is strict**: a clear `ValueError` for a missing `=`, an empty channel, an unknown option, a mention used as the origin, or the same origin twice (`routes.validate_entries`).
+- **Loading is lenient but fails closed**:
+  - An entry whose origin is readable but whose rest is not (hand-edited YAML) becomes a *broken* rule. It still matches, and it is treated as private.
+  - Its meetings wait with the reason.
+  - An entry without a readable origin is dropped with a warning.
+- **Precedence**:
+  - A voice channel rule beats a category rule.
+  - Within the same kind, the first in the list wins.
+  - Meet rules only see Meet meetings, and voice/category rules never do.
+
+**Notes channel order.** A matching rule comes first. If it matches, its channel is the ONLY candidate: there is no Meet channel, no `delivery_discord_channel`, no voice chat and no automatic choice. If the channel is missing, ambiguous, unreachable or in another server, the delivery is PENDING (`DestinationPending`, no attempts used) with the rule named, and the meeting is never posted to a more public channel. Without a match, the order is §19: `google_meet_discord_channel` (Meet) → `delivery_discord_channel` → voice chat → automatic.
+
+**Normal rule.** Only the notes channel changes. Project routing, the fallback channel, assignee DMs and Kanban/Linear stay as they are today.
+
+**Private rule.**
+- **Where it is posted**:
+  - The summary, the transcript, EVERY task and the index are posted only in the rule's channel: its thread, or its post in a forum.
+  - Nothing goes to project channels or the fallback channel, and no assignee panel is sent.
+  - Kanban/Linear `auto` behaves as `approve` (`ItemSink.deliver`).
+- **Buttons on each task** (second row): `✉️ Send to <assignee>` (`shd`) and `📣 Publish in #<project channel>` (`shp`, the task's normal routing), next to the usual Kanban/Linear/Dismiss/Move.
+- **Index**:
+  - The index shows "Private meeting…" and "Shared: n of m".
+  - Its `📤 Share all tasks` (`sha`) opens an ephemeral confirmation (`shc`) that does the normal distribution: each open task goes to its assignee (DM) and to its project channel.
+  - Tasks without a project stay private.
+  - Failures (closed DMs, a forum that requires a tag) are listed.
+- **What leaves**: only the task (`render_tasks.shared_task_text`):
+  - Included: status, title, due date, assignee, project, description and a date footer.
+  - Never included: the summary, the quote, the meeting title or a link to the private channel.
+  - The Kanban/Linear body of a private meeting is also only the description and the date (`sink.private_item_body`).
+- **Shared copies**:
+  - Copies have no buttons: decisions stay in the room.
+  - A project forum gets one post per shared task, named after the task and tagged like §19.1.
+- **State** (`private_share.py`) is kept in pointers:
+  - `share:<item>` holds `{dm, channel}`.
+  - `stask:<item>` and `sdm:<item>` point to the copies. They are saved before the decision, so a retry edits instead of reposting.
+  - A decision already made makes the button a no-op ("That was already done").
+- **Reprocess**:
+  - Shared copies are edited in place with the new task text.
+  - Copies of tasks that disappeared are deleted.
+  - The private channel is re-rendered with the same buttons and state.
+- **Authorization** (`auth.check_private`, before every button of a private meeting, share or not):
+  - The click must come from the private channel, its thread or forum post (`interaction.channel` or its parent) inside a server, never a DM.
+  - The clicker must have `view_channel` there (`interaction.permissions`). If permissions are unknown, the click is refused.
+  - Any member of the room may share: deciding what leaves is the room's decision.
+  - The usual owner/assignee rules still apply to Kanban/Linear/Dismiss/Move.
+  - Share buttons on a meeting that is not private answer "no longer private".
+- **Sticky privacy** (`privacy.py`):
+  - The first `Stages.persist` of a meeting that a private rule matches records `privacy.private.<id>` = `{rule, channel}`. The channel is filled in after the first publish.
+  - A recorded meeting stays private even after the rule is removed or edited. Its destination is then held to the recorded channel (`DiscordNotesSink.destination`). If none is known, it waits.
+  - A meeting that becomes private after it was published normally (a rule added, then a reprocess) is withdrawn from public places:
+    - the summary, transcript and index outside the private channel, and the notes thread;
+    - assignee panels;
+    - project anchors and their threads or posts.
+  - Its task messages move into the private channel. Messages Discord refuses to delete are disarmed to "This task is no longer shown here" (no text, no buttons).
+- **Chat reads** (agent tools `meeting_search`/`meeting_get`, `/meeting list|show|search|status|reprocess|project`): a private meeting exists only from its place, which is `privacy.allowed_places`:
+  - the recorded channel and the rule's channel id;
+  - once the notes are there, the notes channel, its forum and its thread.
+  - The caller's chat id, thread id and `HERMES_SESSION_PARENT_CHAT_ID` are matched against that set (`privacy.Reader`).
+  - Outside it, search hits of the meeting are dropped and `get`/`show` answer exactly like an unknown id.
+  - Other platforms never read it. The CLI (no chat session) and Desktop see everything; Desktop marks it 🔒 "Private" (`Library.private`).
+- **Not affected**:
+  - Local files: the meeting folder and Obsidian (local by definition).
+  - The recording announcement in the voice channel's chat (it already existed, and it says nothing about the content).
+  - `task_moves`: 📁 Move re-routes a task's project, but in a private meeting the task message stays in the private channel. Only `shp` publishes it.
+
+**Diagnostics.**
+- **Report**: every delivery stores `discord.routes_report.<space>`: each rule resolved against the discord.py cache (`destination.resolve_routes`), with its channel id and name, its kind (text/forum/media), whether @everyone can see it, and the problem if any.
+- **Where it is shown**: `doctor` (check `delivery`) and `config list` (`routes` in `--json`) print each rule as `origin (kind) → [forum ]#channel (id), private|normal`. A rule not checked yet says so.
+- **Warnings**:
+  - a private rule on a channel @everyone can see ("everyone there sees the whole meeting");
+  - a normal rule on a channel @everyone cannot see;
+  - broken or unresolvable rules ("its meetings wait").
+- Changing `meeting_routes` re-queues waiting deliveries (`DESTINATION_KEYS`).
+
+**Not verifiable without real Discord.**
+- Whether `interaction.permissions` is always populated for component clicks in threads and forum posts. If it is not, the code falls back to `channel.permissions_for(user)`, and without either the click is refused.
+- That `Thread.delete` needs Manage Threads on a thread the bot did not create. Only the bot's own threads and posts are deleted here.
+- The exact error Discord returns for a deleted DM channel while a shared DM copy is being edited. It is treated as "gone" through `is_missing`.
+
 ## 20. Configuration schema for UIs (unreleased)
 
 `config.SPEC` stays the single source of truth; each `Opt` now has a `group` (capture,
