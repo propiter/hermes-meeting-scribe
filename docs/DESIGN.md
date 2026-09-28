@@ -156,7 +156,7 @@ Every alias routes to the same router with a subcommand argument:
 |---|---|
 | `start [#voice-channel]` (default when no args) | join caller's voice channel (or given) and record |
 | `stop` | stop recording and process |
-| `status` | recording / processing state, queue |
+| `status` | recording / processing state, queue. The first line names the meetings in state `recording` read from the database (never the calling process: the CLI captures nothing), live when their `capture_owner` is this process or a live one; a dead owner is flagged as an orphan the gateway closes at start. The operator reads it before restarting |
 | `list [n]` | recent meetings |
 | `show <id>` | re-post notes |
 | `search <text>` | FTS search over transcripts |
@@ -277,6 +277,19 @@ touching Hermes:
   el audio de: X, Y" (plain text, names inert), Desktop shows it in Summary and
   Processing, `status` lists it, and `doctor` (`missing_audio`) warns about the
   last 20 meetings.
+- **Nobody heard, people present.** A recording where no voice reached a track
+  ends `empty` without processing; if `missing_audio` names people, that is
+  its visible cause, never a silent discard: `status` (chat and CLI) adds the
+  names to its line, Desktop shows "No audio: voices not captured" and why, and
+  `doctor` warns. The Discord sink (session-end listener) posts one notice,
+  pointer `unheard`, where the notes would have gone ("could not capture the
+  audio of X, Y… no transcript or notes"), following the meeting's rules: a
+  private meeting only in its private channel, a `:dm` meeting nowhere (no
+  channel is ever used for it), a held destination nowhere; skipped when that
+  channel is the voice chat and the stop announcement already said it there.
+- **Task owners.** Every person in the channel is a speaker of the meeting,
+  heard or not, with their Discord nickname, global name and username as
+  `aliases`; the analysis resolves owners against all of them (§7).
 - **Compat probe** also checks `_on_packet`'s decoder seam
   (`ssrc not in self._decoders`, `self._decoders[ssrc].decode(`), davey's
   `decrypt`/`get_user_ids`/`MediaType.audio`,
@@ -326,6 +339,17 @@ the `.mka`.
   `open_questions[]`, `action_items[{title, description, owner_speaker_id|null,
   owner_name|null, due|null (only if explicitly said, ISO), project|null,
   project_confidence 0..1, quote, t0}]`, `meeting_title`.
+- **Owners.** The prompt carries `<participants>`: every human of the meeting
+  (heard or not; Discord nickname, global name and username as aliases) with
+  its id, a closed list the LLM must pick `owner_speaker_id` from (or null).
+  An unknown id falls back to `owner_name`, resolved by
+  `domain.names.match_person` (accents, emoji and case ignored), in tiers
+  that must each give ONE person: the exact name; a whole word of it (given
+  name, surname); a phonetic/edit match ≥ 0.85 for Spanish/English spellings
+  (`h` silent, `ll`/`y`/`i`, `j`/`y`, `c`/`k`/`qu`, `v`/`b`, `z`/`s`,
+  `ph`/`f`, doubled letters: `Yoana`~`Johanna`, `Cristofer`~`Christopher`). Gendered pairs
+  (`Luis`/`Luisa`) never match; two candidates in a tier leave the task
+  unassigned with the name said.
 - Transcript is DATA: prompt forbids following instructions inside it.
 - Notes language: `analysis_language` (default = transcript language).
 - **Project resolution** (`analyze/projects.py`): candidates = Hermes projects
@@ -1470,7 +1494,7 @@ Authentication is the host's (session token / OAuth gate). All bodies are JSON. 
 
 | Method, path | Params | Response |
 |---|---|---|
-| `GET /v1/status` | `space` (optional) | `{worker:{state:"recent"\|"stale"\|"unknown", last_seen}, queue:{running,queued,failed} (machine), space, counts, jobs, waiting_destination, dm_notes, dm_unreachable, commands, google, settings_warnings}`. With a space: `counts/jobs/…` are that space's and `google` is its connection (`{enabled, client_stored, connected, revoked, connected_at, commands:{connect,status,enable}, last_poll_at?, last_poll_ok?, last_error?, last_import_at?, last_import_meeting?, records_given_up?, records_given_up_last?, retry_after_until?}`). Several spaces and no `space`: `space:null, google:null`, lists empty, `counts` = `queue`. |
+| `GET /v1/status` | `space` (optional) | `{worker:{state:"recent"\|"stale"\|"unknown", last_seen}, queue:{running,queued,failed} (machine), space, counts, jobs, waiting_destination, dm_notes, dm_unreachable, commands, google, settings_warnings, recording:[{meeting_id, title, started_at, live}]}` (`recording`: meetings in state `recording` from the database, `live` when their capturing process is alive; Desktop's Bot card lists them). With a space: `counts/jobs/…` are that space's and `google` is its connection (`{enabled, client_stored, connected, revoked, connected_at, commands:{connect,status,enable}, last_poll_at?, last_poll_ok?, last_error?, last_import_at?, last_import_meeting?, records_given_up?, records_given_up_last?, retry_after_until?}`). Several spaces and no `space`: `space:null, google:null`, lists empty, `counts` = `queue`. |
 | `GET /v1/doctor` | – | `{exit_code, checks:[{name, status:"ok"\|"warn"\|"fail", detail}]}`; walks every space; the first check, `owner`, names the owner profile whose data is served |
 
 ### Spaces and servers

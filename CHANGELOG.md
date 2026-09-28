@@ -163,14 +163,30 @@ All notable changes to this project are documented here. The format follows
 
 - **Voices Discord never announced are no longer lost.** Discord often sends no SPEAKING for
   people already in the call when the bot joins; their audio was decoded still encrypted and
-  dropped without a word. It is now kept (bounded: 60 s per voice, 4 MiB overall) and identified —
-  with DAVE by the only participant key that opens it, without DAVE by the only person present
-  without a voice — then written at its original times. The people already in the call come from
+  dropped without a word. It is now kept from the first packet for the whole meeting (bounded: 4 h
+  and 256 MiB per voice, 1 GiB overall; encrypted Opus is ~6-8 KB/s) and identified — with DAVE by
+  the only participant key that opens it, retried as soon as someone joins and every 5 s; without
+  DAVE by the only person present without a voice, or by voice-state timing (who was muted or away
+  while it talked) — then the whole backlog is written at its original times, so the track starts
+  at second 0. The people already in the call come from
   the voice handshake (CLIENTS_CONNECT) and the channel. Audio that cannot be attributed safely
   goes to an "Unidentified participant" track instead of the wrong person (DESIGN §4.1).
 - **Missing audio is reported.** Someone unmuted in the call for over a minute whose voice was not
   captured is named in the stop message, the Discord notes ("Could not capture the audio of: …"),
   `notes.md`, Desktop (Summary and Processing), `status` and `doctor`, and logged as a warning.
+- **A recording nobody could hear is no longer discarded in silence.** When people were in the call
+  but no voice was captured, the meeting still ends "no audio", but `status` names them, Desktop
+  says "voices not captured", and one notice goes where the notes would have gone (private rules
+  respected; nothing in any channel for direct-messages-only meetings).
+- **`status` tells the truth about recordings.** Its first line was a fixed "not recording" string:
+  a CLI (which captures nothing itself) always denied the gateway's live recording. It now lists the
+  meetings recording right now from the database — live if their capturing process is — and flags
+  orphans whose process died; Desktop's Status card shows the same.
+- **Task owners resolve against everyone in the meeting.** The analysis gets the closed list of
+  participants (heard or not, with their Discord nickname and username) and picks an id; a name the
+  transcript spelled as it sounds ("Yoana" for "Johanna", "Cristofer" for "Christopher", no
+  accents, a first name, a nickname) still finds the one matching participant. Two possible people
+  leave the task unassigned with the name said.
 - **`config list` and `doctor` no longer show the notes channel of an older setting.** The last
   delivery's report counts only while it resolved the value configured now; otherwise the channel
   list resolves the new value, or it says it will be checked on the next delivery.
