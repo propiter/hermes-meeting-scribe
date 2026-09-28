@@ -906,11 +906,11 @@ their notes in the group's own channel or forum. Tasks still go to their project
 - **`:private`**: `:privado`/`:privada` are accepted too and stored canonically as `:private`.
 - **CLI**: `config set meeting_routes "Leadership = #leadership-notes:private, category:Design = design-meetings"`.
 - **Desktop**: the generic list field. The schema has `format: meeting_route`.
-- **Validation on write is strict**: a clear `ValueError` for a missing `=`, an empty channel, an unknown option, a mention used as the origin, or the same origin twice (`routes.validate_entries`).
+- **Validation on write is strict**: a clear `ValueError` for a missing `=`, an empty channel, an unknown option, a mention used as the origin, a private mark (`private`/`privado`/`privada`) anywhere but as the `:private` option, or the same origin twice (`routes.validate_entries`).
 - **Loading is lenient but fails closed**:
-  - An entry whose origin is readable but whose rest is not (hand-edited YAML) becomes a *broken* rule. It still matches, and it is treated as private.
-  - Its meetings wait with the reason.
-  - An entry without a readable origin is dropped with a warning.
+  - An entry whose origin is readable but whose rest is not (hand-edited YAML) becomes a *broken* rule. It still matches and its meetings wait with the reason.
+  - An entry whose origin is NOT readable but that carries a private mark anywhere (`Leadership:private`, `Leadership -> 700:private`, `<#200> = 700:private`) becomes a broken rule of kind `any`: it matches EVERY meeting of the space, ahead of every other rule, so all of them wait until it is fixed; `doctor` says so. It never marks a meeting private for good (fixing it releases them).
+  - An unreadable entry without a private mark is dropped with a warning.
 - **Precedence**:
   - A voice channel rule beats a category rule.
   - Within the same kind, the first in the list wins.
@@ -953,23 +953,22 @@ their notes in the group's own channel or forum. Tasks still go to their project
   - The usual owner/assignee rules still apply to Kanban/Linear/Dismiss/Move.
   - Share buttons on a meeting that is not private answer "no longer private".
 - **Sticky privacy** (`privacy.py`):
-  - The first `Stages.persist` of a meeting that a private rule matches records `privacy.private.<id>` = `{rule, channel}`. The channel is filled in after the first publish.
-  - A recorded meeting stays private even after the rule is removed or edited. Its destination is then held to the recorded channel (`DiscordNotesSink.destination`). If none is known, it waits.
-  - A meeting that becomes private after it was published normally (a rule added, then a reprocess) is withdrawn from public places:
-    - the summary, transcript and index outside the private channel, and the notes thread;
-    - assignee panels;
-    - project anchors and their threads or posts.
-  - Its task messages move into the private channel. Messages Discord refuses to delete are disarmed to "This task is no longer shown here" (no text, no buttons).
+  - The first `Stages.persist` of a meeting that a private rule matches records `privacy.private.<id>` = `{rule, channel}`; an import records it right after its row is committed, before its job exists (`MeetingService.import_transcript`). The channel is filled in after the first publish.
+  - **Anchor.** Once recorded, the channel never changes by itself (`privacy.remember` keeps the first one): the meeting is anchored there. `DiscordNotesSink.destination` always targets the anchor; when the rule was removed, edited to another channel or its channel name now resolves to another channel (a rename), the destination is `held`: refreshes and buttons keep working in the anchor, and DELIVER waits (`DestinationPending`) with the reason and the command that moves it, `hermes meeting-scribe private-move <id> <channel id>` (`privacy.anchor` + a DELIVER reprocess, which withdraws the old copy). Button authorization (`private_place`, `privacy.allowed_places`) uses the anchor, never the rule's current channel. If no channel was ever recorded and no private rule matches, it waits.
+  - **Withdrawal** (`private_share.withdraw_public`, `withdraw.Withdrawal`). A meeting that becomes private after it was published normally (a rule added, then a reprocess) is withdrawn from every place outside its private channel, also while its delivery waits for an unusable channel: the summary, transcript and index; the notes thread; task messages in project channels, the fallback channel and the voice chat; assignee DM panels; project anchors and their threads or posts. The private channel (the anchor or, before one is recorded, the rule's channel) is never touched.
+    - Everything is deleted when Discord allows it. A thread or forum post needs **Manage Threads** to be deleted, even the bot's own: when refused, each of the bot's messages inside is deleted (or edited to "🔒 Content withdrawn." without buttons or files), and the thread is renamed "Content withdrawn", archived and locked. A message that cannot be deleted (the bot lost access, or Discord fails) is edited to the same neutral text; if even that fails, the step is reported as missing **Manage Messages**. A DM panel is emptied the same way.
+    - Each unfinished step is a `withdraw:<kind>:<channel>:<message>` pointer, retried on every later publish of the meeting; `privacy.withdraw_pending.<id>` holds the count and the missing permissions, and `doctor` (check `delivery`) names them with the reprocess command.
+  - Its tasks are posted again in the private channel.
 - **Chat reads** (agent tools `meeting_search`/`meeting_get`, `/meeting list|show|search|status|reprocess|project`): a private meeting exists only from its place, which is `privacy.allowed_places`:
   - the recorded channel and the rule's channel id;
   - once the notes are there, the notes channel, its forum and its thread.
   - The caller's chat id, thread id and `HERMES_SESSION_PARENT_CHAT_ID` are matched against that set (`privacy.Reader`).
   - Outside it, search hits of the meeting are dropped and `get`/`show` answer exactly like an unknown id.
-  - Other platforms never read it. The CLI (no chat session) and Desktop see everything; Desktop marks it 🔒 "Private" (`Library.private`).
+  - Other platforms never read it. Full access only for the operator: the `hermes meeting-scribe` CLI (`show`, `export`, `list`), the agent in a session whose `HERMES_SESSION_SOURCE` is `cli`, `tui` or `desktop` and that is not a cron job, and Desktop's own API; Desktop marks it 🔒 "Private" (`Library.private`). Any other context fails closed: a cron job (Hermes binds an empty platform and `HERMES_CRON_SESSION=1`, and delivers its output to a chat), webhooks, the API server, unknown or future surfaces, or no session at all (`privacy.Reader.local`).
 - **Not affected**:
   - Local files: the meeting folder and Obsidian (local by definition).
   - The recording announcement in the voice channel's chat (it already existed, and it says nothing about the content).
-  - `task_moves`: 📁 Move re-routes a task's project, but in a private meeting the task message stays in the private channel. Only `shp` publishes it.
+  - `task_moves`: 📁 Move re-routes a task's project, but in a private meeting the task message stays in the private channel and nothing is learned for the space (no project→channel mapping). Only `shp` publishes it.
 
 **Diagnostics.**
 - **Report**: every delivery stores `discord.routes_report.<space>`: each rule resolved against the discord.py cache (`destination.resolve_routes`), with its channel id and name, its kind (text/forum/media), whether @everyone can see it, and the problem if any.
@@ -982,7 +981,7 @@ their notes in the group's own channel or forum. Tasks still go to their project
 
 **Not verifiable without real Discord.**
 - Whether `interaction.permissions` is always populated for component clicks in threads and forum posts. If it is not, the code falls back to `channel.permissions_for(user)`, and without either the click is refused.
-- That `Thread.delete` needs Manage Threads on a thread the bot did not create. Only the bot's own threads and posts are deleted here.
+- That `Thread.delete` needs Manage Threads even on the bot's own threads and posts (assumed: the withdrawal empties, renames, archives and locks them when refused). Renaming and locking a thread also needs Manage Threads unless the bot created it; archiving its own thread does not.
 - The exact error Discord returns for a deleted DM channel while a shared DM copy is being edited. It is treated as "gone" through `is_missing`.
 
 ## 20. Configuration schema for UIs (unreleased)

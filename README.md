@@ -447,13 +447,23 @@ rule's channel is the only place the notes may go: if the bot cannot use it, the
   The index has **Share all tasks**, which asks for confirmation first. Only people who can see the
   private channel can press them. What is shared is just the task (title, description, assignee, due
   date): never the summary, the quotes or a link to the private channel. A meeting published as
-  private stays private even if the rule is later removed. The agent and `/meeting` only find it
-  from its own channel. The CLI and Desktop always see it, and Desktop marks it 🔒.
+  private stays private and stays **in its channel** even if the rule is later removed, edited or
+  its channel renamed: when the rule points elsewhere the meeting waits (`status`/`doctor` say why)
+  until you restore the rule or move it yourself with `hermes meeting-scribe private-move <id>
+  <channel id>`. A meeting that becomes private after it was published normally is withdrawn from
+  every public place (summary, tasks, threads, posts, assignee DMs); what the bot cannot delete is
+  emptied and renamed "Content withdrawn", retried later, and `doctor` names the permission missing
+  (**Manage Threads**, **Manage Messages**). The agent and `/meeting` only find it from its own
+  channel; scheduled jobs (cron) and other platforms never see it. You see every meeting from the
+  terminal (`hermes meeting-scribe show <id>`, `export`), from `hermes` chat in the CLI/TUI and from
+  Desktop, which marks it 🔒. A rule you cannot read that says "private" anywhere holds every
+  meeting of the space until it is fixed.
 
 ```bash
 hermes meeting-scribe config set meeting_routes "Leadership = #leadership-notes:private, category:Design = design-meetings"
 hermes meeting-scribe config list      # each rule, its channel, forum or not, private or not
 hermes meeting-scribe doctor           # warns if a private rule points to a channel @everyone can see
+hermes meeting-scribe private-move k3v7q2ab 123456789012   # move a private meeting to another channel
 ```
 
 **Notes an older version posted in a DM.** Earlier versions could post a meeting to the gateway's

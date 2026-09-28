@@ -20,7 +20,16 @@ All notable changes to this project are documented here. The format follows
   is sticky (removing the rule never publishes a private meeting elsewhere), idempotent and survives
   reprocessing. The agent's tools and `/meeting` only read a private meeting from its own channel.
   `doctor` and `config list` show each rule resolved and warn about a private rule on a channel
-  @everyone can see (and the opposite). Desktop marks private meetings. `scripts/gen_manifest.py
+  @everyone can see (and the opposite). Desktop marks private meetings. A published private meeting
+  is anchored to its channel: editing the rule or renaming the channel never moves it (it waits, and
+  `hermes meeting-scribe private-move <id> <channel>` moves it). A meeting that becomes private is
+  withdrawn from every public place — summary, transcript, task messages in project, fallback and
+  voice channels, threads and forum posts, assignee DMs — even while it waits; what Discord refuses to
+  delete is emptied, renamed "Content withdrawn", archived, locked and retried, and `doctor` names
+  the missing **Manage Threads**/**Manage Messages**. Cron jobs and any context other than the
+  CLI/TUI, Desktop or the meeting's own Discord channel never read a private meeting. An unreadable
+  rule that says "private" holds every meeting of the space instead of being ignored. Imported
+  meetings are private from creation, and 📁 Move in a private meeting learns no routing. `scripts/gen_manifest.py
   --check` verifies the manifest without writing.
 
 - **Forum and media channels** as destinations for notes (`delivery_discord_channel`,
