@@ -753,8 +753,9 @@ does not have guild info attached") and nobody else saw it.
   Discord: `delivery_discord_channel` → voice text chat → AUTOMATIC → PENDING.
 - **Id or name**: channel settings accept `123`, `<#123>`, `#name` or `name` (`config set` stores
   the id or the bare name; user/role mentions are rejected). Names are compared after removing
-  decoration (emoji, `#`, case, `-`/`_`/spaces). A name matching several text channels, a non-text
-  channel or nothing is reported (`doctor`, `config list`) and skipped — never guessed.
+  decoration (emoji, `#`, case, `-`/`_`/spaces). Text, announcement, forum and media channels are
+  candidates (§19.1). A name matching several of them, another kind of channel (voice, stage,
+  category) or nothing is reported (`doctor`, `config list`) and skipped — never guessed.
 - **Server**: the meeting's own (Discord); for imported meetings the server of a configured channel
   id, else `delivery_discord_guild` (id or name), else the bot's only server; with several servers
   and nothing configured nothing is guessed. A name unique across all servers also fixes the server —
@@ -768,7 +769,7 @@ does not have guild info attached") and nobody else saw it.
 - **Ids are ASCII digits** (`domain.text.is_ascii_digits`): `str.isdigit()` also accepts `²` or
   Arabic-Indic digits, which `int()` rejects or Discord never issues; such values are names.
 - **AUTOMATIC**: the server's `system_channel` when the bot can send AND attach files there (the
-  transcript), else the first text channel whose clean name is in `delivery_auto_channel_names`
+  transcript), else the first text or forum channel whose clean name is in `delivery_auto_channel_names`
   (list order, then position) where it can send. Default names: general, meetings, meeting-notes,
   notes, reuniones, notas. Never an NSFW channel nor one `@everyone` cannot view (`default_role`
   permissions): notes are for the team, and a private channel is used only when configured
@@ -831,7 +832,59 @@ does not have guild info attached") and nobody else saw it.
   thread like a project channel), else the notes chat as before.
 - The last resolution per source is stored (`discord.destination_report.<source>`) so `doctor` and
   `config list` — which run in other processes without a Discord connection — can show which
-  server/channel a name resolved to.
+  server/channel a name resolved to, its kind (`forum`/`media`) and the warnings below.
+
+### 19.1 Forum and media channels
+
+Production: the team created a forum (type 15) for meeting notes. `TEXT_KINDS` rejected it by name
+and automatically, and a configured id failed on `channel.send` (a forum has none) and on
+`message.create_thread`. Media channels (type 16) behave the same.
+
+- **Where forums are accepted**: notes (`delivery_discord_channel`, `google_meet_discord_channel`,
+  automatic by name), `delivery_fallback_channel` and project channels (`project_channels`, fuzzy
+  routing, 📁 Move; `guild.snapshot_channels` reports them as kind `forum`).
+- **Layout**: one POST per meeting, named `<date> · <title>` (≤ 100 chars), created with
+  `ForumChannel.create_thread(name, content, view, applied_tags)` → `(thread, message)`. The first
+  message is the summary's first part; the other parts, the transcript, the tasks without project
+  (the post already is the meeting's thread) and the index go inside the post. A project forum gets
+  one post per meeting whose first message is the anchor, the tasks inside — instead of anchor +
+  thread. A fallback or project channel that IS the notes forum puts its tasks in the meeting's post
+  (never a second post with the same name).
+- **Pointers**: `notes` = `{channel: post id, forum, messages: [first, …], url: post url, name,
+  tags, attach}`; `thread:<project channel>` = `{channel/thread: post id, message: first, forum,
+  url, name, tags}`. Everything else keeps its own pointer with `channel` = post id, so edits,
+  buttons and 📁 moves work unchanged.
+- **Idempotency**: a stored post is opened and its first message edited; a missing post (404) is
+  created again and the transcript pointer that lived in it is dropped, so DELIVER re-attaches it
+  (tasks and index re-post through their own pointers). A deleted first message is re-sent INSIDE the
+  post (it cannot be recreated as the opening message without a new post). A shorter summary
+  deletes surplus parts only — the first is never deleted (that would delete the post). A changed
+  title renames the post; a re-posted summary (text or forum) keeps the transcript intent (`attach`)
+  of the one it replaces; an archived post (code 50083) is unarchived and the edit retried. A
+  rename/tag edit that fails for another reason (e.g. no Manage Threads on a post someone else made)
+  is logged and retried on the next publish.
+- **Tags**: forum tags whose normalized name (§19 `norm_name`: emoji, case, separators ignored)
+  matches the meeting's project (notes post) or the task's project (project post), or a name in
+  `delivery_forum_tags`, in the forum's order, max 5. Tags added by hand are kept on a re-tag. If
+  the forum has `REQUIRE_TAG` and nothing matched, the first `delivery_forum_default_tag` name the
+  forum has. Names are never invented.
+- **Refused post** (400 / 40067, tag required): `DestinationPending` with the forum, its tags and the
+  exact `config set delivery_forum_default_tag` command; the delivery waits (§19 PENDING, no
+  attempts). For a project/fallback forum the rest of the meeting is published first and only those
+  tasks wait; they are never re-routed to the notes or another channel, and never DMed. Setting
+  either tag key re-queues waiting deliveries (`config.DESTINATION_KEYS`).
+- **Permissions**: a forum needs View Channel + Send Messages (create the post) + Send Messages in
+  Threads (everything inside), + Attach Files for the transcript. The automatic choice requires them;
+  configured channels (notes, fallback, forum project channels) are checked and reported as
+  warnings (`doctor`, `config list`), as is a `REQUIRE_TAG` forum without a usable default tag.
+- **📁 Move** lists forums; moving a task to a forum that requires a tag and has none for it is
+  refused before anything changes (`ForumTagRequired`, plain reply).
+- **DMs**: the assignee panel header links to the notes (`notes.url`: the post's URL in a forum);
+  a recreated post updates the link on the next publish.
+- Not verifiable without real Discord: the exact error codes for archived/locked posts, the
+  permission Discord actually enforces to edit `applied_tags` of the bot's own post, and media
+  channels' requirement of an attachment on the first message (Discord currently accepts text-only
+  posts via the API; if it did not, the post would fail and be retried as a normal error).
 
 ## 20. Configuration schema for UIs (unreleased)
 

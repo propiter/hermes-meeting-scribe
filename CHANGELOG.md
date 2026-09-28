@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Forum and media channels** as destinations for notes (`delivery_discord_channel`,
+  `google_meet_discord_channel`, automatic by name), for `delivery_fallback_channel` and for project
+  channels. Each meeting is one post `<date> · <title>`: the summary is its first message; the
+  transcript, the tasks with their buttons (Kanban, Linear, Dismiss, Move) and the task index go
+  inside. A project forum gets one post per meeting with its tasks. Pointers keep the post and its
+  first message, so re-deliveries and clicks edit in place; a deleted post is created again (with its
+  transcript), a new title renames it and an archived post is unarchived to edit it. Forum tags that
+  match the project or the new `delivery_forum_tags` are applied (max 5); forums that require a tag
+  use the new `delivery_forum_default_tag`, and a post Discord still refuses leaves the delivery
+  waiting with the reason (never another channel, never a DM). `doctor` and `config list` show forum
+  channels and missing permissions (Send Messages in Threads, Attach Files); assignee DMs link to the
+  meeting's notes (the post). 📁 Move offers forums and refuses one that would reject the post.
+
 - **Meetings from any profile**: one installation, one owner profile. `owner_profile` (under
   `plugins.entries.meeting-scribe` in the default profile's `config.yaml`) names the profile that
   runs the bot and keeps the data; without it, the owner is the profile that holds the real copy.
