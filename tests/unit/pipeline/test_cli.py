@@ -21,8 +21,17 @@ class FakeRuntime:
     def service(self):
         return self._service
 
-    def settings(self):
+    def repo(self):
+        return self._service.repo
+
+    def spaces(self):
+        from meeting_scribe.spaces import Spaces
+        return Spaces(self.repo, lambda key, default=None: self.cfg.get(key, default))
+
+    def settings(self, space=None):
         from meeting_scribe.config import settings_from_mapping
+        if space:
+            return self.spaces().settings(space)
         return settings_from_mapping(self.cfg)
 
     def set_config(self, key, value):

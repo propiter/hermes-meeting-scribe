@@ -161,7 +161,7 @@ def test_sync_never_prints_a_traceback(grt, client_file, capsys, monkeypatch):
     connect(grt, client_file, capsys, monkeypatch)
     monkeypatch.setattr(cli_google, "_print", lambda text: print(text))
 
-    def broken():
+    def broken(space=None):
         raise OSError("disk full")
     monkeypatch.setattr(grt, "meet_importer", broken)
     code, out = run(grt, ["google", "sync"], capsys)

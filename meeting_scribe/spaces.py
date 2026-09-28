@@ -12,6 +12,7 @@ the defaults, and a space stores overrides for the keys whose ``Opt.scope`` is `
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -81,9 +82,13 @@ class Space:
 class Spaces:
     """Space operations over the index (``repo``) and the global settings (``getter``)."""
 
-    def __init__(self, repo: Callable[[], Any], getter: Getter) -> None:
+    def __init__(self, repo: Callable[[], Any], getter: Getter,
+                 data_dir: Optional[Callable[[], Path]] = None) -> None:
+        """``data_dir``: the plugin's data folder, where each space keeps ``google/<slug>/`` (needed
+        to delete a space's Google credentials with it)."""
         self._repo = repo
         self._getter = getter
+        self._data_dir = data_dir
 
     @property
     def repo(self) -> Any:
@@ -159,12 +164,21 @@ class Spaces:
         return self.require(slug)
 
     def delete(self, slug: str) -> None:
-        """Only an empty space can be deleted: meetings are never orphaned or moved implicitly."""
+        """Only an empty space can be deleted: meetings are never orphaned or moved implicitly. Its
+        servers, people links, learned maps, Google status and Google credentials go with it, so a
+        later space with the same id starts clean. The last space cannot be deleted."""
+        from .google.importer import lease_name, record_kv, status_kv
+
         space = self.require(check_slug(slug))
+        if len(self.all()) == 1:
+            raise SpaceError(f"space {slug!r} is the only one; create another before deleting it")
         count = self.repo.space_meeting_count(space.slug)
-        if count:
-            raise SpaceError(f"space {slug!r} still has {count} meeting(s); it can only be deleted when empty")
-        self.repo.delete_space_row(space.slug)
+        if count or not self.repo.delete_space_row(space.slug, (status_kv(space.slug), record_kv(space.slug)),
+                                                   (lease_name(space.slug),)):
+            raise SpaceError(f"space {slug!r} still has {count or 'some'} meeting(s); it can only be deleted "
+                             "when empty")
+        if self._data_dir is not None:
+            shutil.rmtree(Path(self._data_dir()) / "google" / space.slug, ignore_errors=True)
 
     def add_guild(self, slug: str, guild_id: str, name: str = "") -> Space:
         gid = str(guild_id).strip()

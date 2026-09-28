@@ -85,7 +85,7 @@ class Runtime:
 
     # -- settings & simple adapters -------------------------------------------------------------
     def spaces(self) -> Spaces:
-        return Spaces(self.repo, self.host.get_config)
+        return Spaces(self.repo, self.host.get_config, self.host.data_dir)
 
     def settings(self, space: Optional[str] = None) -> Settings:
         """The global settings; with ``space``, that space's overrides on top."""
@@ -105,9 +105,14 @@ class Runtime:
         return self.spaces().claim_guild(gid, str(getattr(guild, "name", "") or ""))
 
     def adopt_guilds(self, guilds: Iterable[Any]) -> list[str]:
-        """First connect after bootstrap: the ``main`` space takes the servers the bot is in."""
+        """At every Discord connect: remember the bot's servers (doctor and the Desktop list the
+        unassigned ones) and, the first time after bootstrap, give them to the ``main`` space."""
         pairs = [(str(getattr(g, "id", g)), str(getattr(g, "name", "") or "")) for g in guilds]
-        return self.repo().adopt_guilds("main", [p for p in pairs if p[0].isdigit()])
+        pairs = [p for p in pairs if p[0].isdigit()]
+        repo = self.repo()
+        if pairs:
+            repo.set_bot_guilds(pairs)
+        return repo.adopt_guilds("main", pairs)
 
     def space_guilds(self, space: str) -> Optional[frozenset[str]]:
         """The Discord servers a meeting of ``space`` may be published to. ``None`` with a single

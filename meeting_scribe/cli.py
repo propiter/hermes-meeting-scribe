@@ -1,4 +1,4 @@
-"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|export|config|google`` (DESIGN §10, §17).
+"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|export|config|google|space`` (DESIGN §10, §17, §23).
 
 ``setup_parser`` / ``dispatch`` are pure (the runtime is injected) so they are unit-tested
 without Hermes; ``register()`` binds them to the plugin runtime. Exit codes: 0 ok, 1 failure /
@@ -12,7 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
-from . import cli_google, doctor, llm_config
+from . import cli_google, cli_spaces, doctor, llm_config
+from .cli_spaces import CliExit, add_space_arg, selected
 from .config import CHANNEL_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
 from .domain.models import MeetingState, Stage
 from .i18n import t
@@ -26,7 +27,9 @@ MODELS = ("tiny", "base", "small", "medium", "large-v3", "turbo")
 class CliRuntime(Protocol):
     def service(self) -> MeetingService: ...
 
-    def settings(self) -> Settings: ...
+    def settings(self, space: Optional[str] = None) -> Settings: ...
+
+    def spaces(self) -> Any: ...
 
     def set_config(self, key: str, value: Any) -> None: ...
 
@@ -56,11 +59,15 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     d.add_argument("--json", action="store_true")
     st = sub.add_parser("status", help="Queue and recent meetings")
     st.add_argument("--json", action="store_true")
+    add_space_arg(st)
     ls = sub.add_parser("list", help="Recent meetings")
     ls.add_argument("-n", type=int, default=20)
+    add_space_arg(ls)
     sh = sub.add_parser("show", help="Print a meeting's notes")
     sh.add_argument("meeting_id")
+    add_space_arg(sh)
     rp = sub.add_parser("reprocess", help="Re-run a meeting from a stage")
+    add_space_arg(rp)
     rp.add_argument("meeting_id")
     rp.add_argument("--from", dest="stage", default="transcribe", choices=["transcribe", "analyze", "deliver"])
     rp.add_argument("--now", action="store_true", help="Process in this process instead of queueing for the gateway")
@@ -68,16 +75,20 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     ex.add_argument("meeting_id")
     ex.add_argument("--format", choices=["md", "json"], default="md")
     ex.add_argument("--out", help="File to write (default: stdout)")
+    add_space_arg(ex)
     cf = sub.add_parser("config", help="Get or set plugin settings")
     cf_sub = cf.add_subparsers(dest="config_command")
     g = cf_sub.add_parser("get")
     g.add_argument("key", nargs="?")
-    se = cf_sub.add_parser("set")
+    add_space_arg(g)
+    se = cf_sub.add_parser("set", help="Set a global value, or with --space that space's override")
     se.add_argument("key", choices=[*SPEC, *LEGACY_KEYS.values()], metavar="KEY")
     se.add_argument("value")
+    add_space_arg(se)
     cl = cf_sub.add_parser("list", help="Every setting with its effective value and where it comes from")
     cl.add_argument("--json", action="store_true")
     cl.add_argument("--group", help="Only one group (see `config schema`)")
+    add_space_arg(cl)
     sc = cf_sub.add_parser("schema", help="Machine-readable description of every setting (for UIs)")
     sc.add_argument("--json", action="store_true", help="JSON output (the only format; kept for clarity)")
     sc.add_argument("--lang", help="Language of labels/help (default: ui_language)")
@@ -87,6 +98,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     s.add_argument("--no-google-meet", dest="google_meet", action="store_false")
     s.add_argument("--google-meet-channel", help="Discord channel for Google Meet notes: id, <#id> or name")
     cli_google.add_parser(sub)
+    cli_spaces.add_parser(sub)
     parser.set_defaults(_ms_parser=parser)
 
 
@@ -183,9 +195,9 @@ def _meet_channel_set(settings: Settings, pending: dict[str, Any]) -> bool:
                for k in ("google_meet_discord_channel", "delivery_discord_channel"))
 
 
-def _warn_meet_channel(rt: CliRuntime) -> None:
+def _warn_meet_channel(rt: CliRuntime, space: Optional[str] = None) -> None:
     """Meet import on without any notes channel: notes go to the server's automatic channel, or wait."""
-    s = rt.settings()
+    s = rt.settings(space)
     if s.google_meet_enabled and not _meet_channel_set(s, {}):
         _print(t("cli.meet_channel_missing", s.ui_language))
 
@@ -199,8 +211,15 @@ def _doctor(args: argparse.Namespace, rt: CliRuntime) -> int:
     return code
 
 
+def _space_col(space: Optional[str], meeting_space: str) -> str:
+    """The space column of a view over every space (``space is None``); empty for one space."""
+    return "" if space is not None else f"{meeting_space:<12} "
+
+
 def _status(args: argparse.Namespace, rt: CliRuntime) -> int:
-    st = rt.service().status(recent=10)
+    space = selected(args, rt, action=False)
+    st = rt.service().status(space, recent=10)
+    st["space"] = space
     if args.json:
         _print(json.dumps(st, ensure_ascii=False, default=str))
         return 0
@@ -212,7 +231,7 @@ def _status(args: argparse.Namespace, rt: CliRuntime) -> int:
             extra = f" [{t('cli.waiting_destination', lang)}]"
         else:
             extra = f" [{job.get('state')}: {job.get('error')}]" if job.get("error") else ""
-        _print(f"  {row['id']}  {row['state']:<12} {row['title']}{extra}")
+        _print(f"  {row['id']}  {_space_col(space, row['space'])}{row['state']:<12} {row['title']}{extra}")
     for mid, reason in (st.get("waiting_destination") or {}).items():
         _print(f"! {mid}: {reason}")
     for mid, reason in (st.get("dm_notes") or {}).items():
@@ -221,23 +240,26 @@ def _status(args: argparse.Namespace, rt: CliRuntime) -> int:
 
 
 def _list(args: argparse.Namespace, rt: CliRuntime) -> int:
-    meetings = rt.service().repo.list_meetings(limit=args.n)
+    space = selected(args, rt, action=False)
+    meetings = rt.service().repo.list_meetings(limit=args.n, space=space)
     if not meetings:
         _print(t("cli.no_meetings", rt.settings().ui_language))
     for m in meetings:
-        _print(f"{m.id}  {m.started_at:%Y-%m-%d %H:%M}  {m.state.value:<12} {m.title or m.channel_name}")
+        _print(f"{m.id}  {_space_col(space, m.space)}{m.started_at:%Y-%m-%d %H:%M}  {m.state.value:<12} "
+               f"{m.title or m.channel_name}")
     return 0
 
 
-def _find(rt: CliRuntime, meeting_id: str) -> Optional[Any]:
-    meeting = rt.service().find(meeting_id)
+def _find(rt: CliRuntime, meeting_id: str, space: Optional[str]) -> Optional[Any]:
+    """The meeting, within ``space`` (``None``: any space — meeting ids are unique in the install)."""
+    meeting = rt.service().find(meeting_id, space)
     if meeting is None:
         _print(t("cmd.not_found", rt.settings().ui_language, id=meeting_id))
     return meeting
 
 
 def _show(args: argparse.Namespace, rt: CliRuntime) -> int:
-    meeting = _find(rt, args.meeting_id)
+    meeting = _find(rt, args.meeting_id, selected(args, rt, action=False))
     if meeting is None:
         return 1
     notes = read_notes(rt.service().folder(meeting))
@@ -249,7 +271,7 @@ def _show(args: argparse.Namespace, rt: CliRuntime) -> int:
 
 
 def _reprocess(args: argparse.Namespace, rt: CliRuntime) -> int:
-    meeting = _find(rt, args.meeting_id)
+    meeting = _find(rt, args.meeting_id, selected(args, rt, action=True))
     if meeting is None:
         return 1
     service = rt.service()
@@ -273,7 +295,7 @@ def _reprocess(args: argparse.Namespace, rt: CliRuntime) -> int:
 
 
 def _export(args: argparse.Namespace, rt: CliRuntime) -> int:
-    meeting = _find(rt, args.meeting_id)
+    meeting = _find(rt, args.meeting_id, selected(args, rt, action=False))
     if meeting is None:
         return 1
     folder = rt.service().folder(meeting)
@@ -296,28 +318,45 @@ def _export(args: argparse.Namespace, rt: CliRuntime) -> int:
 
 
 def _config(args: argparse.Namespace, rt: CliRuntime) -> int:
-    settings = rt.settings()
     command = getattr(args, "config_command", None)
-    if command == "set":
-        try:
-            key = canonical_key(args.key)
-            rt.set_config(key, validate_value(args.key, args.value))
-        except KeyError:
-            _print(f"unknown key {args.key}")
-            return 2
-        except ValueError as exc:
-            _print(str(exc))
-            return 2
-        if key in ("google_meet_enabled", "google_meet_discord_channel", "delivery_discord_channel"):
-            _warn_meet_channel(rt)
-        if key in CHANNEL_KEYS or key in ("delivery_discord_guild", "delivery_auto_channel_names"):
-            _nudge_waiting(rt)
+    if command == "schema":
+        _print(json.dumps(config_schema(args.lang or rt.settings().ui_language), ensure_ascii=False, indent=2))
         return 0
+    if command == "set":
+        return _config_set(args, rt)
     if command == "list":
         return _config_list(args, rt)
-    if command == "schema":
-        _print(json.dumps(config_schema(args.lang or settings.ui_language), ensure_ascii=False, indent=2))
-        return 0
+    return _config_get(args, rt)
+
+
+def _config_set(args: argparse.Namespace, rt: CliRuntime) -> int:
+    """Without ``--space``: the global value (every space inherits it). With ``--space``: that space's
+    override, only for keys a space may change (``space set`` does the same)."""
+    try:
+        key = canonical_key(args.key)
+    except KeyError:
+        _print(f"unknown key {args.key}")
+        return 2
+    space = (getattr(args, "space", None) or "").strip()
+    try:
+        if space:
+            space = selected(args, rt, action=True) or ""
+            cli_spaces.check_space_key(key, rt.settings().ui_language)
+            rt.spaces().set_override(space, key, args.value)
+        else:
+            rt.set_config(key, validate_value(args.key, args.value))
+    except ValueError as exc:
+        _print(str(exc))
+        return 2
+    if key in ("google_meet_enabled", "google_meet_discord_channel", "delivery_discord_channel"):
+        _warn_meet_channel(rt, space or None)
+    if key in CHANNEL_KEYS or key in ("delivery_discord_guild", "delivery_auto_channel_names"):
+        _nudge_waiting(rt)
+    return 0
+
+
+def _config_get(args: argparse.Namespace, rt: CliRuntime) -> int:
+    space = selected(args, rt, action=False)
     key = getattr(args, "key", None)
     if key:
         try:
@@ -325,13 +364,32 @@ def _config(args: argparse.Namespace, rt: CliRuntime) -> int:
         except KeyError:
             _print(f"unknown key {key}")
             return 2
-        _print(_fmt(settings.as_dict()[key]))
+        if space is not None:
+            _print(_fmt(rt.settings(space).as_dict()[key]))
+            return 0
+        _print(f"{_fmt(rt.settings().as_dict()[key])}  (global)")  # several spaces: every value
+        for s in rt.spaces().all():
+            if key in s.overrides:
+                _print(f"  {s.slug}: {_fmt(rt.settings(s.slug).as_dict()[key])}")
         return 0
+    settings = rt.settings(space)
     for k, v in settings.as_dict().items():
         _print(f"{k} = {_fmt(v)}")
     for w in settings.warnings:
         _print(f"! {w}")
+    if space is None:
+        _print_overrides(rt)
     return 0
+
+
+def _print_overrides(rt: CliRuntime) -> None:
+    """A view over several spaces: the global values above, then what each space changes."""
+    for s in rt.spaces().all():
+        _print(f"[space {s.slug}: {s.name}]")
+        if not s.overrides:
+            _print("  " + t("space.cli_no_overrides", rt.settings().ui_language))
+        for k, v in sorted(s.overrides.items()):
+            _print(f"  {k} = {_fmt(v)}")
 
 
 def _nudge_waiting(rt: CliRuntime) -> None:
@@ -344,24 +402,29 @@ def _nudge_waiting(rt: CliRuntime) -> None:
         _print(t("cli.waiting_retried", rt.settings().ui_language, count=n))
 
 
-def config_rows(rt: CliRuntime) -> list[dict[str, Any]]:
-    """Effective value + origin of every setting (``default`` | ``configured`` | ``invalid``), with the
-    channel/server a name resolved to (``resolved``, from the gateway's last delivery)."""
-    settings = rt.settings()
+def config_rows(rt: CliRuntime, space: Optional[str] = None) -> list[dict[str, Any]]:
+    """Effective value + origin of every setting (``default`` | ``configured`` | ``space`` |
+    ``invalid``) and its ``scope``, for ``space`` (``None``: the global values), with the channel/server
+    a name resolved to (``resolved``, from the gateway's last delivery; single-space installs only,
+    since that report is not kept per space)."""
+    settings = rt.settings(space)
+    overrides = rt.spaces().require(space).overrides if space else {}
     origin_of = getattr(rt, "config_origin", None)
-    invalid = {w.split("=", 1)[0] for w in settings.warnings}
-    resolved = _resolved_channels(rt)
+    invalid = {w.split("=", 1)[0].rsplit(": ", 1)[-1] for w in settings.warnings}
+    resolved = {} if cli_spaces.several(rt) else _resolved_channels(rt)
     rows = []
     for key, opt in SPEC.items():
         value = getattr(settings, key)
         if key in invalid:
             origin = "invalid"
+        elif key in overrides:
+            origin = "space"
         elif callable(origin_of):
             origin = origin_of(key)
         else:
             origin = "default" if value == opt.default else "configured"
-        row: dict[str, Any] = {"key": key, "group": opt.group, "value": list(value) if isinstance(value, tuple)
-                               else value, "origin": origin}
+        row: dict[str, Any] = {"key": key, "group": opt.group, "scope": opt.scope,
+                               "value": list(value) if isinstance(value, tuple) else value, "origin": origin}
         if key in resolved:
             row["resolved"] = resolved[key]
         rows.append(row)
@@ -393,11 +456,14 @@ def _resolved_channels(rt: CliRuntime) -> dict[str, dict[str, Any]]:
 
 
 def _config_list(args: argparse.Namespace, rt: CliRuntime) -> int:
-    rows = [r for r in config_rows(rt) if not args.group or r["group"] == args.group]
+    space = selected(args, rt, action=False)
+    rows = [r for r in config_rows(rt, space) if not args.group or r["group"] == args.group]
     llm = _llm_view(rt)
     if args.json:
-        _print(json.dumps({"settings": rows, "llm": llm.to_dict() if llm else None}, ensure_ascii=False,
-                          default=str))
+        out: dict[str, Any] = {"space": space, "settings": rows, "llm": llm.to_dict() if llm else None}
+        if space is None:
+            out["overrides"] = {s.slug: dict(s.overrides) for s in rt.spaces().all()}
+        _print(json.dumps(out, ensure_ascii=False, default=str))
         return 0
     group = None
     for r in rows:
@@ -416,6 +482,8 @@ def _config_list(args: argparse.Namespace, rt: CliRuntime) -> int:
     if llm is not None and (not args.group or args.group == "llm"):
         _print(f"[{t('cfg.group.llm', rt.settings().ui_language)}]")
         _print_llm(llm, rt.settings().ui_language, indent="  ")
+    if space is None:
+        _print_overrides(rt)
     return 0
 
 
@@ -518,7 +586,8 @@ def _llm(args: argparse.Namespace, rt: CliRuntime) -> int:
 
 _COMMANDS: dict[str, Callable[[argparse.Namespace, CliRuntime], int]] = {
     "setup": _setup, "doctor": _doctor, "status": _status, "list": _list, "show": _show,
-    "reprocess": _reprocess, "export": _export, "config": _config, "google": cli_google.dispatch, "llm": _llm}
+    "reprocess": _reprocess, "export": _export, "config": _config, "google": cli_google.dispatch, "llm": _llm,
+    "space": cli_spaces.dispatch}
 
 
 def dispatch(args: argparse.Namespace, rt: CliRuntime) -> int:
@@ -528,4 +597,8 @@ def dispatch(args: argparse.Namespace, rt: CliRuntime) -> int:
         if parser is not None:
             _print(parser.format_help())
         return 0
-    return _COMMANDS[command](args, rt)
+    try:
+        return _COMMANDS[command](args, rt)
+    except CliExit as exc:  # an unknown --space, or an action that needs one
+        _print(str(exc))
+        return exc.code

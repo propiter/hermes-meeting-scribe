@@ -7,8 +7,9 @@ import sys
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
+from .cli_spaces import add_space_arg, selected
 from .i18n import t
 
 _READ_LINE: Callable[[str], str] = input  # seam for tests
@@ -21,15 +22,19 @@ def add_parser(sub: Any) -> None:
     c.add_argument("--client-secret", help="OAuth client JSON downloaded from Cloud Console (type Desktop app)")
     c.add_argument("--no-browser", action="store_true", help="Print the URL and paste the redirect back (SSH)")
     c.add_argument("--timeout", type=int, default=300, help="Seconds to wait for the browser redirect")
-    st = gs.add_parser("status", help="Connection and last poll")
+    add_space_arg(c)
+    st = gs.add_parser("status", help="Connection and last poll (every space when there are several)")
     st.add_argument("--json", action="store_true")
+    add_space_arg(st)
     sy = gs.add_parser("sync", help="List/import finished conferences now")
     grp = sy.add_mutually_exclusive_group()
     grp.add_argument("--since", help="RFC 3339 start (e.g. 2026-09-01T00:00:00Z)")
     grp.add_argument("--days", type=int, help="Backfill the last N days (Meet keeps 30)")
     sy.add_argument("--dry-run", action="store_true", help="Only list what would be imported")
     sy.add_argument("--json", action="store_true")
-    gs.add_parser("disconnect", help="Revoke access (best effort) and delete the stored token")
+    add_space_arg(sy)
+    dc = gs.add_parser("disconnect", help="Revoke access (best effort) and delete the stored token")
+    add_space_arg(dc)
     g.set_defaults(_google_parser=g)
 
 
@@ -44,22 +49,17 @@ def dispatch(args: argparse.Namespace, rt: Any) -> int:
         if parser is not None:
             _print(parser.format_help())
         return 0
-    from .spaces import SpaceError
-
-    try:
-        rt.default_space() if hasattr(rt, "default_space") else None
-    except SpaceError:  # several spaces: each has its own connection; a --space selector is pending
-        _print(t("space.choose_cli", rt.settings().ui_language))
-        return 2
-    return {"connect": _connect, "status": _status, "sync": _sync, "disconnect": _disconnect}[cmd](args, rt)
+    # Each space has its own Google connection: status may show them all, the rest act on one.
+    space = selected(args, rt, action=cmd != "status")
+    return {"connect": _connect, "status": _status, "sync": _sync, "disconnect": _disconnect}[cmd](args, rt, space)
 
 
-def _connect(args: argparse.Namespace, rt: Any) -> int:
+def _connect(args: argparse.Namespace, rt: Any, space: str) -> int:
     from .google import oauth
     from .google.http import UrllibTransport
 
-    lang = rt.settings().ui_language
-    files = rt.google_files()
+    lang = rt.settings(space).ui_language
+    files = rt.google_files(space)
     try:
         client = oauth.import_client_file(files, Path(args.client_secret)) if args.client_secret \
             else oauth.load_client(files)
@@ -88,11 +88,8 @@ def _connect(args: argparse.Namespace, rt: Any) -> int:
     except (oauth.GoogleAuthError, OSError) as exc:
         _print(t("google.error", lang, error=exc))
         return 1
-    try:
-        rt.meet_importer().set_status(last_error=None)
-    except Exception:  # storage trouble is reported by `doctor`; the token is stored
-        pass
-    extra = "" if rt.settings().google_meet_enabled else t("google.enable_hint", lang)
+    rt.meet_importer(space).set_status(last_error=None)
+    extra = "" if rt.settings(space).google_meet_enabled else t("google.enable_hint", lang)
     if token.get("reconnected_at"):
         since = datetime.fromtimestamp(float(token["connected_at"]), timezone.utc).isoformat(timespec="minutes")
         _print(t("google.reconnected", lang, since=since, extra=extra))
@@ -101,28 +98,36 @@ def _connect(args: argparse.Namespace, rt: Any) -> int:
     return 0
 
 
-def status_dict(rt: Any) -> dict[str, Any]:
-    files = rt.google_files()
+def status_dict(rt: Any, space: str) -> dict[str, Any]:
+    files = rt.google_files(space)
     token = files.read_token() or {}
-    connected = rt.google_credentials().connected()
-    out: dict[str, Any] = {"connected": connected, "revoked": bool(token.get("disconnected")),
+    connected = rt.google_credentials(space).connected()
+    out: dict[str, Any] = {"space": space, "connected": connected, "revoked": bool(token.get("disconnected")),
                            "client_stored": files.client_path.exists(),
-                           "enabled": rt.settings().google_meet_enabled}
+                           "enabled": rt.settings(space).google_meet_enabled}
     if token.get("connected_at"):
         out["connected_at"] = datetime.fromtimestamp(float(token["connected_at"]), timezone.utc).isoformat()
     try:
-        out.update(rt.meet_importer().status())
+        out.update(rt.meet_importer(space).status())
     except Exception as exc:  # storage unavailable: status still answers
         out["status_error"] = f"{type(exc).__name__}: {exc}"
     return out
 
 
-def _status(args: argparse.Namespace, rt: Any) -> int:
-    lang = rt.settings().ui_language
-    st = status_dict(rt)
+def _status(args: argparse.Namespace, rt: Any, space: Optional[str]) -> int:
+    slugs = [space] if space is not None else [s.slug for s in rt.spaces().all()]
+    rows = [status_dict(rt, slug) for slug in slugs]
     if args.json:
-        _print(json.dumps(st, ensure_ascii=False))
+        _print(json.dumps(rows[0] if space is not None else {"spaces": rows}, ensure_ascii=False))
         return 0
+    for st in rows:
+        if space is None:
+            _print(f"[space {st['space']}]")
+        _print_status(st, rt.settings(st["space"]).ui_language)
+    return 0
+
+
+def _print_status(st: dict[str, Any], lang: str) -> None:
     if st["connected"]:
         _print(t("google.status_connected", lang))
     elif st["revoked"]:
@@ -133,14 +138,13 @@ def _status(args: argparse.Namespace, rt: Any) -> int:
                 "last_import_meeting", "records_given_up", "records_given_up_last", "retry_after_until"):
         if key in st:
             _print(t("google.status_line", lang, key=key, value=st[key]))
-    return 0
 
 
-def _sync(args: argparse.Namespace, rt: Any) -> int:
+def _sync(args: argparse.Namespace, rt: Any, space: str) -> int:
     from .google.convert import parse_time
 
-    lang = rt.settings().ui_language
-    if not rt.google_credentials().connected():
+    lang = rt.settings(space).ui_language
+    if not rt.google_credentials(space).connected():
         _print(t("google.not_connected", lang))
         return 1
     since = None
@@ -150,8 +154,8 @@ def _sync(args: argparse.Namespace, rt: Any) -> int:
             _print(t("google.error", lang, error=f"invalid --since {args.since!r} (RFC 3339)"))
             return 2
     try:
-        importer = rt.meet_importer()
-        start = importer.window_start(since=since, days=args.days, connected_at=rt.google_connected_at())
+        importer = rt.meet_importer(space)
+        start = importer.window_start(since=since, days=args.days, connected_at=rt.google_connected_at(space))
         report = importer.sync(ended_after=start, dry_run=args.dry_run)
     except Exception as exc:  # storage unavailable etc.: one line, never a traceback
         _print(t("google.error", lang, error=f"{type(exc).__name__}: {exc}"))
@@ -170,12 +174,12 @@ def _sync(args: argparse.Namespace, rt: Any) -> int:
     return 1 if report.errors else 0
 
 
-def _disconnect(args: argparse.Namespace, rt: Any) -> int:
+def _disconnect(args: argparse.Namespace, rt: Any, space: str) -> int:
     from .google import oauth
     from .google.http import UrllibTransport
 
-    lang = rt.settings().ui_language
-    files = rt.google_files()
+    lang = rt.settings(space).ui_language
+    files = rt.google_files(space)
     token = files.read_token() or {}
     has_grant = bool(token.get("refresh_token") or token.get("access_token"))
     revoked = oauth.revoke(rt.google_transport or UrllibTransport(), token) if has_grant else False

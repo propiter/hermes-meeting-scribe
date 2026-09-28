@@ -14,6 +14,8 @@ from typing import Any, Mapping, Optional, Sequence
 
 from .result import Result
 
+BOT_GUILDS_KV = "discord.bot_guilds"
+
 
 @dataclass(frozen=True)
 class SpaceRow:
@@ -59,8 +61,53 @@ class SpacesMixin:
     def rename_space(self, slug: str, name: str) -> bool:
         return self._x("UPDATE spaces SET name=? WHERE slug=?", (name, slug)).rowcount == 1
 
-    def delete_space_row(self, slug: str) -> bool:
-        return self._x("DELETE FROM spaces WHERE slug=?", (slug,)).rowcount == 1
+    def delete_space_row(self, slug: str, kv_prefixes: Sequence[str] = (), leases: Sequence[str] = ()) -> bool:
+        """Delete an EMPTY space and everything scoped to it (servers, people links, learned maps, the
+        given KV prefixes and leases) in one transaction; ``False`` when it still has meetings."""
+        with self.transaction():
+            if self._x("SELECT 1 FROM meetings WHERE space=? LIMIT 1", (slug,)).fetchone() is not None:
+                return False
+            for table in ("links", "channel_projects", "project_channels"):
+                self._x(f"DELETE FROM {table} WHERE space=?", (slug,))
+            for prefix in kv_prefixes:
+                self._x("DELETE FROM kv WHERE substr(key, 1, ?)=?", (len(prefix), prefix))
+            for name in leases:
+                self._x("DELETE FROM leases WHERE name=?", (name,))
+            return self._x("DELETE FROM spaces WHERE slug=?", (slug,)).rowcount == 1
+
+    def space_counts(self) -> dict[str, dict[str, int]]:
+        """Per space: meetings, and jobs still to do (``queued``/``running``) or ``failed``."""
+        out = {r["slug"]: {"meetings": 0, "queued": 0, "running": 0, "failed": 0}
+               for r in self._x("SELECT slug FROM spaces").fetchall()}
+        for r in self._x("SELECT space, COUNT(*) AS n FROM meetings GROUP BY space").fetchall():
+            if r["space"] in out:
+                out[r["space"]]["meetings"] = r["n"]
+        for r in self._x("SELECT m.space AS space, j.state AS state, COUNT(*) AS n FROM jobs j JOIN meetings m"
+                         " ON m.id=j.meeting_id WHERE j.state IN ('queued','running','failed')"
+                         " GROUP BY m.space, j.state").fetchall():
+            if r["space"] in out:
+                out[r["space"]][r["state"]] = r["n"]
+        return out
+
+    # -- the bot's servers, as last seen by the gateway (doctor, Desktop) ---------------------------
+    def set_bot_guilds(self, guilds: Sequence[tuple[str, str]]) -> None:
+        """Remember the servers the bot is in (written by the gateway at every Discord connect) and
+        refresh the names of assigned servers (a server added by id alone gets its name here)."""
+        with self.transaction():
+            self._x("INSERT INTO kv (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
+                    " value=excluded.value, updated_at=excluded.updated_at",
+                    (BOT_GUILDS_KV, json.dumps([[g, n] for g, n in guilds], ensure_ascii=False), time.time()))
+            for gid, name in guilds:
+                if name:
+                    self._x("UPDATE space_guilds SET name=? WHERE guild_id=?", (name, gid))
+
+    def bot_guilds(self) -> tuple[list[tuple[str, str]], Optional[float]]:
+        """``([(id, name)], seen_at)``; ``([], None)`` before the gateway ever connected to Discord."""
+        row = self._x("SELECT value, updated_at FROM kv WHERE key=?", (BOT_GUILDS_KV,)).fetchone()
+        if row is None:
+            return [], None
+        pairs = json.loads(row["value"] or "[]")
+        return [(str(g), str(n)) for g, n in pairs], float(row["updated_at"])
 
     def space_of_guild(self, guild_id: str) -> Optional[str]:
         row = self._x("SELECT space FROM space_guilds WHERE guild_id=?", (str(guild_id),)).fetchone()
