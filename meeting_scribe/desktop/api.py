@@ -92,8 +92,8 @@ def _ctx(request: Request) -> Iterator[dict[str, Any]]:
     """The OWNER profile's scope + an open repository for one request; domain errors become HTTP errors.
 
     The ``?profile=`` Desktop adds for its active profile is deliberately not used: the plugin's data
-    and settings belong to the profile where it is installed (``meeting_scribe.home``), so every
-    profile shows the same library."""
+    and settings belong to the owner profile (``meeting_scribe.home``), so every profile shows the
+    same library."""
     from ..home import OwnerError
     from ..spaces import SpaceError, bootstrap
     from ..storage.repo import Repository
