@@ -18,8 +18,8 @@ from ..domain.errors import (ChannelUnavailable, DirectMessageUnavailable, Forum
                              NotPrivate, SinkUnavailable)
 from ..domain.models import Candidate
 from ..i18n import t
-from .auth import (MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, TASK_ACTIONS, check_private,
-                   check_task)
+from .auth import (MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, TASK_ACTIONS, check_dm,
+                   check_private, check_task)
 from .render import ButtonSpec, custom_id
 
 log = logging.getLogger(__name__)
@@ -121,10 +121,14 @@ class ButtonActions:
     async def _deny(self, interaction: Any, message: str) -> None:
         await interaction.response.send_message(clip_reply(message), ephemeral=True)
 
-    async def _private_gate(self, interaction: Any, action: str, meeting_id: str) -> Optional[bool]:
-        """A private meeting's buttons work only inside its channel, for who can see it (DESIGN §19.2).
+    async def _private_gate(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> Optional[bool]:
+        """A private meeting's buttons work only inside its channel, for who can see it (DESIGN §19.2); a
+        direct-messages meeting's only in the clicker's own copy, on their own tasks (§19.3).
         ``False``: refused (answered); ``True``: a share action, allowed; ``None``: go on with the task rules."""
         try:
+            recipients = await self._sink().dm_recipients(meeting_id)
+            if recipients is not None:
+                return await self._dm_gate(interaction, action, meeting_id, item_id, recipients)
             place = await self._sink().private_place(meeting_id)
         except Exception:  # cannot tell whether it is private: fail closed
             log.exception("meeting-scribe: privacy check of %s failed", meeting_id)
@@ -141,8 +145,18 @@ class ButtonActions:
             return False
         return True if action in SHARE_ACTIONS else None
 
+    async def _dm_gate(self, interaction: Any, action: str, meeting_id: str, item_id: str,
+                       recipients: dict[str, str]) -> Optional[bool]:
+        item = (None if item_id == "all" or action in OPEN_ACTIONS
+                else await asyncio.to_thread(self._service().repo.get_action_item, meeting_id, item_id))
+        verdict = check_dm(interaction, recipients, action, item, self.lang)
+        if not verdict.allowed:
+            await self._deny(interaction, verdict.message)
+            return False
+        return True if action in SHARE_ACTIONS else None
+
     async def _authorize(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> bool:
-        gate = await self._private_gate(interaction, action, meeting_id)
+        gate = await self._private_gate(interaction, action, meeting_id, item_id)
         if gate is not None:
             return gate
         if action in OPEN_ACTIONS:

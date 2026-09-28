@@ -269,6 +269,19 @@ def render_index(meeting: Meeting, views: Sequence[TaskView], threads: Mapping[O
     return MessageSpec(_clip("\n".join(lines), MESSAGE_LIMIT), buttons if views else ())
 
 
+def render_dm_index(meeting: Meeting, views: Sequence[TaskView], user_id: str, lang: str) -> MessageSpec:
+    """A direct-messages meeting (DESIGN §19.3): every task of the meeting with its assignee, and how many
+    are the reader's (those follow, one message each, with their buttons). No button: nothing here acts."""
+    mine = sum(1 for v in views if str(v.item.owner_speaker_id or "") == str(user_id))
+    lines = [f"## 📋 {t('tasks.index_title', lang)} · {len(views)}", f"✉️ {t('dm.index_note', lang)}"]
+    if views:
+        lines += [f"- {_ICON[v.item.status]} {_clip(v.item.title, 120)} — {_who(v.item, lang)}" for v in views]
+        lines.append(f"-# {t('dm.index_mine', lang, count=mine)}")
+    else:
+        lines.append(t("notes.none", lang))
+    return MessageSpec(_clip("\n".join(lines), MESSAGE_LIMIT))
+
+
 # -- panel -----------------------------------------------------------------------------------------
 def render_panel(meeting: Meeting, views: Sequence[TaskView], *, user_id: str, scope: str, page: int,
                  o: RenderOptions, is_owner: bool, link: str = "") -> TaskPanel:

@@ -211,6 +211,12 @@ def check_delivery(env: Any) -> Check:
     dm_notes = dm_getter() if callable(dm_getter) else {}
     if dm_notes:
         problems.append(f"{len(dm_notes)} meeting(s) still in a direct message: {next(iter(dm_notes.values()))}")
+    unreachable_getter = getattr(svc, "dm_unreachable", None)
+    unreachable = unreachable_getter() if callable(unreachable_getter) else {}
+    if unreachable:
+        mid, why = next(iter(unreachable.items()))
+        problems.append(f"{len(unreachable)} direct-messages meeting(s) did not reach every participant "
+                        f"({mid}: {why})")
     if waiting:
         first = next(iter(waiting.values()))
         return Check.warn("; ".join(parts + [f"{len(waiting)} meeting(s) waiting for a channel: {first}"] + problems))

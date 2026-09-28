@@ -39,6 +39,7 @@ from ..config import Settings
 from ..domain.models import KV_DM_NOTES, KV_MOVE_FROM_DM, Meeting, Notes, is_discord_user_id
 from ..i18n import t
 from .board import Board, build_board
+from .dm_delivery import DmDelivery
 from .destination import (MAX_FORUM_TAGS, Destination, DestinationPending, channel_key, explicit_channel, is_forum,
                           pick_tags, same_guild, tag_names, tag_rejected)
 from .guild import snapshot_channels
@@ -114,8 +115,13 @@ class TaskPublisher:
         if not await self.is_private(meeting):
             return board
         ptrs = Pointers(self.repo, meeting.id)
-        return await with_sharing(board, ptrs, dm_on=self.settings.delivery_dm_assignees,
-                                  notes_place=await self.private_place(meeting, ptrs))
+        # a direct-messages meeting never sends a task to someone: every participant already has it all
+        dm_on = self.settings.delivery_dm_assignees and not await self.is_dm(meeting)
+        return await with_sharing(board, ptrs, dm_on=dm_on, notes_place=await self.private_place(meeting, ptrs))
+
+    async def is_dm(self, meeting: Meeting) -> bool:
+        """Delivered by direct message only (DESIGN §19.3)."""
+        return bool(await asyncio.to_thread(privacy.is_dm, self.repo, self.settings, meeting))
 
     async def private_place(self, meeting: Meeting, ptrs: Pointers) -> set[str]:
         """The private notes channel of a meeting: its anchored channel (recorded once published, never
@@ -682,7 +688,10 @@ class TaskPublisher:
                       move_from_dm: bool = False) -> str:
         """``attach_transcript`` marks the pipeline's DELIVER; ``move_from_dm`` an explicit
         ``reprocess --from deliver`` (the only way a meeting leaves a DM). A move is finished — DM
-        messages deleted — only by a DELIVER, after everything new was posted."""
+        messages deleted — only by a DELIVER, after everything new was posted. A direct-messages
+        meeting (DESIGN §19.3) takes its own path and never touches a channel."""
+        if await self.is_dm(meeting):
+            return (await DmDelivery(self).publish(meeting, notes, deliver=attach_transcript)).url
         ptrs = Pointers(self.repo, meeting.id)
         if await self.is_private(meeting):  # anything posted before it became private leaves public places
             await withdraw_public(self, ptrs, await self.private_place(meeting, ptrs))

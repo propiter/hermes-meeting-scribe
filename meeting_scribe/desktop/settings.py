@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Optional
 
-from .. import doctor, llm_config
+from .. import doctor, llm_config, privacy
 from ..config import (DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, space_keys,
                       validate_value)
 from ..llm_config import redact
@@ -247,7 +247,9 @@ class DashboardDoctorEnv:
         return SimpleNamespace(
             repo=repo,
             waiting_destination=lambda: {k[len(WAITING_KV):]: v for k, v in repo.kv_prefix(WAITING_KV).items()},
-            dm_notes=lambda: {k[len(KV_DM_NOTES):]: v for k, v in repo.kv_prefix(KV_DM_NOTES).items()})
+            dm_notes=lambda: {k[len(KV_DM_NOTES):]: v for k, v in repo.kv_prefix(KV_DM_NOTES).items()},
+            dm_unreachable=lambda: {k[len(privacy.DM_UNREACHABLE_KV):]: v
+                                    for k, v in repo.kv_prefix(privacy.DM_UNREACHABLE_KV).items()})
 
     def meet_importer(self, space: Optional[str] = None) -> Any:
         from ..google.importer import status_kv

@@ -305,7 +305,7 @@ def get_status(request: Request, space: str = SpaceParam) -> dict[str, Any]:
         out["worker"] = machine["worker"]
         out["queue"] = machine["counts"]
         if slug is None:
-            out.update({"counts": machine["counts"], "jobs": [], "waiting_destination": [], "dm_notes": [],
+            out.update({"counts": machine["counts"], "jobs": [], "waiting_destination": [], "dm_notes": [], "dm_unreachable": [],
                         "commands": []})
         settings = _spaces(c).settings(slug)
         out["space"] = slug

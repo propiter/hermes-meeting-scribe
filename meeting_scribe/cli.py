@@ -240,6 +240,8 @@ def _status(args: argparse.Namespace, rt: CliRuntime) -> int:
         _print(f"! {mid}: {reason}")
     for mid, reason in (st.get("dm_notes") or {}).items():
         _print(f"! {mid}: {reason}")
+    for mid, reason in (st.get("dm_unreachable") or {}).items():
+        _print(f"! {mid}: {reason}")
     return 0
 
 

@@ -111,7 +111,7 @@ class Stages:
 
         rule = rule_for(self.settings(meeting.space), meeting)
         if marks_private(rule):
-            remember(self.repo, meeting.id, rule.origin, "")
+            remember(self.repo, meeting.id, rule.origin, "", dm=rule.dm)
 
     def discard(self, meeting: Meeting) -> Meeting:
         """End a meeting in which no voice was captured (DESIGN §9, ``empty``).

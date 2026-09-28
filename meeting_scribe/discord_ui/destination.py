@@ -200,6 +200,7 @@ class Destination:
     rule: str = ""  # the ``meeting_routes`` origin that decided the notes channel ("" = none)
     private: bool = False  # that rule is private: nothing leaves the notes channel by itself
     held: bool = False  # a private meeting anchored to its channel whose rule now says otherwise: DELIVER waits
+    dm: bool = False  # direct messages only (DESIGN §19.3): no notes channel at all, nothing is pending for it
 
     def report(self) -> dict[str, Any]:
         g = self.guild
@@ -208,7 +209,7 @@ class Destination:
                           "source": self.guild_source},
                 "steps": [s.to_dict() for s in self.steps], "targets": list(self.targets),
                 "fallback_channel": self.fallback_channel or "", "problem": self.problem,
-                "warnings": list(self.warnings), "rule": self.rule, "private": self.private}
+                "warnings": list(self.warnings), "rule": self.rule, "private": self.private, "dm": self.dm}
 
 
 def _guilds(client: Any, allowed: Optional[frozenset[str]] = None) -> list[Any]:
@@ -423,8 +424,8 @@ def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optio
     imported = meeting.source == SOURCE_GOOGLE_MEET or not meeting.guild_id
     rule = match_route(meeting, s.routes())
     if rule is not None:  # the rule's channel and nothing else (DESIGN §19.2)
-        d.rule, d.private = rule.origin, rule.private
-        keys: tuple[tuple[str, str], ...] = ((route_key(rule), rule.channel),)
+        d.rule, d.private, d.dm = rule.origin, rule.private, rule.dm
+        keys: tuple[tuple[str, str], ...] = () if rule.dm else ((route_key(rule), rule.channel),)
         if rule.error:
             d.guild_source = "none"
             d.steps.append(Resolved(route_key(rule), "", "invalid", detail=f"{route_key(rule)}: {rule.error}"))
@@ -518,7 +519,7 @@ def _finish_rule(client: Any, d: Destination, s: Settings, meeting: Meeting, gui
         if fb.channel_id:
             d.warnings += _explicit_warnings(client, fb, s)
         d.warnings += _project_forum_warnings(client, s, guild)
-    if not d.targets:
+    if not d.targets and not d.dm:
         d.problem = pending_reason(meeting, d)
     return d
 
@@ -529,9 +530,11 @@ def resolve_routes(client: Any, s: Settings, allowed: Optional[frozenset[str]] =
     out: list[dict[str, Any]] = []
     for rule in s.routes():
         row: dict[str, Any] = {"origin": rule.origin, "kind": rule.kind, "channel": rule.channel,
-                               "private": rule.private, "status": "invalid" if rule.error else "",
+                               "private": rule.private, "mode": rule.mode, "status": "invalid" if rule.error else "",
                                "detail": rule.error}
-        if not rule.error:
+        if rule.dm and not rule.error:
+            row.update(status="ok", target_kind="dm")
+        elif not rule.error:
             step = _check_id(client, resolve_setting(client, route_key(rule), rule.channel, None, allowed), None,
                              allowed)
             ch = _cached_channel(client, step.channel_id or "")

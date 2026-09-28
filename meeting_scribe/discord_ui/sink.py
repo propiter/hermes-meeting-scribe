@@ -122,6 +122,8 @@ class DiscordNotesSink:
             return dest
         anchor = str(rec.get("channel") or "")
         rule = str(rec.get("rule") or dest.rule or "")
+        if privacy.is_dm_record(rec):  # anchored to direct messages: no channel, whatever the rules say now
+            return Destination(guild=dest.guild, guild_source=dest.guild_source, rule=rule, private=True, dm=True)
         if not anchor:
             if dest.private:
                 return dest  # not published yet: the private rule's channel
@@ -181,7 +183,10 @@ class DiscordNotesSink:
             private = await pub.is_private(meeting)
             rule = privacy.rule_for(self._settings(meeting), meeting)
             if private and (rule is None or privacy.marks_private(rule)):
-                await asyncio.to_thread(privacy.remember, self._service().repo, meeting.id, dest.rule, "")
+                await asyncio.to_thread(privacy.remember, self._service().repo, meeting.id, dest.rule, "",
+                                        dm=bool(rule is not None and rule.dm))
+            if dest.dm:  # direct messages only (DESIGN §19.3): never a channel, never the paths below
+                return await pub.publish(meeting, notes, send_dms=True, attach_transcript=True)
             # a private meeting that waits (anchored and its rule changed, or no usable channel) still leaves
             # every public place; what is inside its private channel stays
             if dest.held or (not dest.targets and (not ptr or private)):
@@ -259,6 +264,14 @@ class DiscordNotesSink:
         repo = self._service().repo
         place = await asyncio.to_thread(privacy.allowed_places, repo, meeting, self._settings(meeting))
         return place | await self._publisher(meeting).private_place(meeting, Pointers(repo, meeting_id))
+
+    async def dm_recipients(self, meeting_id: str) -> Optional[dict[str, str]]:
+        """``{recipient: their DM channel}`` of a direct-messages meeting (``None``: not one) — buttons."""
+        meeting = await asyncio.to_thread(self._service().repo.get_meeting, meeting_id)
+        if meeting is None or not await asyncio.to_thread(privacy.is_dm, self._service().repo,
+                                                          self._settings(meeting), meeting):
+            return None
+        return await asyncio.to_thread(privacy.dm_copies, self._service().repo, meeting_id)
 
     async def _private_board(self, meeting_id: str) -> tuple[TaskPublisher, Board]:
         got = await self.board(meeting_id)

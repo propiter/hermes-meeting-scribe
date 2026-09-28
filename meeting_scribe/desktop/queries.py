@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..privacy import DM_UNREACHABLE_KV
 from ..domain.models import KV_DM_NOTES, SOURCE_DISCORD, SOURCE_GOOGLE_MEET, MeetingState
 from ..llm_config import redact, safe_url
 from ..storage.layout import Layout
@@ -402,12 +403,16 @@ class Library:
                    if self._mine(k[len(WAITING_KV):])}
         dm_notes = {k[len(KV_DM_NOTES):]: v for k, v in self.repo.kv_prefix(KV_DM_NOTES).items()
                     if self._mine(k[len(KV_DM_NOTES):])}
+        unreachable = {k[len(DM_UNREACHABLE_KV):]: v for k, v in self.repo.kv_prefix(DM_UNREACHABLE_KV).items()
+                       if self._mine(k[len(DM_UNREACHABLE_KV):])}
         return {"worker": {"state": worker, "last_seen": seen},
                 "counts": {s: sum(1 for j in jobs if j["state"] == s) for s in ("running", "queued", "failed")},
                 "jobs": jobs[:100],
                 "waiting_destination": [{"meeting_id": k, "title": title(k), "detail": redact(v)}
                                         for k, v in waiting.items()],
                 "dm_notes": [{"meeting_id": k, "title": title(k), "detail": redact(v)} for k, v in dm_notes.items()],
+                "dm_unreachable": [{"meeting_id": k, "title": title(k), "detail": redact(v)}
+                                   for k, v in unreachable.items()],
                 "commands": commands}
 
 

@@ -9,6 +9,10 @@ the chat commands. Local files (the meeting folder, Obsidian) are not affected.
 A private meeting is readable from chat only in its own place: the notes channel (or the forum post /
 the thread holding its tasks), see :func:`allowed_places` — the CLI and Desktop always see it; a cron
 job or any context without a known local source never does (:class:`Reader`).
+
+A DIRECT-MESSAGES meeting (a ``:dm`` rule, DESIGN §19.3) is private too, with no channel at all: its
+record says ``mode: dm`` and, once delivered, lists its ``recipients`` (the participants it was sent
+to, fixed from then on: the anchor). Its only places are those participants' DM channels.
 """
 from __future__ import annotations
 
@@ -18,8 +22,9 @@ from typing import Any, Iterable, Optional
 
 from .domain.models import Meeting
 
-KV_PRIVATE = "privacy.private."  # + meeting id -> {"rule": origin, "channel": notes channel id}
+KV_PRIVATE = "privacy.private."  # + meeting id -> {"rule", "channel"} or {"rule", "mode": "dm", "recipients"}
 NOTES_POINTER = "mtg:{id}:notes"
+DM_COPY_PREFIX = "pdm:"  # + user id + ":" + suffix: a participant's copy of a direct-messages meeting
 
 
 def record(repo: Any, meeting_id: str) -> Optional[dict[str, Any]]:
@@ -39,13 +44,39 @@ def anchor(repo: Any, meeting_id: str, channel: str) -> None:
     repo.kv_set(KV_PRIVATE + meeting_id, json.dumps({"rule": current.get("rule", ""), "channel": channel}))
 
 
-def remember(repo: Any, meeting_id: str, rule: str, channel: str) -> None:
+def remember(repo: Any, meeting_id: str, rule: str, channel: str, *, dm: bool = False) -> None:
     """Sticky: once private, always private. The channel is recorded once, when it becomes known, and
-    from then on the meeting is anchored there: only :func:`anchor` (the admin) changes it."""
+    from then on the meeting is anchored there: only :func:`anchor` (the admin) changes it. ``dm``: a
+    ``:dm`` rule matched a meeting not recorded yet — it is a direct-messages meeting from now on, and
+    such a meeting never gets a channel this way."""
     current = record(repo, meeting_id) or {}
-    wanted = {"rule": rule or current.get("rule", ""), "channel": current.get("channel") or channel or ""}
+    wanted = {**current, "rule": rule or current.get("rule", ""), "channel": current.get("channel") or channel or ""}
+    if dm and not current:
+        wanted.update(mode="dm", recipients=[])
+    if is_dm_record(wanted):
+        wanted["channel"] = ""
     if wanted != current:
         repo.kv_set(KV_PRIVATE + meeting_id, json.dumps(wanted))
+
+
+def is_dm_record(rec: Optional[dict[str, Any]]) -> bool:
+    """The record says direct messages only (its ``recipients`` are fixed once it is delivered)."""
+    return bool(rec) and rec.get("mode") == "dm"
+
+
+def anchor_dm(repo: Any, meeting_id: str, rule: str, recipients: Iterable[str]) -> list[str]:
+    """Anchor a meeting to direct messages with ``recipients`` (its first delivery, DESIGN §19.3) and
+    return the recipients it is anchored to. Sticky like :func:`remember`: an existing DM anchor keeps
+    its list, and a meeting already anchored to a channel is never turned into a DM meeting here."""
+    current = record(repo, meeting_id) or {}
+    if is_dm_record(current) and current.get("recipients"):
+        return [str(u) for u in current["recipients"]]
+    if current.get("channel"):
+        raise ValueError(f"meeting {meeting_id} is anchored to channel {current['channel']}")
+    people = [str(u) for u in dict.fromkeys(recipients)]
+    repo.kv_set(KV_PRIVATE + meeting_id, json.dumps({"rule": rule or current.get("rule", ""), "channel": "",
+                                                     "mode": "dm", "recipients": people}))
+    return people
 
 
 def rule_for(settings: Any, meeting: Meeting) -> Any:
@@ -67,6 +98,71 @@ def is_private(repo: Any, settings: Any, meeting: Meeting) -> bool:
     return bool(rule is not None and rule.private)
 
 
+def is_dm(repo: Any, settings: Any, meeting: Meeting) -> bool:
+    """Delivered by direct message only: anchored so, or — before any anchor — a ``:dm`` rule matches.
+    A meeting anchored to a private channel stays a channel meeting whatever the rule says now."""
+    rec = record(repo, meeting.id)
+    if is_dm_record(rec):
+        return True
+    if rec is not None and rec.get("channel"):
+        return False
+    rule = rule_for(settings, meeting)
+    return bool(rule is not None and getattr(rule, "dm", False))
+
+
+DM_UNREACHABLE_KV = "privacy.dm_unreachable."  # + meeting id -> who did not get the copy, and how to fix it
+
+
+def participants(repo: Any, meeting: Meeting) -> tuple[list[str], list[str]]:
+    """``(discord user ids, names that could not be mapped)`` of the humans of a meeting: who spoke or
+    was in the call (``Meeting.human_speakers``). An imported speaker (Google Meet, ``gmeet:…``) counts
+    when exactly one person link of the meeting's space (``/meeting link``) has that name."""
+    from .domain.models import is_discord_user_id
+    from .domain.text import fold
+
+    links = repo.list_links(meeting.space) if hasattr(repo, "list_links") else []
+    by_name: dict[str, set[str]] = {}
+    for link in links:
+        for value in (link.get("name"), link.get("email")):
+            if value and str(value).strip():
+                by_name.setdefault(fold(" ".join(str(value).split())), set()).add(str(link["discord_user_id"]))
+    found: list[str] = []
+    unmapped: list[str] = []
+    for sp in meeting.human_speakers:
+        if is_discord_user_id(sp.user_id):
+            found.append(str(sp.user_id))
+            continue
+        hits = by_name.get(fold(" ".join(str(sp.name or "").split())), set())
+        if len(hits) == 1:
+            found.append(next(iter(hits)))
+        else:
+            unmapped.append(str(sp.name or sp.user_id))
+    return list(dict.fromkeys(found)), unmapped
+
+
+def dm_copies(repo: Any, meeting_id: str) -> dict[str, str]:
+    """``{recipient: DM channel}`` of the anchored recipients' delivered copies (nobody else's)."""
+    people = {str(u) for u in (record(repo, meeting_id) or {}).get("recipients") or ()}
+    return {uid: cid for uid, cid in dm_channels(repo, meeting_id).items() if uid in people}
+
+
+def dm_channels(repo: Any, meeting_id: str) -> dict[str, str]:
+    """``{user id: DM channel id}`` of the copies of a direct-messages meeting delivered so far."""
+    prefix = f"mtg:{meeting_id}:{DM_COPY_PREFIX}"
+    out: dict[str, str] = {}
+    for row in repo.list_deliveries(meeting_id, sink="discord", prefix=prefix):
+        uid, _, suffix = str(row["key"])[len(prefix):].partition(":")
+        if suffix != "notes" or not row.get("external_id"):
+            continue
+        try:
+            ptr = json.loads(row["external_id"])
+        except ValueError:
+            continue
+        if isinstance(ptr, dict) and ptr.get("channel"):
+            out[uid] = str(ptr["channel"])
+    return out
+
+
 def allowed_places(repo: Any, meeting: Meeting, settings: Any) -> set[str]:
     """Chat ids from where a private meeting may be read: its anchored channel (the recorded one) and
     the forum post or thread holding it. Only before the channel is recorded, the rule's channel id —
@@ -75,6 +171,8 @@ def allowed_places(repo: Any, meeting: Meeting, settings: Any) -> set[str]:
 
     out: set[str] = set()
     rec = record(repo, meeting.id) or {}
+    if is_dm_record(rec):  # only the DMs of the participants it was sent to (DESIGN §19.3)
+        return set(dm_copies(repo, meeting.id).values())
     if rec.get("channel"):
         out.add(str(rec["channel"]))
     else:

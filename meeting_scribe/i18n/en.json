@@ -374,5 +374,11 @@
   "cli.private_move_not_private": "Meeting {id} is not private; nothing to move.",
   "cli.private_move_done": "Private meeting {id} now belongs to channel {channel}; it is delivered there again and removed from its previous channel. Make sure the channel is private and that meeting_routes points to it, or its delivery waits.",
   "share.withdrawn": "🔒 Content withdrawn.",
-  "share.withdrawn_name": "Content withdrawn"
+  "share.withdrawn_name": "Content withdrawn",
+  "dm.unreachable": "Could not send it to these participants (direct messages closed or unknown user): {users}.",
+  "dm.unmapped": "{count} participant(s) match no Discord user (link them with /meeting link).",
+  "dm.index_note": "This meeting goes only by direct message: every participant got this same copy.",
+  "dm.index_mine": "{count} of these tasks are yours: they follow below, with their buttons.",
+  "dm.only_own_copy": "This meeting went by direct message: use the buttons in your own copy.",
+  "dm.only_own_tasks": "In a meeting sent by direct message you can only act on your own tasks."
 }

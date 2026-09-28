@@ -63,9 +63,13 @@ class Sink:
     def __init__(self):
         self.calls = []
         self.place = None  # a set of channel ids: the meeting is private
+        self.dm = None  # {user id: DM channel id}: the meeting went by direct message only
 
     async def private_place(self, mid):
         return self.place
+
+    async def dm_recipients(self, mid):
+        return self.dm
 
     async def share(self, mid, iid, how):
         self.calls.append(("share", mid, iid, how))

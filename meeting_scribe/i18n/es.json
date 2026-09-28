@@ -374,5 +374,11 @@
   "cli.private_move_not_private": "La reunión {id} no es privada; no hay nada que mover.",
   "cli.private_move_done": "La reunión privada {id} pasa al canal {channel}; se vuelve a entregar allí y se retira de su canal anterior. Comprueba que el canal es privado y que meeting_routes apunta a él, o su entrega queda en espera.",
   "share.withdrawn": "🔒 Contenido retirado.",
-  "share.withdrawn_name": "Contenido retirado"
+  "share.withdrawn_name": "Contenido retirado",
+  "dm.unreachable": "No se pudo enviar a estos participantes (mensajes directos cerrados o usuario desconocido): {users}.",
+  "dm.unmapped": "{count} participante(s) no coinciden con ningún usuario de Discord (vincúlalos con /meeting link).",
+  "dm.index_note": "Esta reunión va solo por mensaje directo: cada participante recibió esta misma copia.",
+  "dm.index_mine": "{count} de estas tareas son tuyas: van a continuación, con sus botones.",
+  "dm.only_own_copy": "Esta reunión se envió por mensaje directo: usa los botones de tu propia copia.",
+  "dm.only_own_tasks": "En una reunión enviada por mensaje directo solo puedes actuar sobre tus propias tareas."
 }

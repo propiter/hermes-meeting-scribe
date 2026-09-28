@@ -9,6 +9,11 @@ Buttons on a public message are visible to everyone, so every click is checked a
   owners or users Hermes authorizes) keep their 0.1 rule;
 * ``mine``/``pg`` (the personal panel) are open to everyone: it only ever shows the clicker's tasks.
 
+A DIRECT-MESSAGES meeting (DESIGN §19.3) is stricter: a button works only in the direct message the
+bot sent to the clicker for that meeting, and only on the clicker's own tasks — nobody acts on (or
+shares) someone else's task, owners included; everyone already has the whole meeting. ``shp`` (share
+MY task in its project channel) is the only share button; Kanban keeps its owners-only rule.
+
 A PRIVATE meeting (DESIGN §19.2) adds one gate to every button: the click must come from the meeting's
 private channel (or its thread / forum post) and the clicker must be able to see that channel. The share
 buttons (``shd`` to the assignee, ``shp`` to the project channel, ``sha``/``shc`` share everything) are
@@ -61,6 +66,24 @@ def check_private(interaction: Any, place: set[str], lang: str) -> Verdict:
         return Verdict(False, t("share.only_in_private", lang))
     if not can_view(interaction):
         return Verdict(False, t("share.not_member", lang))
+    return Verdict(True)
+
+
+def check_dm(interaction: Any, recipients: dict[str, str], action: str, item: Optional[ActionItem],
+             lang: str) -> Verdict:
+    """A button of a direct-messages meeting: pressed in the clicker's own copy (``recipients``: user id ->
+    their DM channel), on a task assigned to the clicker. Meeting-wide buttons are refused."""
+    uid = str(getattr(getattr(interaction, "user", None), "id", "") or "")
+    here = _ids(getattr(interaction, "channel", None)) | ({str(interaction.channel_id)}
+                                                         if getattr(interaction, "channel_id", None) else set())
+    if getattr(interaction, "guild", None) is not None or not uid or recipients.get(uid) not in here:
+        return Verdict(False, t("dm.only_own_copy", lang))
+    if action in OPEN_ACTIONS:
+        return Verdict(True)
+    if action not in TASK_ACTIONS | {"shp"} or item is None:
+        return Verdict(False, t("dm.only_own_tasks", lang))
+    if str(item.owner_speaker_id or "") != uid:
+        return Verdict(False, t("dm.only_own_tasks", lang))
     return Verdict(True)
 
 

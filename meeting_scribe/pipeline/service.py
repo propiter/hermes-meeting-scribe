@@ -120,7 +120,8 @@ class MeetingService:
             if row["id"] in waiting:
                 row["delivery"] = {"state": "waiting_destination", "reason": waiting[row["id"]]}
         return {"queued": self.repo.pending_job_count(space), "worker_running": self.runner.running, "recent": rows,
-                "waiting_destination": waiting, "dm_notes": self._in_space(self.dm_notes(), space)}
+                "waiting_destination": waiting, "dm_notes": self._in_space(self.dm_notes(), space),
+                "dm_unreachable": self._in_space(self.dm_unreachable(), space)}
 
     def _in_space(self, by_meeting: dict[str, str], space: Optional[str]) -> dict[str, str]:
         if space is None:
@@ -149,6 +150,12 @@ class MeetingService:
         from ..domain.models import KV_DM_NOTES
 
         return {k[len(KV_DM_NOTES):]: v for k, v in self.repo.kv_prefix(KV_DM_NOTES).items()}
+
+    def dm_unreachable(self) -> dict[str, str]:
+        """Direct-messages meetings (DESIGN §19.3) some participant did not get: id -> who, and why."""
+        from ..privacy import DM_UNREACHABLE_KV
+
+        return {k[len(DM_UNREACHABLE_KV):]: v for k, v in self.repo.kv_prefix(DM_UNREACHABLE_KV).items()}
 
     def waiting_destination(self) -> dict[str, str]:
         """Meetings whose delivery waits for a Discord channel (DESIGN §19): id -> instruction."""

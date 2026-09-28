@@ -472,6 +472,10 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
         row = self._x("SELECT * FROM links WHERE space=? AND discord_user_id=?", (space, discord_user_id)).fetchone()
         return dict(row) if row else None
 
+    def list_links(self, space: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._x("SELECT * FROM links WHERE space=? ORDER BY discord_user_id",
+                                         (space,)).fetchall()]
+
     def learn_channel_project(self, space: str, channel_id: str, project_key: str, project_name: str) -> None:
         self._x("INSERT INTO channel_projects (space, channel_id, project_key, project_name, updated_at)"
                 " VALUES (?,?,?,?,?) ON CONFLICT(space, channel_id) DO UPDATE SET project_key=excluded.project_key,"

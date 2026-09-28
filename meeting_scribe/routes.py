@@ -1,6 +1,6 @@
 """Per-meeting notes destinations (``meeting_routes``, DESIGN §19.2) — pure, no discord.py.
 
-One rule per entry, ``<origin> = <channel>[:private]``:
+One rule per entry, ``<origin> = <channel>[:private]`` or ``<origin> = :dm``:
 
 * origin — which meetings the rule covers:
   ``<voice channel id>`` · ``<voice channel name>`` (``#`` optional) · ``category:<id or name>`` (every
@@ -9,6 +9,10 @@ One rule per entry, ``<origin> = <channel>[:private]``:
 * channel — where the notes go: a text/announcement/forum channel id, ``<#id>`` or name.
 * ``:private`` (also ``:privado``/``:privada``) — PRIVATE mode: everything stays in that channel and
   tasks leave it only when a member presses a share button.
+* ``:dm`` instead of a channel (also ``dm``, ``:directo``/``directo``, ``:mensajes``/``mensajes``) —
+  DIRECT-MESSAGES-ONLY mode (DESIGN §19.3): nothing is posted in any channel; every participant gets
+  the whole meeting in a DM. It is private in every other respect. A channel literally called ``dm``
+  is written ``#dm``.
 
 Precedence among rules: a voice channel rule beats a category rule; within the same kind, the first in
 the list wins. A meeting a private rule matched when it was recorded stays private for good (the sticky
@@ -16,10 +20,10 @@ record of :mod:`meeting_scribe.privacy`).
 
 Loading is lenient but FAILS CLOSED: an entry whose origin is readable but whose channel or option is
 not becomes a *broken* rule that still matches — its meetings are treated as private and their
-delivery waits with the reason. An unreadable entry that mentions a private mark anywhere
-(``private``/``privado``/``privada``) whose origin cannot be read becomes a broken rule for EVERY
-meeting of the space (kind ``any``): all of them wait until it is fixed. An unreadable entry without
-a private mark is dropped with a warning.
+delivery waits with the reason. An unreadable entry that mentions a private or direct-message mark
+anywhere (``private``/``privado``/``privada``, ``dm``/``directo``/``mensajes``) whose origin cannot be
+read becomes a broken rule for EVERY meeting of the space (kind ``any``): all of them wait until it is
+fixed. An unreadable entry without such a mark is dropped with a warning.
 """
 from __future__ import annotations
 
@@ -33,7 +37,10 @@ from .domain.names import clean_channel_name
 from .domain.text import fold, is_ascii_digits
 
 PRIVATE_FLAGS = frozenset({"private", "privado", "privada"})
+DM_WORDS = frozenset({"dm", "directo", "mensajes"})
 _PRIVATE_MARK_RE = re.compile(r"(?<![a-z0-9])priv(?:ate|ado|ada)(?![a-z0-9])", re.IGNORECASE)
+_DM_MARK_RE = re.compile(r"(?<![a-z0-9#])(?:dm|directo|mensajes)(?![a-z0-9])", re.IGNORECASE)
+MODES = ("normal", "private", "dm")
 CATEGORY_PREFIXES = ("category:", "categoria:", "categoría:")
 MEET_PREFIX = "meet:"
 _SEP_RE = re.compile(r"[-_\s]+")
@@ -46,6 +53,16 @@ _RANK = {"any": -1, "voice": 0, "category": 1, "meet": 0}
 def has_private_mark(entry: str) -> bool:
     """``private``/``privado``/``privada`` as a word anywhere in ``entry``."""
     return bool(_PRIVATE_MARK_RE.search(str(entry or "")))
+
+
+def has_dm_mark(text: str) -> bool:
+    """``dm``/``directo``/``mensajes`` as a word (not a ``#dm`` channel name) anywhere in ``text``."""
+    return bool(_DM_MARK_RE.search(str(text or "")))
+
+
+def is_dm_target(dest: str) -> bool:
+    """The right side of a rule asks for direct messages: ``:dm``/``dm`` (or ``directo``/``mensajes``)."""
+    return str(dest or "").strip().lower().removeprefix(":").strip() in DM_WORDS
 
 
 def norm_name(name: str) -> str:
@@ -61,6 +78,12 @@ class MeetingRoute:
     channel: str  # notes channel id or name ("" = broken rule)
     private: bool
     error: str = ""  # why a broken rule cannot be used (its meetings wait, as private)
+    dm: bool = False  # direct messages only (no channel; ``private`` is True too), DESIGN §19.3
+
+    @property
+    def mode(self) -> str:
+        """``normal`` | ``private`` | ``dm``."""
+        return "dm" if self.dm else "private" if self.private else "normal"
 
     @property
     def by_id(self) -> bool:
@@ -77,7 +100,9 @@ class MeetingRoute:
 
     @property
     def text(self) -> str:
-        """Canonical entry: ``origin=channel[:private]`` (names get a ``#``)."""
+        """Canonical entry: ``origin=channel[:private]`` or ``origin=:dm`` (names get a ``#``)."""
+        if self.dm:
+            return f"{self.origin}=:dm"
         channel = self.channel if not self.channel or is_ascii_digits(self.channel) else f"#{self.channel}"
         return f"{self.origin}={channel}" + (":private" if self.private else "")
 
@@ -128,14 +153,19 @@ def parse_route(entry: str) -> MeetingRoute:
 
     origin, sep, dest = str(entry).rpartition("=")
     if not sep or not origin.strip():
-        raise ValueError(f"expected 'origin = #channel' (optionally ':private'), got {entry!r}")
+        raise ValueError(f"expected 'origin = #channel' (optionally ':private') or 'origin = :dm', got {entry!r}")
     kind, ref = parse_origin(origin)
+    if is_dm_target(dest):
+        return MeetingRoute(kind, ref, "", True, dm=True)
     channel, colon, flag = dest.rpartition(":")
     if not colon:
         channel, flag = dest, ""
     flag = flag.strip().lower()
+    if flag in DM_WORDS or is_dm_target(channel):
+        raise ValueError(f"{origin.strip()}: ':dm' (direct messages only) takes no channel and no other option: "
+                         f"write 'origin = :dm' (a channel called dm is written '#dm'), got {entry!r}")
     if flag and flag not in PRIVATE_FLAGS:
-        raise ValueError(f"{origin.strip()}: unknown option {flag!r} (the only option is ':private')")
+        raise ValueError(f"{origin.strip()}: unknown option {flag!r} (the options are ':private' and ':dm')")
     if not flag and has_private_mark(entry):
         raise ValueError(f"{origin.strip()}: 'private' must be written as ':private' right after the channel "
                          f"(origin = #channel:private), got {entry!r}")
@@ -161,7 +191,7 @@ def load_routes(entries: Sequence[str]) -> tuple[list[MeetingRoute], list[str]]:
         try:
             kind, ref = parse_origin(origin if sep else "")
         except ValueError:
-            if has_private_mark(entry):
+            if has_private_mark(entry) or has_dm_mark(entry):
                 rules.append(MeetingRoute("any", str(entry).strip()[:_NAME_MAX], "", True, error=problem))
                 warnings.append(f"meeting_routes: {entry!r} is not valid ({problem}) and looks private; "
                                 "EVERY meeting of this space waits until it is fixed")
