@@ -38,5 +38,13 @@ class ChannelUnavailable(LookupError):
     """The Discord channel picked for a task is gone or the bot cannot post there."""
 
 
+class DirectMessageUnavailable(LookupError):
+    """The assignee cannot receive a direct message from the bot (DMs closed, unknown user)."""
+
+
+class NotPrivate(ValueError):
+    """A share button of a private meeting was pressed on a meeting that is not private (stale message)."""
+
+
 class ForumTagRequired(ChannelUnavailable):
     """The picked channel is a forum that requires a tag on every post and none fits the task."""

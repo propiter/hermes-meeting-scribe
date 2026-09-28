@@ -6,6 +6,8 @@
     status, review finding 1 — approving for Kanban never sends to Linear); single approvals go
     through ``deliver_item`` directly (Phase B buttons call :meth:`MeetingService.approve_item`);
   * ``off``: disabled.
+A PRIVATE meeting (DESIGN §19.2) is never delivered by the pipeline, whatever the mode: its tasks go to
+Kanban/Linear only when a member of its private channel presses the button (``deliver_item``).
 Idempotency (review finding 6): a delivery row is CLAIMED before the external call
 (``INSERT … ON CONFLICT DO NOTHING``), so concurrent approvals create one object. A claim taken
 over from a crashed/failed attempt first asks the backend whether the object already exists
@@ -49,6 +51,8 @@ class DeliveryStore(Protocol):
 
     def set_action_status(self, meeting_id: str, item_id: str, status: ActionStatus) -> None: ...
 
+    def kv_get(self, key: str) -> Optional[str]: ...
+
 
 class DiscordNotesSink(Protocol):
     """Interface the Discord notes sink satisfies (``discord_ui/sink.py``).
@@ -88,6 +92,13 @@ class ItemSink(ABC):
 
     def eligible(self, meeting: Meeting, item: ActionItem) -> bool:
         return True
+
+    def private(self, meeting: Meeting) -> bool:
+        """A private meeting (DESIGN §19.2): the external object carries the task only (no quote, no
+        meeting title, no folder)."""
+        from ..privacy import is_private
+
+        return is_private(self._store, self._settings(meeting.space), meeting)
 
     @abstractmethod
     def _create(self, meeting: Meeting, notes: Notes, item: ActionItem, folder: Path,
@@ -132,6 +143,8 @@ class ItemSink(ABC):
 
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
         mode = self.mode(meeting)
+        if mode == "auto" and self.private(meeting):
+            mode = "approve"  # a private meeting's tasks leave only by a member's decision (DESIGN §19.2)
         stored = {a.id: a for a in self._store.list_action_items(meeting.id)}
         mine = self.approved_for_me(meeting.id) if mode == "approve" else set()
         delivered: list[str] = []

@@ -78,6 +78,9 @@ class FakeChannel:
     def jump_url(self) -> str:
         return f"https://discord.com/channels/1/{self.id}"
 
+    async def delete(self) -> None:  # a thread / forum post (discord.py ``Thread.delete``)
+        self.bot.channels.pop(self.id, None)
+
     async def edit(self, **kw: Any) -> "FakeChannel":
         """Thread edit (name, applied_tags, archived) as in discord.py ``Thread.edit``."""
         if self.parent is not None and self.id not in self.bot.channels:

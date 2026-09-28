@@ -10,6 +10,7 @@ from dataclasses import replace
 
 import pytest
 
+from meeting_scribe.config import settings_from_mapping
 from meeting_scribe.desktop.queries import Library
 from meeting_scribe.domain.models import SOURCE_DISCORD, SOURCE_GOOGLE_MEET, MeetingState
 from meeting_scribe.storage.repo import Repository
@@ -86,7 +87,7 @@ def test_persist_writes_meta_json_with_the_column_source(imported, tmp_path):
     from meeting_scribe.storage.layout import Layout
 
     repo, m = imported
-    stages = Stages(repo=repo, layout=Layout(lambda: tmp_path / "data"), settings=lambda: None, transcriber=None,
+    stages = Stages(repo=repo, layout=Layout(lambda: tmp_path / "data"), settings=lambda space=None: settings_from_mapping({}), transcriber=None,
                     analyzer=None, catalogs=lambda: [], sinks=lambda: [], archiver=lambda *a: None)
     saved = stages.persist(replace(m, source=SOURCE_DISCORD, external_id=None))
     assert (saved.source, saved.external_id) == (SOURCE_GOOGLE_MEET, REC)

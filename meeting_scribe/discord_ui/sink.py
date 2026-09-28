@@ -8,7 +8,8 @@ one message per task in its project's channel thread, assignee DMs) is built by
 
 Loop-side entry points used by the buttons: :meth:`refresh_item` (after an action: that task's
 message, its assignee's DM and the index counts), :meth:`task_panel` (📋 My tasks), :meth:`move_options`
-and :meth:`move_item` (📁).
+and :meth:`move_item` (📁); for private meetings (DESIGN §19.2) :meth:`private_place`, :meth:`share`
+and :meth:`share_all`.
 """
 from __future__ import annotations
 
@@ -17,13 +18,16 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .. import privacy
 from ..config import Settings
-from ..domain.errors import ChannelUnavailable, ForumTagRequired
+from ..domain.errors import ChannelUnavailable, ForumTagRequired, NotPrivate
 from ..domain.models import KV_MOVE_FROM_DM, Meeting, Notes, SinkResult, is_discord_user_id
 from ..domain.names import clean_channel_name
 from ..storage.artifacts import read_notes, read_transcript, render_transcript_md
 from .board import Board, move_options
-from .destination import REPORT_KV, Destination, DestinationPending, is_forum, pick_tags, requires_tag, resolve
+from .destination import (REPORT_KV, ROUTES_REPORT_KV, Destination, DestinationPending, Resolved, is_forum, pick_tags,
+                          requires_tag, resolve, resolve_routes)
+from .private_share import ShareReport, share_all, share_dm, share_project, sync_copies, withdraw_public
 from .publisher import Pointers, ViewFactory
 from .render import RenderOptions
 from .render_tasks import render_panel
@@ -90,7 +94,11 @@ class DiscordNotesSink:
             raise ConnectionError("discord not connected")
         return TaskPublisher(adapter=adapter, views=self._views, settings=self._settings(meeting),
                              repo=self._service().repo, options=self._options(meeting), destination=self.destination,
-                             transcript_text=self._transcript_text)
+                             transcript_text=self._transcript_text, private=self.is_private)
+
+    def is_private(self, meeting: Meeting) -> bool:
+        """A private rule matches it, or it was published as private (sticky, DESIGN §19.2)."""
+        return privacy.is_private(self._service().repo, self._settings(meeting), meeting)
 
     def _transcript_text(self, meeting: Meeting) -> Optional[str]:
         """The Markdown transcript (``[mm:ss] Name: text``), rendered with the current title (thread)."""
@@ -103,19 +111,42 @@ class DiscordNotesSink:
     def destination(self, meeting: Meeting) -> Destination:
         """Loop-side: notes channel candidates, the server, and the channel for tasks without project."""
         client = getattr(self._adapter(), "_client", None)
-        return resolve(client, meeting, self._settings(meeting), allowed_guilds=self.allowed_guilds(meeting))
+        dest = resolve(client, meeting, self._settings(meeting), allowed_guilds=self.allowed_guilds(meeting))
+        rec = privacy.record(self._service().repo, meeting.id)
+        if rec is None or dest.private:
+            return dest
+        # published as private but no private rule matches any more: only its private channel, never
+        # the channels a normal meeting would use (fail closed)
+        channel = str(rec.get("channel") or "")
+        held = Destination(targets=[channel] if channel else [], guild=dest.guild, guild_source=dest.guild_source,
+                           rule=str(rec.get("rule") or ""), private=True)
+        held.steps.append(Resolved("meeting_routes", str(rec.get("rule") or ""), "ok" if channel else "missing",
+                                   channel or None, detail="" if channel else "the private rule of this meeting "
+                                   "was removed before its channel was known"))
+        if not channel:
+            held.problem = ("waiting: this meeting is private and its private channel is unknown; add a private "
+                            "rule for it to meeting_routes (it is never published elsewhere)")
+        return held
 
     def guild_for(self, meeting: Meeting) -> object:
         """Loop-side: the server whose channels are the meeting's project candidates."""
         return self.destination(meeting).guild
 
     async def _save_report(self, meeting: Meeting, dest: Destination) -> None:
-        """Last resolution per source, for ``doctor`` / ``config list`` in other processes."""
+        """Last resolution per source, and every ``meeting_routes`` rule of the meeting's space, for
+        ``doctor`` / ``config list`` in other processes. A meeting decided by a rule does not overwrite
+        the source's report (that one describes the plain settings)."""
         try:
             import json
 
-            report = {**dest.report(), "meeting": meeting.id}
-            await asyncio.to_thread(self._service().repo.kv_set, f"{REPORT_KV}.{meeting.source}", json.dumps(report))
+            repo = self._service().repo
+            if not dest.rule:
+                report = {**dest.report(), "meeting": meeting.id}
+                await asyncio.to_thread(repo.kv_set, f"{REPORT_KV}.{meeting.source}", json.dumps(report))
+            client = getattr(self._adapter(), "_client", None)
+            routes = resolve_routes(client, self._settings(meeting), self.allowed_guilds(meeting))
+            await asyncio.to_thread(repo.kv_set, ROUTES_REPORT_KV + (meeting.space or ""),
+                                    json.dumps(routes) if routes else None)
         except Exception as exc:  # diagnostics only
             log.debug("meeting-scribe: could not store the destination report: %s", exc)
 
@@ -130,8 +161,15 @@ class DiscordNotesSink:
         async with self._lock(meeting.id):
             dest = self.destination(meeting)
             await self._save_report(meeting, dest)
-            ptr = await self._publisher(meeting).msgs_pointer(meeting)
-            if not dest.targets and not ptr:  # already posted in a server channel: keep editing it there
+            pub = self._publisher(meeting)
+            ptr = await pub.msgs_pointer(meeting)
+            private = await pub.is_private(meeting)
+            if private:
+                await asyncio.to_thread(privacy.remember, self._service().repo, meeting.id, dest.rule, "")
+            if not dest.targets and (not ptr or private):  # a private meeting never stays outside its channel
+                if ptr:  # remove what is outside its known private channel; what is inside stays
+                    place = await asyncio.to_thread(privacy.allowed_places, pub.repo, meeting, self._settings(meeting))
+                    await withdraw_public(pub, Pointers(pub.repo, meeting.id), place)
                 raise DestinationPending(dest.problem)
             # the only path that attaches the transcript (and may move notes out of a DM): DELIVER
             move = await asyncio.to_thread(self._service().repo.kv_get, KV_MOVE_FROM_DM + meeting.id)
@@ -139,7 +177,14 @@ class DiscordNotesSink:
                                                          move_from_dm=bool(move))
             if move:  # done (moved, refused or nothing to move): a later delivery never moves by itself
                 await asyncio.to_thread(self._service().repo.kv_set, KV_MOVE_FROM_DM + meeting.id, None)
+            if private:
+                await self._remember_channel(meeting)
             return url
+
+    async def _remember_channel(self, meeting: Meeting) -> None:
+        ptr = await Pointers(self._service().repo, meeting.id).load("notes") or {}
+        channel = str(ptr.get("forum") or ptr.get("channel") or "")
+        await asyncio.to_thread(privacy.remember, self._service().repo, meeting.id, "", channel)
 
     async def _load(self, meeting_id: str) -> Optional[tuple[Meeting, Notes]]:
         svc = self._service()
@@ -181,9 +226,52 @@ class DiscordNotesSink:
         if view is None or not await pub.edit_task(board.meeting, view, ptrs):
             await self._refresh(meeting_id)
             return
-        if is_discord_user_id(view.item.owner_speaker_id) and pub.settings.delivery_dm_assignees:
+        if board.private:
+            await sync_copies(pub, board, ptrs)
+        elif is_discord_user_id(view.item.owner_speaker_id) and pub.settings.delivery_dm_assignees:
             await pub.dm(board, view.item.owner_speaker_id, ptrs, send=False)
         await pub.refresh_index(board, ptrs)
+
+    # -- private meetings (DESIGN §19.2) ------------------------------------------------------------
+    async def private_place(self, meeting_id: str) -> Optional[set[str]]:
+        """The channel ids a private meeting lives in (``None``: not private) — button authorization."""
+        meeting = await asyncio.to_thread(self._service().repo.get_meeting, meeting_id)
+        if meeting is None or not await asyncio.to_thread(self.is_private, meeting):
+            return None
+        repo = self._service().repo
+        place = await asyncio.to_thread(privacy.allowed_places, repo, meeting, self._settings(meeting))
+        return place | await self._publisher(meeting).private_place(meeting, Pointers(repo, meeting_id))
+
+    async def _private_board(self, meeting_id: str) -> tuple[TaskPublisher, Board]:
+        got = await self.board(meeting_id)
+        if got is None:
+            raise LookupError(meeting_id)
+        if not got[1].private:
+            raise NotPrivate(f"meeting {meeting_id} is not private")
+        return got
+
+    async def share(self, meeting_id: str, item_id: str, how: str) -> str:
+        """``how``: ``dm`` (to its assignee) or ``project`` (its project channel). Returns ``dm`` / the
+        channel id / ``""`` when it had already been done."""
+        async with self._lock(meeting_id):
+            pub, board = await self._private_board(meeting_id)
+            ptrs = Pointers(pub.repo, meeting_id)
+            if how == "dm":
+                done = "dm" if await share_dm(pub, board, item_id, ptrs) else ""
+            else:
+                view = board.view(item_id)
+                already = view is not None and view.sharing is not None and view.sharing.channel == view.sharing.target
+                channel = await share_project(pub, board, item_id, ptrs)
+                done = "" if already else channel
+            await self._refresh_item(meeting_id, item_id)
+            return done
+
+    async def share_all(self, meeting_id: str) -> ShareReport:
+        async with self._lock(meeting_id):
+            pub, board = await self._private_board(meeting_id)
+            report = await share_all(pub, board, Pointers(pub.repo, meeting_id))
+            await self._refresh(meeting_id)
+            return report
 
     async def task_panel(self, meeting_id: str, user_id: str, scope: str, page: int, *, is_owner: bool) -> Any:
         got = await self.board(meeting_id)

@@ -289,11 +289,16 @@ class LinearSink(ItemSink):
         ref = cand.ref if cand is not None and cand.source == "linear" else {}
         lang = notes.language or self._settings(meeting.space).ui_language
         when = meeting.started_at + timedelta(seconds=item.t0 or 0)
+        if self.private(meeting):
+            body = t("sink.private_item_body", lang, description=item.description or item.title,
+                     date=when.date().isoformat())
+        else:
+            body = t("sink.linear_issue_body", lang, description=item.description or item.title,
+                     quote=item.quote or "-", title=notes.meeting_title or meeting.title,
+                     date=when.date().isoformat(), ts=fmt_ts(item.t0 or 0))
         issue: dict[str, Any] = {
             "teamId": self._team(meeting, backend, list(ref.get("team_ids") or ())), "title": item.title,
-            "description": t("sink.linear_issue_body", lang, description=item.description or item.title,
-                             quote=item.quote or "-", title=notes.meeting_title or meeting.title,
-                             date=when.date().isoformat(), ts=fmt_ts(item.t0 or 0)) + f"\n\n`{key}`"}
+            "description": body + f"\n\n`{key}`"}
         if ref.get("project_id"):
             issue["projectId"] = ref["project_id"]
         if item.due:

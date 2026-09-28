@@ -6,6 +6,7 @@ import json
 from typing import Any, Callable, Mapping
 
 from .pipeline.service import MeetingService
+from .privacy import Reader
 from .storage.artifacts import fmt_ts, read_notes, read_transcript
 
 TOOLSET = "meeting_scribe"
@@ -48,15 +49,28 @@ def _session_guild() -> str:
         return ""
 
 
+def _session_reader() -> Reader:
+    """Who the agent answers (DESIGN §19.2): a chat sees a private meeting only from its private
+    channel; without a gateway session (the operator's CLI) everything is readable."""
+    try:
+        from .commands import caller_from_session
+
+        return caller_from_session().reader
+    except Exception:  # no Hermes gateway session (CLI, tests)
+        return Reader()
+
+
 class MeetingTools:
     """Both tools act in ONE space (DESIGN §23): the one owning the chat's server, else the only
-    space; with several spaces and no server they answer an error instead of another team's data."""
+    space; with several spaces and no server they answer an error instead of another team's data.
+    A private meeting (DESIGN §19.2) does not exist for them outside its private channel."""
 
     def __init__(self, service: Callable[[], MeetingService], max_utterances: int = 400,
-                 guild: Callable[[], str] = _session_guild) -> None:
+                 guild: Callable[[], str] = _session_guild, reader: Callable[[], Reader] = _session_reader) -> None:
         self._service = service
         self._max = max_utterances
         self._guild = guild
+        self._reader = reader
 
     def _space(self, service: MeetingService) -> str:
         return service.space_for(self._guild() or None)
@@ -68,7 +82,7 @@ class MeetingTools:
         try:
             limit = max(1, min(int(args.get("limit") or 10), 50))
             service = self._service()
-            hits = service.search(query, self._space(service), limit)
+            hits = service.search(query, self._space(service), limit, reader=self._reader())
         except Exception as exc:  # tool contract: JSON error, never an exception
             return _json({"error": f"{type(exc).__name__}: {exc}"})
         return _json({"results": [{**h, "ts": fmt_ts(h["t0"])} for h in hits]})
@@ -80,6 +94,8 @@ class MeetingTools:
         try:
             service = self._service()
             meeting = service.find(str(args.get("meeting_id") or ""), self._space(service))
+            if meeting is not None and not service.readable(meeting, self._reader()):
+                meeting = None  # same answer as an unknown id: its existence is not revealed
             if meeting is None:
                 return _json({"error": f"no meeting {args.get('meeting_id')!r}; use meeting_search"})
             folder = service.folder(meeting)

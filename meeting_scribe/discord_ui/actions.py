@@ -14,10 +14,13 @@ import re
 from typing import Any, Callable, Optional, Sequence
 
 from ..config import Settings
-from ..domain.errors import ChannelUnavailable, ForumTagRequired, ItemDismissed, NotesNotReady, SinkUnavailable
+from ..domain.errors import (ChannelUnavailable, DirectMessageUnavailable, ForumTagRequired, ItemDismissed, NotesNotReady,
+                             NotPrivate, SinkUnavailable)
 from ..domain.models import Candidate
 from ..i18n import t
-from .auth import MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, TASK_ACTIONS, check_task
+from .auth import (MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, TASK_ACTIONS, check_private,
+                   check_task)
+from .render import ButtonSpec, custom_id
 
 log = logging.getLogger(__name__)
 SELECT_LIMIT = 25
@@ -44,6 +47,10 @@ def friendly_error(exc: BaseException, lang: str) -> str:
         return t("ui.error_sink_unavailable", lang, sink=_SINK_NAMES.get(exc.sink, exc.sink.title()))
     if isinstance(exc, ItemDismissed):
         return t("ui.error_dismissed", lang)
+    if isinstance(exc, DirectMessageUnavailable):
+        return t("share.error_dm", lang)
+    if isinstance(exc, NotPrivate):
+        return t("share.not_private", lang)
     if isinstance(exc, NotesNotReady):
         return t("ui.error_notes_not_ready", lang)
     if isinstance(exc, ForumTagRequired):
@@ -67,7 +74,9 @@ class ButtonActions:
     def __init__(self, *, service: Callable[[], Any], settings: Callable[..., Settings],
                  owners: Callable[..., Sequence[str]], check_auth: Callable[[Any], bool], sink: Callable[[], Any],
                  project_view: Callable[[str, Sequence[Candidate]], Any],
-                 move_view: Callable[[str, str, Sequence[tuple[str, str]]], Any]) -> None:
+                 move_view: Callable[[str, str, Sequence[tuple[str, str]]], Any],
+                 buttons_view: Callable[[Sequence[ButtonSpec]], Any] = lambda _specs: None) -> None:
+        self._buttons_view = buttons_view
         self._service = service
         self._settings = settings
         self._owners = owners
@@ -112,7 +121,30 @@ class ButtonActions:
     async def _deny(self, interaction: Any, message: str) -> None:
         await interaction.response.send_message(clip_reply(message), ephemeral=True)
 
+    async def _private_gate(self, interaction: Any, action: str, meeting_id: str) -> Optional[bool]:
+        """A private meeting's buttons work only inside its channel, for who can see it (DESIGN §19.2).
+        ``False``: refused (answered); ``True``: a share action, allowed; ``None``: go on with the task rules."""
+        try:
+            place = await self._sink().private_place(meeting_id)
+        except Exception:  # cannot tell whether it is private: fail closed
+            log.exception("meeting-scribe: privacy check of %s failed", meeting_id)
+            await self._deny(interaction, t("ui.action_failed", self.lang))
+            return False
+        if place is None:
+            if action in SHARE_ACTIONS:
+                await self._deny(interaction, t("share.not_private", self.lang))
+                return False
+            return None
+        verdict = check_private(interaction, place, self.lang)
+        if not verdict.allowed:
+            await self._deny(interaction, verdict.message)
+            return False
+        return True if action in SHARE_ACTIONS else None
+
     async def _authorize(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> bool:
+        gate = await self._private_gate(interaction, action, meeting_id)
+        if gate is not None:
+            return gate
         if action in OPEN_ACTIONS:
             return True
         if item_id == "all" or action in MEETING_ACTIONS:  # 0.1 meeting-wide buttons keep their rule
@@ -133,7 +165,7 @@ class ButtonActions:
 
     async def handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
                      values: Optional[Sequence[str]] = None) -> None:
-        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS:
+        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS | SHARE_ACTIONS:
             return
         token = _SPACE.set(await asyncio.to_thread(self._meeting_space, meeting_id))
         try:
@@ -153,6 +185,9 @@ class ButtonActions:
             return
         if action in OPEN_ACTIONS:
             await self._panel(interaction, action, meeting_id, item_id)
+            return
+        if action in SHARE_ACTIONS:
+            await self._share(interaction, action, meeting_id, item_id)
             return
         from_panel = _from_panel(interaction) and action in TASK_ACTIONS
         if from_panel:  # update-type defer: edit_original_response then targets the clicked panel
@@ -213,6 +248,32 @@ class ButtonActions:
             chosen = svc.set_project(meeting_id, values[0])
             return t("ui.project_saved", lang, project=chosen.name)
         raise ValueError(f"unknown action {action}")
+
+    # -- private meetings (DESIGN §19.2) ----------------------------------------------------------------
+    async def _share(self, interaction: Any, action: str, meeting_id: str, item_id: str) -> None:
+        lang = self.lang
+        if action == "sha":  # nothing happens before an explicit confirmation
+            confirm = ButtonSpec(t("ui.btn_share_confirm", lang), custom_id("shc", meeting_id, "all"), "success", 0, "📤")
+            await interaction.response.send_message(t("share.confirm_all", lang), view=self._buttons_view([confirm]),
+                                                    ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        sink = self._sink()
+        try:
+            if action == "shc":
+                report = await sink.share_all(meeting_id)
+                reply = t("share.done_all", lang, dms=report.dms, channels=report.channels)
+                if report.failed:
+                    reply += "\n" + t("share.failed_some", lang, tasks=", ".join(report.failed))
+            else:
+                done = await sink.share(meeting_id, item_id, "dm" if action == "shd" else "project")
+                reply = (t("share.already", lang) if not done else t("share.done_dm", lang) if done == "dm"
+                         else t("share.done_project", lang, channel=f"<#{done}>"))
+        except Exception as exc:
+            log.warning("meeting-scribe: share %s on %s/%s refused: %s: %s", action, meeting_id, item_id,
+                        type(exc).__name__, exc)
+            reply = friendly_error(exc, lang)
+        await interaction.followup.send(clip_reply(reply), ephemeral=True)
 
     async def _move(self, meeting_id: str, item_id: str, values: list[str], *, learn: bool) -> str:
         if not values:

@@ -196,7 +196,8 @@ def install(ctx: Any, runtime: Any) -> UiState:
     actions = ButtonActions(service=runtime.service, settings=runtime.settings, owners=runtime.owners,
                             check_auth=lambda i: _check_auth(holder["s"])(i), sink=lambda: holder["s"].sink,
                             project_view=lambda mid, cands: holder["s"].kit.project_view(mid, cands),
-                            move_view=lambda mid, iid, opts: holder["s"].kit.move_view(mid, iid, opts))
+                            move_view=lambda mid, iid, opts: holder["s"].kit.move_view(mid, iid, opts),
+                            buttons_view=lambda specs: holder["s"].kit.view(specs))
     kit = ViewKit(actions)
     sink = DiscordNotesSink(settings=runtime.settings, service=runtime.service, adapter=lambda: holder["s"].adapter,
                             loop=lambda: holder["s"].loop, options=_render_options(runtime), views=kit,

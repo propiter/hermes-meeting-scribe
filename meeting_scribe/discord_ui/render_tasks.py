@@ -32,10 +32,21 @@ _FINISHED = (ActionStatus.DELIVERED, ActionStatus.DISMISSED)
 
 
 @dataclass(frozen=True)
+class Sharing:
+    """Where a task of a PRIVATE meeting was shared (DESIGN §19.2); ``None`` on a normal meeting."""
+    dm: bool = False  # sent to its assignee
+    channel: str = ""  # project channel it was published in ("" = not published)
+    target: str = ""  # the project channel it would be published in ("" = none: stays private or 📁)
+    target_name: str = ""
+    can_dm: bool = False  # a Discord assignee and ``delivery_dm_assignees`` on
+
+
+@dataclass(frozen=True)
 class TaskView:
     item: ActionItem
     route: Route
     refs: Mapping[str, str] = field(default_factory=dict)  # sink -> "t_42" / "ENG-7"
+    sharing: Optional[Sharing] = None
 
 
 @dataclass(frozen=True)
@@ -127,7 +138,68 @@ def task_buttons(meeting: Meeting, view: TaskView, o: RenderOptions) -> tuple[Bu
 
 
 def render_task(meeting: Meeting, view: TaskView, o: RenderOptions) -> MessageSpec:
+    if view.sharing is not None:
+        return render_private_task(meeting, view, o)
     return MessageSpec(_clip(task_text(meeting, view, o.lang), MESSAGE_LIMIT), task_buttons(meeting, view, o))
+
+
+# -- private meetings (DESIGN §19.2) ---------------------------------------------------------------
+def share_lines(view: TaskView, lang: str) -> list[str]:
+    s = view.sharing
+    if s is None:
+        return []
+    done = ([f"✉️ {t('share.sent_to', lang, user=f'<@{view.item.owner_speaker_id}>')}"] if s.dm else [])
+    done += [f"📣 {t('share.published_in', lang, channel=f'<#{s.channel}>')}"] if s.channel else []
+    return done or [f"🔒 {t('share.not_shared', lang)}"]
+
+
+def share_buttons(meeting: Meeting, view: TaskView, lang: str) -> tuple[ButtonSpec, ...]:
+    s, item = view.sharing, view.item
+    if s is None or item.status is ActionStatus.DISMISSED:
+        return ()
+    out: list[ButtonSpec] = []
+    if s.can_dm and not s.dm:
+        who = _clip(" ".join(str(item.owner_name or "").split()) or t("share.assignee", lang), 40)
+        out.append(ButtonSpec(t("ui.btn_share_dm", lang, name=who), custom_id("shd", meeting.id, item.id),
+                              "primary", 1, "✉️"))
+    if s.target and s.channel != s.target:
+        name = _clip(s.target_name or s.target, 40)
+        out.append(ButtonSpec(t("ui.btn_share_project", lang, channel=name), custom_id("shp", meeting.id, item.id),
+                              "primary", 1, "📣"))
+    return tuple(out)
+
+
+def render_private_task(meeting: Meeting, view: TaskView, o: RenderOptions) -> MessageSpec:
+    """The task in the private channel: its full text, where it was shared, and its buttons (the usual
+    ones on the first row, the share ones on the second)."""
+    text = "\n".join([task_text(meeting, view, o.lang), *share_lines(view, o.lang)])
+    return MessageSpec(_clip(text, MESSAGE_LIMIT), task_buttons(meeting, view, o) + share_buttons(meeting, view, o.lang))
+
+
+def shared_task_text(meeting: Meeting, view: TaskView, lang: str) -> str:
+    """What leaves a private meeting: the task only — title, description, assignee, due date, project.
+    Never the summary, the quote, the meeting title or a link to the private channel."""
+    item = view.item
+    title = f"~~{item.title}~~" if item.status is ActionStatus.DISMISSED else f"**{item.title}**"
+    lines = [f"{_ICON[item.status]} {title}" + (f" — 📅 {item.due}" if item.due else "")]
+    lines.append(f"👤 {_who(item, lang)}" + (f" · 📁 {view.route.project}" if view.route.project else ""))
+    if item.description and item.description != item.title:
+        lines.append(_clip(item.description, QUOTE_LIMIT))
+    if item.status is ActionStatus.DISMISSED:
+        lines.append(f"❌ {t('tasks.dismissed', lang)}")
+    lines.append(f"-# {t('share.footer', lang, date=f'{meeting.started_at:%Y-%m-%d}')}")
+    return "\n".join(lines)
+
+
+def render_shared_task(meeting: Meeting, view: TaskView, lang: str) -> MessageSpec:
+    """A shared copy (project channel): text only, no buttons — decisions stay in the private channel."""
+    return MessageSpec(_clip(shared_task_text(meeting, view, lang), MESSAGE_LIMIT))
+
+
+def render_shared_dm(meeting: Meeting, view: TaskView, lang: str) -> MessageSpec:
+    """One task of a private meeting sent to its assignee: a header and the task only."""
+    header = f"### 📋 {t('share.dm_title', lang)}"
+    return MessageSpec(_clip("\n".join([header, shared_task_text(meeting, view, lang)]), MESSAGE_LIMIT))
 
 
 # -- index -----------------------------------------------------------------------------------------
@@ -166,10 +238,24 @@ def _person_lines(views: Sequence[TaskView], lang: str) -> list[str]:
     return lines
 
 
+def _private_lines(views: Sequence[TaskView], lang: str) -> list[str]:
+    shared = sum(1 for v in views if v.sharing is not None and (v.sharing.dm or v.sharing.channel))
+    return [f"🔒 {t('share.index_private', lang)}", f"-# {t('share.index_count', lang, shared=shared, total=len(views))}"]
+
+
+def _shareable(view: TaskView) -> bool:
+    s = view.sharing
+    if s is None or view.item.status is ActionStatus.DISMISSED:
+        return False
+    return (s.can_dm and not s.dm) or bool(s.target and s.channel != s.target)
+
+
 def render_index(meeting: Meeting, views: Sequence[TaskView], threads: Mapping[Optional[str], str],
-                 dm_failed: Sequence[str], o: RenderOptions) -> MessageSpec:
+                 dm_failed: Sequence[str], o: RenderOptions, *, private: bool = False) -> MessageSpec:
     lang = o.lang
     lines = [f"## 📋 {t('tasks.index_title', lang)} · {len(views)}"]
+    if private:
+        lines += _private_lines(views, lang)
     if views:
         lines += [f"**{t('tasks.by_project', lang)}**", *_project_lines(views, threads, lang),
                   f"**{t('tasks.by_person', lang)}**", *_person_lines(views, lang)]
@@ -178,6 +264,8 @@ def render_index(meeting: Meeting, views: Sequence[TaskView], threads: Mapping[O
     if dm_failed:
         lines.append(f"✉️ {t('tasks.dm_failed', lang, users=', '.join(f'<@{u}>' for u in dm_failed))}")
     buttons = (ButtonSpec(t("ui.btn_my_tasks", lang), custom_id("mine", meeting.id, "all"), "primary", 0, "📋"),)
+    if private and any(_shareable(v) for v in views):
+        buttons += (ButtonSpec(t("ui.btn_share_all", lang), custom_id("sha", meeting.id, "all"), "secondary", 0, "📤"),)
     return MessageSpec(_clip("\n".join(lines), MESSAGE_LIMIT), buttons if views else ())
 
 

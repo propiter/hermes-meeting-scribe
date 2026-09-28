@@ -18,7 +18,7 @@ from ..i18n import t
 from .render import ButtonSpec
 from .render_tasks import TaskPanel
 
-BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg):(?P<meeting>[a-z0-9]{1,16}):"
+BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg|shp|shd|sha|shc):(?P<meeting>[a-z0-9]{1,16}):"
                    r"(?P<item>[A-Za-z0-9_-]{1,40})")
 SELECT_TEMPLATE = r"mscribe:(?P<action>psel|tsel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _STYLES = {"success": discord.ButtonStyle.success, "primary": discord.ButtonStyle.primary,

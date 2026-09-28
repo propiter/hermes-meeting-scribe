@@ -62,6 +62,20 @@ class Svc:
 class Sink:
     def __init__(self):
         self.calls = []
+        self.place = None  # a set of channel ids: the meeting is private
+
+    async def private_place(self, mid):
+        return self.place
+
+    async def share(self, mid, iid, how):
+        self.calls.append(("share", mid, iid, how))
+        return "dm" if how == "dm" else "501"
+
+    async def share_all(self, mid):
+        from meeting_scribe.discord_ui.private_share import ShareReport
+
+        self.calls.append(("share_all", mid))
+        return ShareReport(dms=2, channels=1, failed=["Write the plan"])
 
     async def refresh_item(self, mid, iid):
         self.calls.append(("refresh_item", mid, iid))
@@ -251,3 +265,73 @@ async def test_approve_all_partial_failures_are_counted_not_listed(env, caplog):
     await env.acts.handle(i, "allk", "k3v7q2ab", "all")
     assert "1 task(s) could not be sent" in i.replies() and "HTTP 500" not in i.replies()
     assert "HTTP 500" in caplog.text
+
+
+# -- private meetings (DESIGN §19.2) --------------------------------------------------------------------
+def in_channel(user, channel_id, *, can_see=True, parent=None):
+    i = FakeInteraction(user)
+    i.channel = SimpleNamespace(id=channel_id, parent_id=parent)
+    i.permissions = SimpleNamespace(view_channel=can_see)
+    return i
+
+
+@pytest.mark.parametrize("action, how", [("shd", "dm"), ("shp", "project")])
+async def test_a_member_of_the_private_channel_shares_one_task(env, action, how):
+    env.sink.place = {"700"}
+    i = in_channel(STRANGER, 700)  # not the owner, not the assignee: any member of the room decides
+    await env.acts.handle(i, action, "k3v7q2ab", "a2")
+    assert env.sink.calls == [("share", "k3v7q2ab", "a2", how)]
+    assert ("Sent." if how == "dm" else "Published in <#501>.") in i.replies()
+    assert i.response.defers and i.response.defers[0]["ephemeral"]
+
+
+async def test_share_buttons_work_from_the_thread_of_the_private_channel(env):
+    env.sink.place = {"700"}
+    await env.acts.handle(in_channel(STRANGER, 9001, parent=700), "shd", "k3v7q2ab", "a2")
+    assert env.sink.calls == [("share", "k3v7q2ab", "a2", "dm")]
+
+
+@pytest.mark.parametrize("where, can_see, msg", [(555, True, "use the buttons in its own channel"),
+                                                  (700, False, "Only people who can see this channel")])
+@pytest.mark.parametrize("action", ["shd", "shp", "sha", "shc", "ok", "no", "mine"])
+async def test_private_buttons_are_refused_outside_or_to_non_members(env, where, can_see, msg, action):
+    env.sink.place = {"700"}
+    i = in_channel(OWNER, where, can_see=can_see)
+    await env.acts.handle(i, action, "k3v7q2ab", "a1")
+    assert env.sink.calls == [] and env.svc.calls == [] and msg in i.replies()
+
+
+async def test_private_buttons_are_refused_in_a_dm(env):
+    env.sink.place = {"700"}
+    i = FakeInteraction(OWNER, dm=True)
+    i.channel = SimpleNamespace(id=700, parent_id=None)
+    await env.acts.handle(i, "shd", "k3v7q2ab", "a1")
+    assert env.sink.calls == [] and "own channel" in i.replies()
+
+
+async def test_share_all_asks_first_and_then_reports(env):
+    env.sink.place = {"700"}
+    i = in_channel(STRANGER, 700)
+    await env.acts.handle(i, "sha", "k3v7q2ab", "all")
+    assert env.sink.calls == [] and "Share every open task?" in i.replies()
+    assert i.response.sent[0]["ephemeral"]
+    i2 = in_channel(STRANGER, 700)
+    await env.acts.handle(i2, "shc", "k3v7q2ab", "all")
+    assert env.sink.calls == [("share_all", "k3v7q2ab")]
+    assert "2 sent to people, 1 published" in i2.replies() and "Write the plan" in i2.replies()
+
+
+async def test_share_buttons_on_a_meeting_that_is_not_private_do_nothing(env):
+    i = in_channel(STRANGER, 700)
+    await env.acts.handle(i, "shp", "k3v7q2ab", "a1")
+    assert env.sink.calls == [] and "not private" in i.replies()
+
+
+async def test_normal_task_rules_still_apply_inside_the_private_channel(env):
+    env.sink.place = {"700"}
+    i = in_channel(STRANGER, 700)
+    await env.acts.handle(i, "no", "k3v7q2ab", "a2")  # Ana's task: only Ana (or an owner) dismisses it
+    assert env.svc.calls == [] and "<@10>" in i.replies()
+    ok = in_channel(OWNER, 700)
+    await env.acts.handle(ok, "ok", "k3v7q2ab", "a1")
+    assert env.svc.calls == [("approve", "k3v7q2ab", "a1", "kanban")]

@@ -74,8 +74,26 @@ class MeetingService:
             return owner
         return Spaces(lambda: self.repo, lambda key, default=None: default).resolve(None).slug
 
-    def search(self, query: str, space: str, limit: int = 10) -> list[dict[str, Any]]:
-        return self.repo.search(query, space, limit)
+    def search(self, query: str, space: str, limit: int = 10, reader: Optional[Any] = None) -> list[dict[str, Any]]:
+        """Transcript hits of ``space``; with a ``reader`` (a chat) the lines of private meetings it may
+        not read are left out (DESIGN §19.2)."""
+        if reader is None:
+            return self.repo.search(query, space, limit)
+        hits: list[dict[str, Any]] = []
+        for hit in self.repo.search(query, space, limit * 4):
+            if len(hits) < limit and self.readable(str(hit["meeting_id"]), reader):
+                hits.append(hit)
+        return hits
+
+    def readable(self, meeting: Any, reader: Any) -> bool:
+        """``reader`` (:class:`~meeting_scribe.privacy.Reader`) may see ``meeting`` (an id or a Meeting)."""
+        found = self.repo.get_meeting(meeting) if isinstance(meeting, str) else meeting
+        return found is not None and reader.may_read(self.repo, self.settings(found.space), found)
+
+    def is_private(self, meeting: Meeting) -> bool:
+        from ..privacy import is_private
+
+        return is_private(self.repo, self.settings(meeting.space), meeting)
 
     def prepare_audio(self, id_or_prefix: str) -> Path:
         """Write the listening copy (``playback.ogg``) of a meeting archived before copies existed."""

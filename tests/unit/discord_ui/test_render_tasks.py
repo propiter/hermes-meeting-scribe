@@ -119,3 +119,49 @@ def test_empty_panel_says_so(meeting):
 @pytest.mark.parametrize("lang, word", [("en", "Tasks"), ("es", "Tareas")])
 def test_index_language(meeting, lang, word):
     assert word in render_index(meeting, [tv(1)], {}, [], replace(OPTS, lang=lang)).content
+
+
+# -- private meetings (DESIGN §19.2) --------------------------------------------------------------------
+def private(view: TaskView, **kw) -> TaskView:
+    from meeting_scribe.discord_ui.render_tasks import Sharing
+
+    return replace(view, sharing=Sharing(**{"target": "501", "target_name": "#orion", "can_dm": True, **kw}))
+
+
+def test_private_task_keeps_its_buttons_and_adds_share_buttons_on_a_second_row(meeting):
+    view = private(tv(1, quote="the secret plan"))
+    spec = render_task(meeting, view, OPTS)
+    cids = ids(spec.buttons)
+    a1 = "k3v7q2ab:a0000000001"
+    assert f"mscribe:ok:{a1}" in cids and f"mscribe:shd:{a1}" in cids and f"mscribe:shp:{a1}" in cids
+    share = [b for b in spec.buttons if b.custom_id.split(":")[1] in ("shd", "shp")]
+    assert {b.row for b in share} == {1} and "Publish in #orion" in [b.label for b in share]
+    assert "Nothing has been shared yet" in spec.content
+
+
+def test_private_task_state_is_reflected_and_done_buttons_disappear(meeting):
+    spec = render_task(meeting, private(tv(1), dm=True, channel="501"), OPTS)
+    assert "Sent to <@11>" in spec.content and "Published in <#501>" in spec.content
+    assert not any(":shd:" in c or ":shp:" in c for c in ids(spec.buttons))
+    none = render_task(meeting, private(tv(1, owner=None), target="", can_dm=False), OPTS)
+    assert not any(":shd:" in c or ":shp:" in c for c in ids(none.buttons))
+
+
+def test_shared_text_is_the_task_only(meeting):
+    from meeting_scribe.discord_ui.render_tasks import render_shared_dm, render_shared_task
+
+    view = private(tv(1, quote="the secret plan", description="Draft it", due="2026-10-02"))
+    for spec in (render_shared_task(meeting, view, "en"), render_shared_dm(meeting, view, "es")):
+        assert "Draft it" in spec.content and "2026-10-02" in spec.content and not spec.buttons
+        assert "the secret plan" not in spec.content and meeting.title not in spec.content
+        assert "discord.com" not in spec.content
+
+
+def test_private_index_counts_shared_tasks_and_offers_share_all(meeting):
+    views = [private(tv(1), dm=True), private(tv(2))]
+    spec = render_index(meeting, views, {}, (), OPTS, private=True)
+    assert "Private meeting" in spec.content and "Shared: 1 of 2" in spec.content
+    assert "mscribe:sha:k3v7q2ab:all" in ids(spec.buttons)
+    done = [private(tv(1), dm=True, channel="501")]
+    assert "mscribe:sha:k3v7q2ab:all" not in ids(render_index(meeting, done, {}, (), OPTS, private=True).buttons)
+    assert "Private" not in render_index(meeting, [tv(1)], {}, (), OPTS).content

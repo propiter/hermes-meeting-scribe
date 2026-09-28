@@ -2,6 +2,8 @@
 
 Order of the notes channel:
 
+* A ``meeting_routes`` rule matching the meeting (DESIGN §19.2) → ONLY that channel: when it cannot
+  be used the delivery is PENDING with the reason, never a more public channel.
 * Google Meet imports: ``google_meet_discord_channel`` → ``delivery_discord_channel`` → AUTOMATIC.
 * Discord voice meetings: ``delivery_discord_channel`` → the voice channel's text chat → AUTOMATIC.
 * Nothing usable → PENDING: the delivery waits (without using attempts) until a channel is set or
@@ -45,6 +47,16 @@ POSTABLE_KINDS = TEXT_KINDS | FORUM_KINDS
 MAX_FORUM_TAGS = 5  # Discord accepts at most 5 applied tags per post
 TAG_REQUIRED_CODE = 40067  # "A tag is required to create a forum post in this channel"
 EXPLICIT_KEYS = ("google_meet_discord_channel", "delivery_discord_channel")
+ROUTE_KEY = "meeting_routes"
+ROUTES_REPORT_KV = "discord.routes_report."  # + space -> every rule resolved (doctor / config list)
+
+
+def route_key(rule: Any) -> str:
+    return f"{ROUTE_KEY}[{rule.origin}]"
+
+
+def is_explicit(key: str) -> bool:
+    return key in EXPLICIT_KEYS or key.startswith(ROUTE_KEY + "[")
 _SEP_RE = re.compile(r"[-_\s]+")
 
 
@@ -185,6 +197,8 @@ class Destination:
     fallback_channel: Optional[str] = None  # tasks without project (None = the notes channel)
     problem: str = ""  # why nothing is usable (pending)
     warnings: list[str] = field(default_factory=list)  # usable but worth a look (doctor)
+    rule: str = ""  # the ``meeting_routes`` origin that decided the notes channel ("" = none)
+    private: bool = False  # that rule is private: nothing leaves the notes channel by itself
 
     def report(self) -> dict[str, Any]:
         g = self.guild
@@ -193,7 +207,7 @@ class Destination:
                           "source": self.guild_source},
                 "steps": [s.to_dict() for s in self.steps], "targets": list(self.targets),
                 "fallback_channel": self.fallback_channel or "", "problem": self.problem,
-                "warnings": list(self.warnings)}
+                "warnings": list(self.warnings), "rule": self.rule, "private": self.private}
 
 
 def _guilds(client: Any, allowed: Optional[frozenset[str]] = None) -> list[Any]:
@@ -376,27 +390,49 @@ def permission_warnings(key: str, channel: Any, *, attach: bool) -> list[str]:
     return [f"{key}: the bot is missing {labels} in {what} #{getattr(channel, 'name', '')}"]
 
 
-def _explicit_warnings(client: Any, step: Resolved, s: Settings) -> list[str]:
+def visibility_warning(key: str, channel: Any, private: Optional[bool]) -> str:
+    """``private`` rule on a channel @everyone can see, or a channel only its members see (normal rule
+    and plain settings: ``private`` False/None)."""
+    name = getattr(channel, "name", "")
+    if private and is_public(channel):
+        return f"{key}: private rule, but #{name} is visible to @everyone; everyone there sees the whole meeting"
+    if not private and not is_public(channel):
+        return f"{key}: #{name} is not visible to @everyone; only its members see the notes"
+    return ""
+
+
+def _explicit_warnings(client: Any, step: Resolved, s: Settings, private: Optional[bool] = None) -> list[str]:
     ch = _cached_channel(client, step.channel_id or "")
     if ch is None:
         return []
-    out = []
-    if not is_public(ch):
-        out.append(f"{step.key}: #{getattr(ch, 'name', '')} is not visible to @everyone; only its members see the notes")
+    out = [w for w in (visibility_warning(step.key, ch, private),) if w]
     if is_nsfw(ch):
         out.append(f"{step.key}: #{getattr(ch, 'name', '')} is marked NSFW")
-    out += permission_warnings(step.key, ch, attach=s.delivery_discord_transcript and step.key in EXPLICIT_KEYS)
+    out += permission_warnings(step.key, ch, attach=s.delivery_discord_transcript and is_explicit(step.key))
     return out + forum_warnings(step.key, ch, s)
 
 
 def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optional[frozenset[str]] = None) -> Destination:
     """Pure over the discord.py cache (runs on the gateway loop). ``allowed_guilds``: the servers of the
     meeting's space (``None``: unrestricted, one space); nothing outside them is ever a target."""
+    from ..routes import match_route
+
     allowed = allowed_guilds
     d = Destination()
     imported = meeting.source == SOURCE_GOOGLE_MEET or not meeting.guild_id
-    keys = (("google_meet_discord_channel", s.google_meet_discord_channel),) if meeting.source == SOURCE_GOOGLE_MEET else ()
-    keys += (("delivery_discord_channel", s.delivery_discord_channel),)
+    rule = match_route(meeting, s.routes())
+    if rule is not None:  # the rule's channel and nothing else (DESIGN §19.2)
+        d.rule, d.private = rule.origin, rule.private
+        keys: tuple[tuple[str, str], ...] = ((route_key(rule), rule.channel),)
+        if rule.error:
+            d.guild_source = "none"
+            d.steps.append(Resolved(route_key(rule), "", "invalid", detail=f"{route_key(rule)}: {rule.error}"))
+            d.problem = pending_reason(meeting, d)
+            return d
+    else:
+        keys = ((("google_meet_discord_channel", s.google_meet_discord_channel),)
+                if meeting.source == SOURCE_GOOGLE_MEET else ())
+        keys += (("delivery_discord_channel", s.delivery_discord_channel),)
     guild = None
     search_everywhere = False  # a name may be looked up across servers only when nothing fixes the server
     if not imported:
@@ -441,10 +477,12 @@ def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optio
             d.steps.append(step)
         if step.channel_id and step.channel_id not in d.targets:
             d.targets.append(step.channel_id)
-            d.warnings += _explicit_warnings(client, step, s)
+            d.warnings += _explicit_warnings(client, step, s, d.private if rule is not None else None)
             if guild is None:  # a name found in exactly one server: that server
                 guild = d.guild = _guild_of_channel(client, step.channel_id)
                 d.guild_source = "channel" if guild is not None else d.guild_source
+    if rule is not None:
+        return _finish_rule(client, d, s, meeting, guild, allowed)
     if not imported:
         for cid in (meeting.text_channel_id, meeting.channel_id):
             if cid and is_ascii_digits(str(cid)) and str(cid) not in d.targets:
@@ -466,6 +504,45 @@ def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optio
     return d
 
 
+def _finish_rule(client: Any, d: Destination, s: Settings, meeting: Meeting, guild: Any,
+                 allowed: Optional[frozenset[str]]) -> Destination:
+    """A rule decided the notes channel: no voice chat, no automatic channel. A private rule has no
+    fallback channel either (its tasks never leave the notes channel by themselves)."""
+    if not d.private:
+        fb = _check_id(client, resolve_setting(client, "delivery_fallback_channel", s.delivery_fallback_channel, guild,
+                                               allowed), guild, allowed)
+        if fb.status != "unset":
+            d.steps.append(fb)
+        d.fallback_channel = fb.channel_id
+        if fb.channel_id:
+            d.warnings += _explicit_warnings(client, fb, s)
+        d.warnings += _project_forum_warnings(client, s, guild)
+    if not d.targets:
+        d.problem = pending_reason(meeting, d)
+    return d
+
+
+def resolve_routes(client: Any, s: Settings, allowed: Optional[frozenset[str]] = None) -> list[dict[str, Any]]:
+    """Every ``meeting_routes`` rule resolved against the discord.py cache (doctor / ``config list``):
+    origin, channel, kind, private, visibility and what is wrong."""
+    out: list[dict[str, Any]] = []
+    for rule in s.routes():
+        row: dict[str, Any] = {"origin": rule.origin, "kind": rule.kind, "channel": rule.channel,
+                               "private": rule.private, "status": "invalid" if rule.error else "",
+                               "detail": rule.error}
+        if not rule.error:
+            step = _check_id(client, resolve_setting(client, route_key(rule), rule.channel, None, allowed), None,
+                             allowed)
+            ch = _cached_channel(client, step.channel_id or "")
+            row.update(status=step.status, detail=step.detail, channel_id=step.channel_id or "",
+                       channel_name=step.channel_name or str(getattr(ch, "name", "") or ""), target_kind=step.kind)
+            if ch is not None:
+                row.update(target_kind=kind_label(ch), public=is_public(ch),
+                           warning=visibility_warning(route_key(rule), ch, rule.private))
+        out.append(row)
+    return out
+
+
 def _project_forum_warnings(client: Any, s: Settings, guild: Any) -> list[str]:
     """``project_channels`` entries that are forums of this server: permissions and required tags."""
     out: list[str] = []
@@ -485,12 +562,16 @@ def channel_key(meeting: Meeting) -> str:
 
 def explicit_channel(d: Destination) -> Optional[Resolved]:
     """The first notes channel that comes from a CONFIGURED setting (never the automatic one)."""
-    return next((st for st in d.steps if st.key in EXPLICIT_KEYS and st.status == "ok" and st.channel_id), None)
+    return next((st for st in d.steps if is_explicit(st.key) and st.status == "ok" and st.channel_id), None)
 
 
 def pending_reason(meeting: Meeting, d: Destination) -> str:
     """The exact instruction shown by ``status``/``doctor`` while a delivery waits for a channel."""
-    key = channel_key(meeting)
     problems = "; ".join(st.detail for st in d.steps if st.detail and st.status not in ("ok", "unset"))
+    if d.rule:
+        return (f"waiting for the Discord channel of rule {d.rule!r} in meeting_routes: "
+                f"{problems or 'its channel could not be resolved'}. Fix the rule with `hermes meeting-scribe "
+                "config set meeting_routes \"...\"` (the meeting is never published elsewhere)")
+    key = channel_key(meeting)
     hint = f"`hermes meeting-scribe config set {key} \"#channel-name\"` (or a channel id)"
     return f"waiting for a Discord channel: {problems or 'no notes channel could be resolved'}. Set one with {hint}"

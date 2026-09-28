@@ -24,6 +24,7 @@ class Board:
     meeting: Meeting
     views: tuple[TaskView, ...]
     channels: tuple[ChannelInfo, ...]
+    private: bool = False  # a private meeting (DESIGN §19.2): tasks stay in the notes channel until shared
 
     def view(self, item_id: str) -> Optional[TaskView]:
         return next((v for v in self.views if v.item.id == item_id), None)

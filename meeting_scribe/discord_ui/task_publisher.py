@@ -20,6 +20,10 @@ its first message and the applied tags; a deleted post is created again, a post 
 message was deleted keeps being used. A forum that requires a tag and refuses the post leaves the
 delivery waiting (:class:`DestinationPending`) — never another channel, never a DM.
 
+PRIVATE meetings (DESIGN §19.2, :mod:`private_share`): the summary, the transcript, EVERY task and the
+index stay in the private notes channel; no project channel, no fallback channel, no assignee DM. Each
+task shows share buttons; what was shared is kept current by :func:`private_share.sync_copies`.
+
 Every pointer is saved right after its message exists, so a retry after a partial failure edits
 instead of duplicating (review W8). A task whose route changed (📁 move, new learned mapping) is
 re-posted in its new place and the old message deleted.
@@ -37,6 +41,7 @@ from .board import Board, build_board
 from .destination import (MAX_FORUM_TAGS, Destination, DestinationPending, channel_key, explicit_channel, is_forum,
                           pick_tags, same_guild, tag_names, tag_rejected)
 from .guild import snapshot_channels
+from .private_share import sync_copies, with_sharing, withdraw_public
 from .publisher import Messages, Pointers, ViewFactory, is_missing
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
@@ -80,8 +85,11 @@ def _message_ids(p: dict) -> list:
 class TaskPublisher:
     def __init__(self, *, adapter: Any, views: ViewFactory, settings: Settings, repo: Any,
                  options: RenderOptions, destination: Callable[[Meeting], Destination],
-                 transcript_text: Optional[Callable[[Meeting], Optional[str]]] = None) -> None:
+                 transcript_text: Optional[Callable[[Meeting], Optional[str]]] = None,
+                 private: Callable[[Meeting], bool] = lambda _m: False) -> None:
+        """``private(meeting)``: the meeting is private (DESIGN §19.2); called in a worker thread."""
         self.msgs = Messages(adapter, views)
+        self._private = private
         self.views = views
         self._transcript_text = transcript_text
         self.adapter = adapter
@@ -95,10 +103,32 @@ class TaskPublisher:
         """The stored summary pointer (the meeting was already posted), if any."""
         return await Pointers(self.repo, meeting.id).load("notes")
 
+    async def is_private(self, meeting: Meeting) -> bool:
+        return bool(await asyncio.to_thread(self._private, meeting))
+
     async def board(self, meeting: Meeting, notes: Notes) -> Board:
         guild = self._destination(meeting).guild
         channels = snapshot_channels(guild, need_threads=self.settings.delivery_project_threads) if guild else []
-        return await asyncio.to_thread(build_board, self.repo, self.settings, meeting, notes, channels)
+        board = await asyncio.to_thread(build_board, self.repo, self.settings, meeting, notes, channels)
+        if not await self.is_private(meeting):
+            return board
+        ptrs = Pointers(self.repo, meeting.id)
+        return await with_sharing(board, ptrs, dm_on=self.settings.delivery_dm_assignees,
+                                  notes_place=await self.private_place(meeting, ptrs))
+
+    async def private_place(self, meeting: Meeting, ptrs: Pointers) -> set[str]:
+        """The private notes channel of a meeting: the rule's channel(s) and — once posted — the notes
+        channel, its forum post and the thread holding its tasks."""
+        place = {str(c) for c in self._destination(meeting).targets}
+        ptr = await ptrs.load("notes") or {}
+        if {str(ptr.get(k)) for k in ("channel", "forum") if ptr.get(k)} & place:
+            place |= {str(ptr[k]) for k in ("channel", "forum", "thread") if ptr.get(k)}
+        return place
+
+    @staticmethod
+    def task_target(view: TaskView, private: bool) -> str:
+        """What a ``task:<item>`` pointer records as its place: the project channel, or ``private``."""
+        return "private" if private else (view.route.channel_id or "")
 
     # -- meeting chat ---------------------------------------------------------------------------
     async def _chat_channel(self, meeting: Meeting) -> Any:
@@ -112,6 +142,10 @@ class TaskPublisher:
             if not self._in_server(channel, dest):
                 continue
             return channel
+        if dest.rule:  # a meeting_routes rule: its channel or nothing — wait with the reason (DESIGN §19.2)
+            raise DestinationPending(f"waiting for the Discord channel of rule {dest.rule!r} in meeting_routes: "
+                                     "the channel is not reachable (deleted, or the bot cannot see it). "
+                                     "The meeting is never published elsewhere")
         raise LookupError("no reachable Discord channel for notes "
                           f"({dest.problem or 'every candidate channel is unavailable'})")
 
@@ -386,17 +420,20 @@ class TaskPublisher:
     async def place_task(self, meeting: Meeting, view: TaskView, target: Any, ptrs: Pointers) -> dict:
         suffix = f"task:{view.item.id}"
         ptr = await ptrs.load(suffix)
-        notice = t("tasks.moved_notice", self.o.lang, title=view.item.title,
-                   channel=f"<#{view.route.channel_id or target.id}>")
+        private = view.sharing is not None
+        # a message left behind in a project channel by a meeting that became private must not keep its text
+        notice = (t("share.moved_private", self.o.lang) if private else
+                  t("tasks.moved_notice", self.o.lang, title=view.item.title,
+                    channel=f"<#{view.route.channel_id or target.id}>"))
         placed = await self.msgs.edit_or_send(ptr, target, spec=render_task(meeting, view, self.o),
                                               moved_notice=notice)
-        new = {**placed, "target": view.route.channel_id or ""}
+        new = {**placed, "target": self.task_target(view, private)}
         await ptrs.save(suffix, new, placed.get("url", ""))
         return new
 
     async def edit_task(self, meeting: Meeting, view: TaskView, ptrs: Pointers) -> bool:
         ptr = await ptrs.load(f"task:{view.item.id}")
-        if not ptr or (ptr.get("target") or None) != view.route.channel_id:
+        if not ptr or (ptr.get("target") or "") != self.task_target(view, view.sharing is not None):
             return False  # never posted or it must move: the caller re-publishes
         try:
             channel = await self.msgs.channel(ptr["channel"])
@@ -441,7 +478,7 @@ class TaskPublisher:
 
     # -- index ----------------------------------------------------------------------------------
     async def index(self, board: Board, chat: Any, threads: dict, dm_failed: Sequence[str], ptrs: Pointers) -> None:
-        spec = render_index(board.meeting, board.views, threads, dm_failed, self.o)
+        spec = render_index(board.meeting, board.views, threads, dm_failed, self.o, private=board.private)
         ptr = await ptrs.load("index")
         placed = await self.msgs.edit_or_send(ptr, chat, spec=spec)
         await ptrs.save("index", {**placed, "threads": {str(k): v for k, v in threads.items()},
@@ -453,8 +490,9 @@ class TaskPublisher:
             return
         threads = {(None if k == "None" else k): v for k, v in (ptr.get("threads") or {}).items()}
         chat = await self.msgs.channel(ptr["channel"])
-        await self.msgs.edit(chat, ptr["message"],
-                             spec=render_index(board.meeting, board.views, threads, ptr.get("dm_failed") or (), self.o))
+        await self.msgs.edit(chat, ptr["message"], spec=render_index(board.meeting, board.views, threads,
+                                                                     ptr.get("dm_failed") or (), self.o,
+                                                                     private=board.private))
 
     async def _drop_stale_tasks(self, board: Board, ptrs: Pointers) -> None:
         """A reprocess that no longer finds a task deletes its message (and its pointer)."""
@@ -643,6 +681,8 @@ class TaskPublisher:
         ``reprocess --from deliver`` (the only way a meeting leaves a DM). A move is finished — DM
         messages deleted — only by a DELIVER, after everything new was posted."""
         ptrs = Pointers(self.repo, meeting.id)
+        if await self.is_private(meeting):  # anything posted before it became private leaves public places
+            await withdraw_public(self, ptrs, await self.private_place(meeting, ptrs))
         move = await self._dm_state(meeting, ptrs, move_from_dm=move_from_dm and attach_transcript)
         chat = await self._move_target(meeting, move, ptrs, deliver=attach_transcript) if move else None
         if move is not None and chat is None:
@@ -654,8 +694,8 @@ class TaskPublisher:
                                    strict=bool(move and TRANSCRIPT_SUFFIX in (move.get("old") or {})))
         board = await self.board(meeting, notes)
         groups: dict[Optional[str], list[TaskView]] = {}
-        for view in board.views:
-            groups.setdefault(view.route.channel_id, []).append(view)
+        for view in board.views:  # a private meeting keeps every task in its notes channel
+            groups.setdefault(None if board.private else view.route.channel_id, []).append(view)
         threads: dict[Optional[str], Any] = {}
         refused: list[str] = []  # forums that refused a post (required tag): the delivery waits after the rest
         for cid, views in groups.items():
@@ -671,7 +711,7 @@ class TaskPublisher:
                         raise
                     except Exception as exc:  # channel vanished since the snapshot: meeting chat
                         log.info("meeting-scribe: project channel %s unavailable (%s)", cid, exc)
-                if target is None and cid is None:
+                if target is None and cid is None and not board.private:
                     target = await self._fallback_target(meeting, notes, chat, len(views), ptrs)
             except DestinationPending as exc:  # these tasks wait for the forum; never another channel
                 log.warning("meeting-scribe: meeting %s: %s", meeting.id, exc)
@@ -687,7 +727,10 @@ class TaskPublisher:
         # Only Discord users can be DMed; imported speakers (``gmeet:…``) are skipped (DESIGN §17).
         assignees = [str(u) for u in dict.fromkeys(v.item.owner_speaker_id for v in board.views
                                                    if is_discord_user_id(v.item.owner_speaker_id))]
-        if self.settings.delivery_dm_assignees:
+        if board.private:  # no panels: only what a member shared (kept current here)
+            assignees = []
+            await sync_copies(self, board, ptrs)
+        elif self.settings.delivery_dm_assignees:
             for uid in assignees:
                 if not await self.dm(board, uid, ptrs, send=send_dms):
                     dm_failed.append(uid)
