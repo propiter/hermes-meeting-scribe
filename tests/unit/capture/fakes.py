@@ -143,7 +143,7 @@ class FakeDave:
             raise ValueError("Failed to decrypt: UnencryptedWhenPassthroughDisabled")
         owner, seq = struct.unpack_from(">QI", packet, 4)
         if user_id != owner and self.shared.get(owner) != user_id:
-            raise ValueError("Failed to decrypt: NoValidCryptorFound")
+            raise ValueError("Failed to decrypt: DecryptionFailed")  # a key that is not the sender's
         if (user_id, packet) in self.seen:
             raise ValueError("Failed to decrypt: nonce already processed")
         self.seen.add((user_id, packet))
