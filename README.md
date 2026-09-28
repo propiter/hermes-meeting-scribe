@@ -181,20 +181,21 @@ hermes meeting-scribe setup [--non-interactive] [--language CODE] [--model NAME]
                             [--retention multitrack|mixed|none] [--kanban-mode approve|auto|off]
                             [--linear-mode approve|auto|off] [--linear-team KEY] [--obsidian-vault PATH]
 hermes meeting-scribe doctor [--json]
-hermes meeting-scribe status [--json]
-hermes meeting-scribe list [-n 20]
-hermes meeting-scribe show <id>
-hermes meeting-scribe reprocess <id> [--from transcribe|analyze|deliver] [--now]
-hermes meeting-scribe export <id> [--format md|json] [--out FILE]
-hermes meeting-scribe config get [KEY]
-hermes meeting-scribe config set KEY VALUE
-hermes meeting-scribe config list [--json] [--group GROUP]   # value + origin (+ resolved channel)
+hermes meeting-scribe status [--json] [--space SLUG]
+hermes meeting-scribe list [-n 20] [--space SLUG]
+hermes meeting-scribe show <id> [--space SLUG]
+hermes meeting-scribe reprocess <id> [--from transcribe|analyze|deliver] [--now] [--space SLUG]
+hermes meeting-scribe export <id> [--format md|json] [--out FILE] [--space SLUG]
+hermes meeting-scribe config get [KEY] [--space SLUG]
+hermes meeting-scribe config set KEY VALUE [--space SLUG]    # with --space: that space's override
+hermes meeting-scribe config list [--json] [--group GROUP] [--space SLUG]   # value + origin (+ resolved channel)
 hermes meeting-scribe config schema --json [--lang en|es]    # machine-readable form description
 hermes meeting-scribe llm show [--json]                      # see "Models and fallbacks"
 hermes meeting-scribe llm set [--provider P] [--model M] [--base-url URL] [--timeout S]
 hermes meeting-scribe llm fallback add|remove|clear|set ...
 hermes meeting-scribe llm test [--json]
-hermes meeting-scribe google connect|status|sync|disconnect   # see "Google Meet"
+hermes meeting-scribe google connect|status|sync|disconnect [--space SLUG]   # see "Google Meet"
+hermes meeting-scribe space list|show|create|rename|delete|add-guild|remove-guild|set|unset   # see "Spaces"
 ```
 
 By default, `reprocess` queues the work for the gateway's worker. Add `--now` to process it in the
@@ -648,6 +649,37 @@ The plugin helps you do this:
 - To delete a meeting, remove its folder. `audio_retention: none` deletes the audio once processing
   finishes.
 
+## Spaces: several teams on one bot
+
+A **space** is one team or client: its own Discord servers, meetings, settings (overrides on top of
+the global ones), owners, people links and Google Meet connection. Nothing crosses from one space to
+another. A new install has one space, `main`, which takes every server the bot is in: with a single
+team you never need to think about spaces.
+
+```text
+hermes meeting-scribe space create "Acme" --slug acme      # a second team
+hermes meeting-scribe space add-guild acme 123456789012345678   # its Discord server
+hermes meeting-scribe space set acme ui_language en         # a per-space override (unset to remove)
+hermes meeting-scribe google connect --space acme --client-secret acme-client.json
+hermes meeting-scribe space list                            # servers, meetings, Google per space
+```
+
+With several spaces:
+
+- A server that no space owns is never recorded. `/meeting` there answers that an administrator must
+  link it and names the command (`space add-guild <space> <server id>`). `doctor` lists those servers.
+- In a DM, `/meeting` uses the spaces of the servers you are in. If you are in several, add
+  `space=<id>` at the end, for example `/meeting list space=acme`.
+- CLI views (`status`, `list`, `show`, `export`) show every space with a space column unless you pass
+  `--space`; actions (`reprocess`, `config set`, `google …`) need `--space`.
+- Machine-wide settings (`pipeline_*`, `transcribe_model`, `audio_*`…) cannot differ per space.
+
+**Recording in parallel.** Different servers record at the same time, each into its own space. Discord
+gives a bot **one voice connection per server**, so one server records one channel at a time: while a
+channel is being recorded, auto-join does not move to another channel of that server, and
+`/meeting start` from another channel says which channel is being recorded. Google Meet imports of
+different spaces run independently (one space paused by Google does not delay another).
+
 ## Hermes Desktop: the Meetings page
 
 The plugin ships a **Meetings** page for Hermes Desktop (`desktop/plugin.js`, with its API in
@@ -671,8 +703,8 @@ default). A **Meetings** row appears in the sidebar and in the command palette.
   whether it is the default, a custom value or invalid; and **Models** (main model plus ordered
   backups you can add, remove and reorder).
 
-**One library in every profile.** The page always shows the data of the profile where the plugin is
-installed, whichever profile you switch to in Desktop. Hermes only serves a plugin's page API when
+**Launch Desktop with the plugin's profile.** The page always shows the data of the profile where the
+plugin is installed, whichever profile you switch to in Desktop. Hermes only serves a plugin's page API when
 Desktop was *opened* with a profile that has the plugin enabled. If Desktop was opened with another
 profile, the page says so: close it and open it with the profile where Meetings is installed. Do not
 enable the plugin in a second profile to "fix" this; that starts a second copy of the bot with its own
@@ -686,11 +718,17 @@ written with the same rules as `hermes meeting-scribe config set` and `llm set`.
 has not been exercised in a running Hermes Desktop. Audio playback relies on Desktop's media stream
 for `recording.ogg` and is unproven there; multitrack (`.mka`) recordings cannot be played.
 
+**Several spaces.** The page has no space selector yet: with more than one space its library and
+status show an error asking for a space. The API underneath already takes `?space=` and manages
+spaces and servers (contract: [DESIGN, Appendix A](docs/DESIGN.md#appendix-a-rest-contract-desktop-apipluginsmeeting-scribe)).
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `/meeting start` says capture is not compatible | Hermes' Discord adapter changed internals the plugin relies on. `doctor` lists the failing checks under `discord_compat`. Update the plugin, or run a Hermes version it supports. |
+| "I'm already recording **X** in this server" from another channel | One voice connection per server: stop the other recording first, or use another server. |
+| `/meeting` says the server is not linked to any team | Several spaces exist and no space owns this server: `hermes meeting-scribe space add-guild <space> <server id>`. |
 | "I'm already connected to a voice channel in this server" | Discord allows **one voice connection per server for each bot**. Run `/voice leave` (Hermes voice chat) first. |
 | `/meeting start` fails from the CLI or TUI | Live capture only works from Discord, because it needs the gateway's Discord connection. |
 | The first word from a new speaker is missing | Known Discord/DAVE limitation: a new speaker's audio is dropped until Discord maps their stream, which takes about 100 ms. |
@@ -704,7 +742,8 @@ for `recording.ogg` and is unproven there; multitrack (`.mka`) recordings cannot
   account owns or joined; it has not yet been tested against the live Google API.
 - Live capture works on Discord only. Processing, search and the agent tools work on any Hermes
   surface.
-- Each Discord server can have one recording at a time. Several servers can record at once.
+- Each Discord server can have one recording at a time (one voice connection per bot and server).
+  Several servers can record at once.
 - The first ~100 ms from a new speaker can be lost (see Troubleshooting).
 - Transcription quality depends on the whisper model and on each speaker's microphone.
 - CPU transcription with `medium` takes about 25–30 s per meeting minute with three active speakers

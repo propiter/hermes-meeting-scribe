@@ -945,18 +945,98 @@ Discord connect, `main` adopts the bot's servers once, and only while it is the 
   `POLLER_RECONCILE_SECONDS` (60 s), so a space created elsewhere gets its poller without a restart
   and without a database read on every tick.
 
-**Not yet available (next phase — CLI/UI/REST).** With a single space everything works unchanged.
-With several spaces, these surfaces refuse instead of guessing:
-- CLI: there is no `--space` selector. `google connect|status|sync|disconnect` stop with
-  `space.choose_cli`. `hermes meeting-scribe status/list/show/export/reprocess` still read every space,
-  as operator views on the machine. There are no commands to create, rename or delete a space, or to add or remove a
-  server or override. `Spaces.create/rename/delete/add_guild/remove_guild/set_override` exist, but
-  only in code.
-- Chat: there is no way to choose a space from a DM, and no admin command to assign an unowned server.
-- Desktop REST/UI: `/v1/meetings*`, `/v1/status` and commands answer 409 when there are several
-  spaces. The API has no space parameter or space listing, and the page has no selector. Settings
-  edited from the Desktop are always global. `google_status` reports `space_required`.
-- Doctor: the Google check warns instead of checking each space's connection. There is no per-space
-  delivery report (`discord.destination.<source>` is still keyed per source only). Backups made by
-  the baseline are not listed yet.
+**Choosing a space.**
+- CLI: `--space <slug>` on `status`, `list`, `show`, `export`, `reprocess`, `config get|set|list` and
+  `google connect|status|sync|disconnect`. An unknown slug exits 2. Views (`status`, `list`, `show`,
+  `export`) without `--space` read every space and add a space column; actions (`reprocess`,
+  `config set`, `google *`) without `--space` exit 2 when there are several spaces. `export`/`reprocess`
+  of an id that belongs to another space than `--space` exit 1. `hermes meeting-scribe space
+  list|show|create|rename|delete|add-guild|remove-guild|set|unset` manages spaces, their servers and
+  overrides.
+- Chat, in a server: the server's space. An unowned server (several spaces) gets a plain answer
+  naming the CLI command an administrator runs (`space add-guild <space> <server id>`); `space=` in a
+  server must name that server's own space.
+- Chat, in a DM with several spaces: the spaces whose servers the caller is a member of, read from the
+  connected bot's member cache (`discord_ui.membership_for`). One → used. Several → `space=<slug>`
+  picks one of them; without it the reply lists them. None, or Discord not connected → the reply asks
+  to run the command inside the team's server. A slug the caller is not in is never used.
 
+**Concurrency (Discord).** Capture sessions are keyed by server, so different servers record in
+parallel, each in its own space. Hermes' adapter keeps ONE voice connection per bot and server
+(`_voice_clients[guild_id]`), so a server records one channel at a time: auto-join never leaves a
+live recording for another channel, and `/meeting start` from another channel of the same server
+answers with the channel being recorded (`capture.other_channel`). Stopping one server leaves the
+others recording.
+
+**Google Meet.** Overlapping meetings are imported independently (records are keyed by conference
+record name and space; the same record name in two accounts gives two meetings). Status,
+`Retry-After` pause, per-record memory and the poll lease are per space: one space paused by Google
+does not delay another.
+
+**Doctor.** `spaces`: each space with its servers; servers the bot is in that no space owns (warn,
+with the `add-guild` command); baseline backups kept; the voice limit above. `google_meet`: one line
+per space (`[slug] …`), worst status wins; the fix commands carry `--space`.
+
+**Desktop REST.** Every data endpoint takes `?space=`; the contract is in Appendix A. The page itself
+has no selector yet: with several spaces it gets 409 and shows the error.
+
+**Still pending.**
+- Desktop UI: space selector, spaces/servers screens and the per-space settings form (the REST
+  contract exists; `desktop/plugin.js` is unchanged).
+- Delivery report per space: `discord.destination.<source>` is still keyed per source only.
+- Chat has no admin command to assign a server; it is done from the CLI or the REST API.
+
+## Appendix A. REST contract (Desktop, `/api/plugins/meeting-scribe`)
+
+Authentication is the host's (session token / OAuth gate). All bodies are JSON. Errors are
+`{"detail": "<plain sentence>"}` with:
+
+| Code | When |
+|---|---|
+| 400 | invalid input: bad value, bad cursor/date, unknown setting, machine-wide key with `?space=`, missing `confirm: true`, bad request id, non-numeric server id, empty name |
+| 403 | the setting is managed by the administrator / managed install |
+| 404 | unknown meeting, command, space (`there is no space called 'x'`) or server-of-space; a meeting of another space is "not found" |
+| 409 | several spaces and no `?space=` on a data endpoint (`this installation has several spaces: say which one with ?space=<id> (the list is at /v1/spaces)`); slug taken; server owned by another space; deleting a non-empty or the last space |
+| 422 | FastAPI parameter validation (e.g. `limit` out of range) |
+
+`space` (query, ≤ 40 chars): optional with one space; required (409) with several on
+`/v1/meetings*`, `/v1/commands/*` and `POST …/commands`. Optional everywhere else as described.
+
+### Data (space-scoped)
+
+| Method, path | Params / body | Response |
+|---|---|---|
+| `GET /v1/meetings` | `space, q, source, state, since, until, channel, project, cursor, limit(1–100, 30)` | `{items:[meeting row], next_cursor, total, facets:{total, states, sources, channels:[{id,name,count}], projects:[{name,count}]}}` |
+| `GET /v1/meetings/{id}` | `space` | `{meeting, notes, tasks, transcript_total, audio:{available, reason?, path?, stream_path?, can_prepare?}, history, job, command, projects, waiting_destination, dm_notes, destinations:{discord, kanban, linear, kanban_board}}` (destinations use the space's settings) |
+| `GET /v1/meetings/{id}/transcript` | `space, cursor, limit(1–500, 200)` | `{items:[{id,t0,t1,speaker,text,…}], total, next_cursor}` |
+| `GET\|HEAD /v1/meetings/{id}/audio` | `space`, `Range` | the listening copy (`playback.ogg`) or `recording.ogg`, inline, 206 with Range; 404 without audio |
+| `POST /v1/meetings/{id}/commands` | `space`; `{request_id:[A-Za-z0-9_-]{1,100}, action:"reprocess", stage:"transcribe"\|"analyze"\|"deliver", confirm:true}` or `{request_id, action:"prepare_audio", confirm:true}` | `{id, action, stage, state:"queued", …}`; the same `request_id` again returns the existing command |
+| `GET /v1/commands/{rid}` | `space` | `{id, action, stage, state, error, created_at, updated_at, …}` |
+| `POST /v1/commands/{rid}/acknowledge` | `space`; `{confirm:true}` | the command, `state:"acknowledged"` |
+
+### Status and doctor
+
+| Method, path | Params | Response |
+|---|---|---|
+| `GET /v1/status` | `space` (optional) | `{worker:{state:"recent"\|"stale"\|"unknown", last_seen}, queue:{running,queued,failed} (machine), space, counts, jobs, waiting_destination, dm_notes, commands, google, settings_warnings}`. With a space: `counts/jobs/…` are that space's and `google` is its connection (`{enabled, client_stored, connected, revoked, connected_at, commands:{connect,status,enable}, last_poll_at?, last_poll_ok?, last_error?, last_import_at?, last_import_meeting?, records_given_up?, records_given_up_last?, retry_after_until?}`). Several spaces and no `space`: `space:null, google:null`, lists empty, `counts` = `queue`. |
+| `GET /v1/doctor` | – | `{exit_code, checks:[{name, status:"ok"\|"warn"\|"fail", detail}]}`; walks every space |
+
+### Spaces and servers
+
+| Method, path | Body | Response |
+|---|---|---|
+| `GET /v1/spaces` | – | `{items:[space]}` with `space = {slug, name, guilds:[{id,name}], google:{enabled, connected, last_check, last_import, error}, counts:{meetings, by_state:{<state>:n}}}` |
+| `POST /v1/spaces` | `{name, slug?}` (slug `^[a-z0-9][a-z0-9-]{0,31}$`, default derived from the name) | `space`; 409 slug taken; 400 bad name/slug |
+| `PATCH /v1/spaces/{slug}` | `{name}` | `space` (the slug never changes) |
+| `DELETE /v1/spaces/{slug}` | – | `{deleted: slug}`; 409 when it has meetings or is the last one |
+| `PUT /v1/spaces/{slug}/guilds/{guild_id}` | – | `space`; the name comes from the bot's server list; 409 owned by another space |
+| `DELETE /v1/spaces/{slug}/guilds/{guild_id}` | – | `space`; 404 when that space does not own it |
+| `GET /v1/guilds` | – | `{items:[{id, name, space: slug\|null, bot_present}], seen_at}` (servers the bot reported at its last connect, plus servers assigned by id it has not reported: `bot_present:false`; `seen_at:null` before the gateway ever connected) |
+
+### Settings
+
+| Method, path | Params / body | Response |
+|---|---|---|
+| `GET /v1/settings` | `lang`, `space` (optional) | `{schema:{language, groups, fields:[{key, group, type, scope:"global"\|"space", storage, label, …}]}, values:{key:{value, origin:"default"\|"configured"\|"space"\|"invalid"}}, warnings, global:[keys], space:[keys], space_slug, overrides:{key:value}, llm}`. Without `space`: global values. With it: what that space sees. |
+| `PUT /v1/settings/{key}` | `space` (optional); `{value}` | without `space`: `{key, value, scope:"global", requeued}` (Hermes config). With it: the space's override, `{key, value, scope:"space", space, requeued}`; `value:null` removes it; a `global` key → 400 |
+| `PUT /v1/llm` | `{provider?, model?, base_url?, timeout?, fallback_chain?}` | the LLM view (machine-wide) |

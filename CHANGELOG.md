@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Spaces**: one bot serves several teams or clients, each with its own Discord servers, meetings,
+  settings overrides, people links and Google Meet connection. `hermes meeting-scribe space …`
+  manages them; `--space` on `status`, `list`, `show`, `export`, `reprocess`, `config` and `google`;
+  `space=<id>` for `/meeting` in a DM; a `spaces` doctor check (unassigned servers, baseline backups,
+  one voice connection per server); Desktop REST endpoints with `?space=` plus `/v1/spaces` and
+  `/v1/guilds` (the page has no selector yet). A pre-spaces database is backed up and started fresh.
+
 - **Google Meet import** (opt-in, `google_meet_enabled`): transcripts that Meet already generated are
   imported and processed like Discord meetings (analysis, tasks per project, Kanban/Linear, Discord).
   Each user connects their own Google OAuth client with `hermes meeting-scribe google connect`
