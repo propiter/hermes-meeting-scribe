@@ -45,6 +45,7 @@ from .destination import (MAX_FORUM_TAGS, Destination, DestinationPending, chann
 from .guild import snapshot_channels
 from .private_share import sync_copies, with_sharing, withdraw_public
 from .publisher import Messages, Pointers, ViewFactory, is_missing
+from .mentions import participants_line
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
 from .transcript_file import SUFFIX as TRANSCRIPT_SUFFIX, mark_legacy, publish_transcript
@@ -175,8 +176,10 @@ class TaskPublisher:
                      attach: Optional[bool] = None) -> tuple[Any, dict]:
         """Post/edit the summary parts; returns the chat channel and the ``notes`` pointer. ``chat`` forces
         where a NEW summary goes and ``attach`` its transcript intent (a move out of a DM keeps both)."""
-        specs = render_header(meeting, notes, self.o.lang)
         ptr = await ptrs.load("notes")
+        mention = bool(getattr(self.settings, "delivery_mention_participants", False))
+        line = str((ptr or {}).get("people") or "") if mention else ""
+        specs = render_header(meeting, notes, self.o.lang, line, ())  # the published line never pings again
         channel = None
         if ptr and ptr.get("messages") and ptr.get("forum"):
             channel, first_id = await self._open_post(ptr["channel"], ptr["messages"][0], specs[0])
@@ -199,6 +202,11 @@ class TaskPublisher:
             if ptr and ptr.get("forum"):
                 await self._forget_post_contents(ptr, ptrs)
             channel = chat if chat is not None else await self._chat_channel(meeting)
+            if mention and not ptr:  # the very first publication only: a re-post never pings (§19.4)
+                who = await asyncio.to_thread(participants_line, self.repo, meeting, channel, self.adapter,
+                                              private=await self.is_private(meeting), lang=self.o.lang)
+                line = who.line
+                specs = render_header(meeting, notes, self.o.lang, line, who.users)
             # the transcript may be attached to THIS summary (set once, when it is first posted)
             intent = bool(self.settings.delivery_discord_transcript) if attach is None else bool(attach)
             if is_forum(channel):
@@ -212,6 +220,8 @@ class TaskPublisher:
                 first = await self.msgs.send(channel, spec=specs[0])
                 ptr = {"v": 2, "channel": channel.id, "thread": None, "messages": [first.id], "url": first.jump_url,
                        "attach": intent}
+            if line:
+                ptr["people"] = line
             await ptrs.save("notes", ptr, ptr["url"])
         if ptr.get("v") != 2:
             ptr = await self._migrate_legacy(channel, ptr, ptrs)

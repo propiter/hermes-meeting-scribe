@@ -128,6 +128,11 @@ class ViewKit:
     def send_kwargs(self) -> dict[str, Any]:
         return {"allowed_mentions": discord.AllowedMentions(users=True, roles=False, everyone=False)}
 
+    def mention_kwargs(self, users: Sequence[str]) -> dict[str, Any]:
+        """Ping exactly ``users`` (never @everyone/@here, roles or the replied user)."""
+        return {"allowed_mentions": discord.AllowedMentions(
+            users=[discord.Object(id=int(u)) for u in users], roles=False, everyone=False, replied_user=False)}
+
     def file(self, name: str, data: bytes) -> discord.File:
         """An attachment built from memory (the transcript, DESIGN §17.3)."""
         import io

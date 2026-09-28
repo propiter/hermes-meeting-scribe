@@ -36,6 +36,9 @@ class ButtonSpec:
 class MessageSpec:
     content: str
     buttons: tuple[ButtonSpec, ...] = ()
+    # ``None``: the default mention policy. A tuple: ping exactly these user ids and nothing else
+    # (``()`` pings nobody) — the notes' participants line (DESIGN §19.4).
+    mentions: Optional[tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -92,10 +95,12 @@ def split_text(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
 
 
 # -- rendering -----------------------------------------------------------------------------------
-def _header(meeting: Meeting, notes: Notes, lang: str) -> str:
+def _header(meeting: Meeting, notes: Notes, lang: str, participants: str = "") -> str:
     none = t("notes.none", lang)
     title = notes.meeting_title or meeting.title or meeting.channel_name
     out = [f"## 🎙️ {title}", f"-# `{meeting.id}` · {meeting.started_at:%Y-%m-%d %H:%M} · {meeting.channel_name}"]
+    if participants:
+        out.append(participants)
     if meeting.partial:
         out.append(f"> ⚠️ {t('notes.partial', lang)}")
     out += [f"**{t('notes.tldr', lang)}:** {notes.tldr or none}", "", f"**{t('notes.decisions', lang)}**"]
@@ -105,6 +110,12 @@ def _header(meeting: Meeting, notes: Notes, lang: str) -> str:
     return "\n".join(out)
 
 
-def render_header(meeting: Meeting, notes: Notes, lang: str) -> list[MessageSpec]:
-    """The meeting-chat summary (title, TL;DR, decisions, open questions), split under 2000 chars."""
-    return [MessageSpec(part) for part in split_text(_header(meeting, notes, lang))]
+def render_header(meeting: Meeting, notes: Notes, lang: str, participants: str = "",
+                  pings: Optional[tuple[str, ...]] = None) -> list[MessageSpec]:
+    """The meeting-chat summary (title, TL;DR, decisions, open questions), split under 2000 chars.
+    ``participants`` (a line under the title) and ``pings`` (who that line may ping) only concern the
+    FIRST part; every other part pings nobody when a participants line is present."""
+    parts = split_text(_header(meeting, notes, lang, participants))
+    if not participants:
+        return [MessageSpec(part) for part in parts]
+    return [MessageSpec(part, mentions=(tuple(pings or ()) if i == 0 else ())) for i, part in enumerate(parts)]

@@ -237,6 +237,14 @@ config_schema:
     label: Attach transcript
     description: Attach the full transcript (Markdown file) to the notes.
     group: delivery
+  delivery_mention_participants:
+    type: bool
+    default: true
+    label: Mention participants
+    description: The first message of the notes @mentions the people who were in the meeting (once, when
+      the notes are first posted; in a private channel only those who can see it). Never @everyone, @here
+      or roles.
+    group: delivery
   delivery_transcript_max_mb:
     type: int
     default: 8

@@ -20,6 +20,8 @@ class FakeMessage:
         self.edits = 0
         self.author = SimpleNamespace(id=BOT_USER_ID)  # everything in these fakes is posted by the bot
         self.file: Any = None
+        self.sent_kwargs: dict = {}
+        self.edit_kwargs: list[dict] = []
 
     @property
     def attachments(self) -> list:
@@ -33,6 +35,7 @@ class FakeMessage:
         if self.channel.archived:
             raise FakeHTTPError(400, 50083, "Operation cannot be performed on an archived thread")
         self.content, self.view = content if content is not None else self.content, view
+        self.edit_kwargs.append(kw)
         if kw.get("attachments") == []:
             self.file = None
         self.edits += 1
@@ -75,6 +78,7 @@ class FakeChannel:
         self.archived = False
         self.applied_tags: list = []
         self.thread_edits: list[dict] = []
+        self.viewers: Optional[set[int]] = None  # members who can view it (None: everyone who is a member)
 
     @property
     def jump_url(self) -> str:
@@ -104,6 +108,10 @@ class FakeChannel:
     def permissions_for(self, member: Any) -> SimpleNamespace:
         if getattr(member, "name", None) == "@everyone":
             return SimpleNamespace(view_channel=self.public, send_messages=self.public)
+        if getattr(member, "is_member", False):  # a server member (not the bot)
+            home = self.parent if self.parent is not None and self.viewers is None else self
+            sees = home.viewers is None and home.public or (home.viewers is not None and member.id in home.viewers)
+            return SimpleNamespace(view_channel=bool(sees))
         ok = self.can_post
         return SimpleNamespace(view_channel=ok, send_messages=ok, create_public_threads=ok and self.threads_ok,
                                send_messages_in_threads=ok, attach_files=ok and self.can_attach)
@@ -120,6 +128,7 @@ class FakeChannel:
             raise RuntimeError("503 Service Unavailable")
         msg = FakeMessage(self, content, view)
         msg.file = kw.get("file")  # attachments (transcript, DESIGN §17.3)
+        msg.sent_kwargs = kw  # allowed_mentions (DESIGN §19.4)
         self.messages[msg.id] = msg
         return msg
 
@@ -174,7 +183,7 @@ class FakeForum(FakeChannel):
         thread.applied_tags = list(applied_tags)
         self.bot.channels[thread.id] = thread
         self.posts.append(thread)
-        first = await thread.send(content, view=view)
+        first = await thread.send(content, view=view, **kw)
         return thread, first
 
     def delete_post(self, thread: FakeChannel) -> None:
@@ -217,6 +226,14 @@ class FakeGuild:
         self.me = SimpleNamespace(id=1)
         self.default_role = SimpleNamespace(id=gid, name="@everyone")
         self.system_channel_id: Optional[int] = None
+        self.members: dict[int, Any] = {}  # the member cache (``get_member``)
+
+    def add_member(self, uid: int) -> Any:
+        self.members[uid] = SimpleNamespace(id=uid, is_member=True)
+        return self.members[uid]
+
+    def get_member(self, uid: int) -> Any:
+        return self.members.get(int(uid))
 
     @property
     def system_channel(self) -> Optional[FakeChannel]:

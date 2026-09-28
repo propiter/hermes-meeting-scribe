@@ -404,5 +404,7 @@
   "routes.setup_origin_meet": "Google Meet code or title (* as wildcard): ",
   "routes.setup_mode": "Mode: 1) normal  2) private (everything stays in one channel)  3) direct messages only (no channel) [1]: ",
   "routes.setup_target": "Text channel or forum (name or id): ",
-  "routes.setup_more": "Another rule? [y/N]: "
+  "routes.setup_more": "Another rule? [y/N]: ",
+  "cfg.delivery_mention_participants.label": "Mention participants",
+  "cfg.delivery_mention_participants.help": "The first message of the notes @mentions the people who were in the meeting (once, when the notes are first posted; in a private channel only those who can see it). Never @everyone, @here or roles."
 }

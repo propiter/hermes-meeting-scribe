@@ -31,6 +31,8 @@ class ViewFactory(Protocol):
 
     def send_kwargs(self) -> dict[str, Any]: ...
 
+    def mention_kwargs(self, users: Sequence[str]) -> dict[str, Any]: ...
+
 
 def is_missing(exc: BaseException) -> bool:
     """Discord says the message/channel is gone (discord.NotFound: HTTP 404, codes 10003/10008)."""
@@ -86,12 +88,18 @@ class Messages:
         if panel is not None:  # components v2: the text lives inside the view, no ``content``
             return await target.send(view=self.views.panel_view(panel), **self.views.send_kwargs())
         assert spec is not None
-        return await target.send(spec.content, view=self.views.view(spec.buttons), **self.views.send_kwargs())
+        return await target.send(spec.content, view=self.views.view(spec.buttons), **self._mentions(spec))
+
+    def _mentions(self, spec: MessageSpec) -> dict[str, Any]:
+        """``allowed_mentions`` of a message: the default, or exactly the users a spec names (§19.4)."""
+        if spec.mentions is None:
+            return self.views.send_kwargs()
+        return self.views.mention_kwargs(spec.mentions)
 
     async def create_post(self, forum: Any, *, name: str, spec: MessageSpec, tags: Sequence[Any] = ()) -> tuple[Any, Any]:
         """A new post in a forum/media channel: ``(thread, first message)`` (discord.py 2.x
         ``ForumChannel.create_thread`` returns ``ThreadWithMessage``)."""
-        kwargs = dict(self.views.send_kwargs())
+        kwargs = dict(self._mentions(spec))
         view = self.views.view(spec.buttons)
         if view is not None:
             kwargs["view"] = view
@@ -121,6 +129,8 @@ class Messages:
             await msg.edit(view=self.views.panel_view(panel), **extra)
         else:
             assert spec is not None
+            if spec.mentions is not None:  # an edit never pings (DESIGN §19.4)
+                extra.update(self.views.mention_kwargs(()))
             await msg.edit(content=spec.content, view=self.views.view(spec.buttons), **extra)
         return msg
 

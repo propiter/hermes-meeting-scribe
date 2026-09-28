@@ -114,9 +114,20 @@ DM_UNREACHABLE_KV = "privacy.dm_unreachable."  # + meeting id -> who did not get
 
 
 def participants(repo: Any, meeting: Meeting) -> tuple[list[str], list[str]]:
-    """``(discord user ids, names that could not be mapped)`` of the humans of a meeting: who spoke or
-    was in the call (``Meeting.human_speakers``). An imported speaker (Google Meet, ``gmeet:…``) counts
-    when exactly one person link of the meeting's space (``/meeting link``) has that name."""
+    """``(discord user ids, names that could not be mapped)`` of the humans of a meeting (see
+    :func:`people`)."""
+    found: list[str] = []
+    unmapped: list[str] = []
+    for uid, name in people(repo, meeting):
+        (found if uid else unmapped).append(uid or name)
+    return list(dict.fromkeys(found)), unmapped
+
+
+def people(repo: Any, meeting: Meeting) -> list[tuple[str, str]]:
+    """``[(discord user id or "", display name)]`` of the humans of a meeting, one per person: who spoke
+    or was in the call (``Meeting.human_speakers``). An imported speaker (Google Meet, ``gmeet:…``) gets
+    an id when exactly one person link of the meeting's space (``/meeting link``) matches its name or
+    email; otherwise only its name."""
     from .domain.models import is_discord_user_id
     from .domain.text import fold
 
@@ -126,18 +137,20 @@ def participants(repo: Any, meeting: Meeting) -> tuple[list[str], list[str]]:
         for value in (link.get("name"), link.get("email")):
             if value and str(value).strip():
                 by_name.setdefault(fold(" ".join(str(value).split())), set()).add(str(link["discord_user_id"]))
-    found: list[str] = []
-    unmapped: list[str] = []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for sp in meeting.human_speakers:
+        name = str(sp.name or sp.user_id)
         if is_discord_user_id(sp.user_id):
-            found.append(str(sp.user_id))
-            continue
-        hits = by_name.get(fold(" ".join(str(sp.name or "").split())), set())
-        if len(hits) == 1:
-            found.append(next(iter(hits)))
+            uid = str(sp.user_id)
         else:
-            unmapped.append(str(sp.name or sp.user_id))
-    return list(dict.fromkeys(found)), unmapped
+            hits = by_name.get(fold(" ".join(str(sp.name or "").split())), set())
+            uid = next(iter(hits)) if len(hits) == 1 else ""
+        if uid and uid in seen:
+            continue
+        seen.add(uid)
+        out.append((uid, name))
+    return out
 
 
 def dm_copies(repo: Any, meeting_id: str) -> dict[str, str]:

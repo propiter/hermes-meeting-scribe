@@ -35,6 +35,9 @@ class Views:
     def send_kwargs(self):
         return {}
 
+    def mention_kwargs(self, users):
+        return {"allowed_mentions": {"users": tuple(users), "roles": False, "everyone": False}}
+
 
 @pytest.fixture
 def env(tmp_path, meeting, notes):

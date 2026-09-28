@@ -404,5 +404,7 @@
   "routes.setup_origin_meet": "Código o título del Google Meet (* como comodín): ",
   "routes.setup_mode": "Modo: 1) normal  2) privada (todo se queda en un canal)  3) solo mensajes directos (sin canal) [1]: ",
   "routes.setup_target": "Canal de texto o foro (nombre o id): ",
-  "routes.setup_more": "¿Otra regla? [s/N]: "
+  "routes.setup_more": "¿Otra regla? [s/N]: ",
+  "cfg.delivery_mention_participants.label": "Mencionar a los participantes",
+  "cfg.delivery_mention_participants.help": "El primer mensaje de las notas menciona con @ a quienes estuvieron en la reunión (una vez, al publicarlas por primera vez; en un canal privado solo a quienes pueden verlo). Nunca @everyone, @here ni roles."
 }

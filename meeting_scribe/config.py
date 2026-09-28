@@ -102,6 +102,7 @@ SPEC: dict[str, Opt] = {
     "delivery_project_threads": Opt("bool", True, "delivery"),
     "delivery_dm_assignees": Opt("bool", True, "delivery"),
     "delivery_discord_transcript": Opt("bool", True, "delivery"),
+    "delivery_mention_participants": Opt("bool", True, "delivery"),
     "delivery_transcript_max_mb": Opt("int", 8, "delivery", minimum=1, maximum=500),
     "delivery_forum_tags": Opt("list", (), "delivery"),
     "delivery_forum_default_tag": Opt("list", (), "delivery"),
@@ -301,6 +302,7 @@ class Settings:
     delivery_project_threads: bool
     delivery_dm_assignees: bool
     delivery_discord_transcript: bool
+    delivery_mention_participants: bool
     google_meet_enabled: bool
     google_meet_poll_minutes: int
     google_meet_discord_channel: str
