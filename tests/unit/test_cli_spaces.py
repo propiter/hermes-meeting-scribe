@@ -140,6 +140,19 @@ def test_views_show_every_space_and_actions_require_one(two, capsys):
     assert code == 2 and "--space" in out
     assert run(two, ["reprocess", "team0001", "--space", "main"], capsys)[0] == 1
     assert run(two, ["list", "--space", "ghost"], capsys)[0] == 2
+    for view in (["status"], ["show", "x"], ["export", "x"], ["reprocess", "x"]):
+        assert run(two, [*view, "--space", "ghost"], capsys)[0] == 2  # an unknown space is never guessed
+
+
+def test_text_views_carry_the_space_column(two, capsys):
+    code, out = run(two, ["status"], capsys)
+    assert code == 0 and "main0001  main" in out and "team0001  team" in out
+    code, out = run(two, ["status", "--space", "team"], capsys)
+    assert "team0001  done" in out and "main0001" not in out  # one space chosen: no column
+    code, out = run(two, ["export", "team0001", "--format", "json"], capsys)  # a view: ids are unique
+    assert code == 0 and json.loads(out)["meeting"]["space"] == "team"
+    assert run(two, ["export", "team0001", "--space", "main"], capsys)[0] == 1
+    assert run(two, ["reprocess", "team0001", "--space", "team", "--from", "deliver"], capsys)[0] == 0
 
 
 def test_one_space_needs_no_selector(rt, meeting, capsys):

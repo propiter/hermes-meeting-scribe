@@ -268,8 +268,8 @@ class Runtime:
             poller.stop()
 
     # -- Google Meet import (DESIGN §17, §23: one connection per space) ---------------------------
-    # ``space=None`` (the CLI / doctor, which have no space selector yet): the install's only space;
-    # with several, ``SpaceError`` — never another team's connection by accident.
+    # ``space=None``: the install's only space; with several, ``SpaceError`` — never another team's
+    # connection by accident (the CLI passes ``--space``, doctor walks every space).
     def google_files(self, space: Optional[str] = None) -> "GoogleFiles":
         from .google.oauth import GoogleFiles
 
