@@ -35,6 +35,7 @@ from typing import Any, Callable, Optional, Protocol
 from ..config import Settings
 from ..domain.ids import short_id
 from ..domain.models import Meeting, MeetingState, Speaker
+from ..discord_ui.render import safe_name
 from ..i18n import t
 from .consent import Consent
 
@@ -362,9 +363,13 @@ class RecordingSession:
             except Exception:  # the row stays 'recording'; the owner's recover() closes it later
                 log.exception("meeting-scribe: recording %s could not be finished",
                               self.meeting.id if self.meeting else "-")
-            await self.consent.announce(t("capture.stopped" if self.heard else "capture.stopped_empty", self.lang,
-                                          reason=t(f"capture.reason_{reason}", self.lang),
-                                          id=self.meeting.id if self.meeting else "-"))
+            text = t("capture.stopped" if self.heard else "capture.stopped_empty", self.lang,
+                     reason=t(f"capture.reason_{reason}", self.lang), id=self.meeting.id if self.meeting else "-")
+            if self.missing_audio:
+                names = ", ".join(safe_name(self._speakers[u].name if u in self._speakers else u)
+                                  for u in self.missing_audio)
+                text += "\n⚠️ " + t("notes.missing_audio", self.lang, names=names)
+            await self.consent.announce(text)
         except Exception:
             log.exception("meeting-scribe: finalize of guild %s failed", self.guild_id)
         finally:

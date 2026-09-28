@@ -268,6 +268,7 @@ async def test_present_unheard_for_over_a_minute_is_reported_missing(world, capl
     with caplog.at_level("WARNING"):
         await s.stop("stopped")
     assert s.missing_audio == ("43",) and world["service"].missing == [("43",)]
+    assert "Could not capture the audio of: Luis" in world["voice"].sent[-1]["content"]
     assert any("audio not captured for Luis (43)" in r.getMessage() for r in caplog.records)
 
 
