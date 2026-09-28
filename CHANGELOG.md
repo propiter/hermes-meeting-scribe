@@ -161,6 +161,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Voices Discord never announced are no longer lost.** Discord often sends no SPEAKING for
+  people already in the call when the bot joins; their audio was decoded still encrypted and
+  dropped without a word. It is now kept (bounded: 60 s per voice, 4 MiB overall) and identified —
+  with DAVE by the only participant key that opens it, without DAVE by the only person present
+  without a voice — then written at its original times. The people already in the call come from
+  the voice handshake (CLIENTS_CONNECT) and the channel. Audio that cannot be attributed safely
+  goes to an "Unidentified participant" track instead of the wrong person (DESIGN §4.1).
+- **Missing audio is reported.** Someone unmuted in the call for over a minute whose voice was not
+  captured is named in the stop message, the Discord notes ("Could not capture the audio of: …"),
+  `notes.md`, Desktop (Summary and Processing), `status` and `doctor`, and logged as a warning.
+- **`config list` and `doctor` no longer show the notes channel of an older setting.** The last
+  delivery's report counts only while it resolved the value configured now; otherwise the channel
+  list resolves the new value, or it says it will be checked on the next delivery.
 - **Imported meetings no longer turn into Discord meetings after an older gateway rewrote them.**
   A gateway running pre-v4 code saved a Google Meet import's JSON without `source`/`external_id`;
   the columns kept `google_meet` and the record, but every read used the JSON, so `reprocess`

@@ -204,6 +204,66 @@ Ending a meeting: `stop`, OR automatically when no humans remain for
   voice client in that guild → start. Only one recording per guild (Discord
   limit); multiple guilds concurrently.
 
+### 4.1 Voices without SPEAKING, and audio that never arrived
+
+Discord maps an RTP SSRC to a user only through SPEAKING (voice op 5). In
+production it often sends none for people **already in the call when the bot
+connects** (they re-join → SPEAKING within seconds; people who join after the
+bot always get one). Hermes' `_on_packet` then skips DAVE for that SSRC (no
+user id) and feeds the still end-to-end-encrypted payload to Opus: noise or
+decode errors, and the voice is lost silently. The plugin fixes this without
+touching Hermes:
+
+- **Retain, don't decode.** `_Decoders` hands Hermes a `_Retainer` for an
+  unmapped SSRC: it keeps the payload after the transport layer (NaCl) with its
+  arrival time. Bounded: `RETAIN_SECONDS` (60 s) per SSRC and
+  `RETAIN_MAX_BYTES` (4 MiB) overall — the oldest frame of any SSRC goes first.
+- **Candidates.** People in the voice channel (voice states, every tick),
+  CLIENTS_CONNECT (op 11: the `user_ids` already in the call, sent during the
+  voice handshake) and CLIENT_CONNECT/DISCONNECT (ops 12/13), plus
+  `DaveSession.get_user_ids()` (the MLS group), minus the bot and users already
+  mapped. Hermes hooks the websocket only after `connect()` returns — too late
+  for op 11 — so the scribe connects with `channel.connect(cls=ScribeVoiceClient)`,
+  a `discord.VoiceClient` subclass whose `create_connection_state()` passes a
+  hook to `VoiceConnectionState` from the start and keeps ops 11/12/13 (a
+  bounded backlog replayed when the receiver starts, then a listener). These
+  ops carry user ids, never SSRCs.
+- **With DAVE: proof by key.** davey exposes `decrypt(user_id, MediaType.audio,
+  frame)`, `get_user_ids()`, `can_passthrough()`; no SSRC→user mapping. Each
+  user's decryptor only opens frames sealed with that user's key, so a frame
+  (magic `0xFAFA`) is tried with every candidate; the SSRC belongs to the
+  **only** key that opens *and* Opus-decodes `CONFIRM_PACKETS` (3) frames. Two
+  keys opening it (never expected) = ambiguous → not attributed, WARNING.
+  libdave rejects a repeated nonce, so the Opus opened while testing is cached
+  and claim + map + replay happen atomically under the receiver lock.
+- **Without DAVE:** after `IDENTIFY_GRACE` (2 s) with no SPEAKING, the SSRC goes
+  to the sole unmuted person present without an SSRC; another bot present, or
+  two candidates, blocks the guess.
+- **Replay.** Once mapped (key, sole candidate or a late SPEAKING — always
+  authoritative), the retained audio is decoded and written at its original
+  arrival times, so the track timeline is exact.
+- **Never the wrong person.** Decodable audio still unattributable after
+  `UNIDENTIFIED_AFTER` (10 s) is written to its own track
+  `unidentified-N`, speaker "Unidentified participant" (transcribed); a later
+  SPEAKING for that SSRC names the track after that person. Re-joins get a new
+  SSRC: a mapping older than the user's last join is not reused.
+- **Missing audio.** Each tick adds elapsed time to every unmuted human in the
+  channel. At the end, anyone unmuted there > 60 s whose voice reached no track
+  is stored on the meeting (`missing_audio`) and logged as a WARNING with the
+  SSRCs never identified; the stop announcement, the Discord notes and
+  `notes.md` say "Could not capture the audio of: X, Y" / "No se pudo capturar
+  el audio de: X, Y" (plain text, names inert), Desktop shows it in Summary and
+  Processing, `status` lists it, and `doctor` (`missing_audio`) warns about the
+  last 20 meetings.
+- **Compat probe** also checks `_on_packet`'s decoder seam
+  (`ssrc not in self._decoders`, `self._decoders[ssrc].decode(`), davey's
+  `decrypt`/`get_user_ids`/`MediaType.audio`,
+  `VoiceClient.create_connection_state` and `VoiceConnectionState(…, hook=)`.
+- Not verifiable offline: whether Discord sends op 11 to a bot on every
+  connect (discord.py declares it; our integration test drives discord.py's
+  real websocket with it), and davey's real per-user key rejection (simulated
+  by the fakes; the error strings come from the installed library).
+
 ## 5. Audio retention (one file per meeting)
 
 `audio_retention`:
