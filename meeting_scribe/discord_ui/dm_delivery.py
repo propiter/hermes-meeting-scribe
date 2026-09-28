@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 CLOSED_CODE = 50007  # Discord: "Cannot send messages to this user"
+UNKNOWN_USER_CODE = 10013  # Discord: "Unknown User" (a deleted account; discord.py raises NotFound)
 
 
 class Prefixed(Pointers):
@@ -51,8 +52,9 @@ class Prefixed(Pointers):
 
 
 def unreachable(exc: BaseException) -> bool:
-    """The person cannot get a DM from the bot: DMs closed (403 / 50007) or an unknown user."""
-    return (isinstance(exc, LookupError) or getattr(exc, "code", None) == CLOSED_CODE
+    """The person cannot get a DM from the bot: DMs closed (403 / 50007) or an unknown user (a deleted
+    account: 10013, or a lookup miss). Such a recipient is skipped and the others still get theirs."""
+    return (isinstance(exc, LookupError) or getattr(exc, "code", None) in (CLOSED_CODE, UNKNOWN_USER_CODE)
             or getattr(exc, "status", None) == 403)
 
 
