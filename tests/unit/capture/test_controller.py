@@ -30,7 +30,7 @@ class Svc:
     def track_path(self, m, uid):
         return self.root / f"{uid}.ogg"
 
-    def finish_recording(self, mid, *, speakers=(), partial=False, heard=True):
+    def finish_recording(self, mid, *, speakers=(), partial=False, heard=True, missing_audio=()):
         self.finished.append((mid, partial))
 
 

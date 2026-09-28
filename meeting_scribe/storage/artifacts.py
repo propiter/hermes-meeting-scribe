@@ -104,6 +104,8 @@ def render_notes_md(meeting: Meeting, notes: Notes, lang: str) -> str:
     out = [_frontmatter(meeting, notes), f"# {title}", ""]
     if meeting.partial:
         out += [f"> {t('notes.partial', lang)}", ""]
+    if meeting.missing_audio:
+        out += [f"> {t('notes.missing_audio', lang, names=', '.join(meeting.missing_audio_names))}", ""]
     out += [f"**{t('notes.tldr', lang)}:** {notes.tldr}", "", f"## {t('notes.summary', lang)}", "",
             notes.summary or none, ""]
     if notes.topics:

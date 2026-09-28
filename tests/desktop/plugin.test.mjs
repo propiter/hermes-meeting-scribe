@@ -290,6 +290,19 @@ test('summary tab: lead, decisions, questions, pending tasks and prepare-audio',
   assert.match(html, /Esperando un lugar donde publicar/)
 })
 
+test('summary and processing tabs say whose audio was not captured', opts, async () => {
+  const { createElement } = await import('react')
+  const d = { ...DETAIL, meeting: { ...MEETING, missing_audio_names: ['Luis', 'Eve'] } }
+  for (const tab of ['summary', 'processing']) {
+    mod.$tab.set(tab)
+    const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': d, '/v1/status': STATUS }, 'es')
+    assert.match(html, /No se pudo capturar el audio de: Luis, Eve/)
+  }
+  mod.$tab.set('summary')
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': DETAIL, '/v1/status': STATUS })
+  assert.doesNotMatch(html, /Could not capture the audio/)
+})
+
 test('summary tab plays the listening copy through the media protocol when available', opts, async () => {
   const { createElement } = await import('react')
   mod.$tab.set('summary')

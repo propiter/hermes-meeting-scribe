@@ -249,6 +249,26 @@ def test_llm_without_hermes_config_says_so(rt, capsys):
     assert code == 1 and "not available" in out
 
 
+def test_status_and_doctor_name_people_whose_audio_was_not_captured(rt, capsys):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from meeting_scribe.doctor import check_missing_audio
+    from meeting_scribe.domain.models import Speaker
+
+    repo = rt.service().repo
+    m = repo.get_meeting(rt.mid)
+    repo.save_meeting(replace(m, speakers=(*m.speakers, Speaker("43", "Luis")), missing_audio=("43",)))
+    code, out = run(rt, ["status"], capsys)
+    assert "! Could not capture the audio of: Luis" in out
+    code, out = run(rt, ["status", "--json"], capsys)
+    assert json.loads(out)["recent"][0]["missing_audio"] == ["Luis"]
+    res = check_missing_audio(SimpleNamespace(service=rt.service))
+    assert res.status == "warn" and f"{rt.mid} (Luis)" in res.detail
+    repo.save_meeting(replace(m, missing_audio=()))
+    assert check_missing_audio(SimpleNamespace(service=rt.service)).status == "ok"
+
+
 def test_status_and_doctor_explain_notes_left_in_a_dm(rt, capsys):
     from meeting_scribe.domain.models import KV_DM_NOTES
 

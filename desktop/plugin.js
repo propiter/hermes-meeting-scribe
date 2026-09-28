@@ -144,6 +144,8 @@ export const LOCALES = {
       tabs: { summary: 'Summary', transcript: 'Transcript', tasks: 'Tasks', processing: 'Processing' },
       duration: m => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`),
       partial: 'Partial recording: the bot joined late or the call was cut.',
+      missingAudio: names => `Could not capture the audio of: ${names}`,
+      missingAudioHelp: 'They were in the call but Discord never delivered their voice to the bot, so they are not in the transcript or the notes.',
       summary: 'Summary', inShort: 'In short', topics: 'Topics', decisions: 'Decisions', questions: 'Open questions',
       pendingTasks: 'Pending tasks', allTasks: n => `See all ${n} tasks`,
       noNotes: 'The notes are not ready yet. They appear here once the meeting has been processed.',
@@ -376,6 +378,8 @@ export const LOCALES = {
       tabs: { summary: 'Resumen', transcript: 'Transcripción', tasks: 'Tareas', processing: 'Procesamiento' },
       duration: m => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`),
       partial: 'Grabación parcial: el bot entró tarde o la llamada se cortó.',
+      missingAudio: names => `No se pudo capturar el audio de: ${names}`,
+      missingAudioHelp: 'Estaban en la llamada pero Discord nunca le entregó su voz al bot, así que no aparecen en la transcripción ni en las notas.',
       summary: 'Resumen', inShort: 'En pocas palabras', topics: 'Temas', decisions: 'Decisiones', questions: 'Preguntas abiertas',
       pendingTasks: 'Tareas pendientes', allTasks: n => `Ver las ${n} tareas`,
       noNotes: 'Las notas aún no están listas. Aparecerán aquí cuando termine el proceso de la reunión.',
@@ -1130,12 +1134,21 @@ function StatePill({ state }) {
 }
 
 // -- summary ------------------------------------------------------------------------------------
+function MissingAudio({ meeting: m }) {
+  const t = usePluginI18n(ID)
+  const names = m.missing_audio_names || []
+  return names.length
+    ? h(Callout, { tone: 'warn', title: t('detail.missingAudio', names.join(', ')) }, h('p', null, t('detail.missingAudioHelp')))
+    : null
+}
+
 function SummaryTab({ detail: d, tasks, audioRef, commandId, onSubmitted, onFinished }) {
   const t = usePluginI18n(ID)
   const m = d.meeting
   const n = d.notes
   const notices = h(Fragment, null,
     m.partial ? h(Callout, { tone: 'warn' }, h('p', null, t('detail.partial'))) : null,
+    h(MissingAudio, { meeting: m }),
     d.waiting_destination ? h(Callout, { tone: 'warn', title: t('detail.waiting') }, h('p', null, t('detail.waitingHelp'))) : null,
     d.dm_notes ? h(Callout, { tone: 'muted', title: t('detail.dmNotes') }, h('p', null, t('detail.dmNotesHelp'))) : null)
   const audio = h(AudioBlock, { id: m.id, audio: d.audio || {}, audioRef, commandId, onSubmitted, onFinished })
@@ -1383,6 +1396,7 @@ function ProcessingTab({ detail: d, commandId, onSubmitted, onFinished }) {
       job && isInProgress(m.state) && job.attempts > 1 ? h('span', { className: 'ms-hint' }, t('processing.attempts', job.attempts)) : null)
   }
   return h('div', { className: 'ms-stack' },
+    h(MissingAudio, { meeting: m }),
     h(Block, { title: t('processing.current'), id: 'ms-current' }, current),
     h(Block, { title: t('processing.history'), id: 'ms-history' },
       history.length

@@ -220,6 +220,41 @@ def scribe_receiver_class(base: type) -> type:
             self._identified: dict[int, tuple[int, str]] = {}
             self._labels: dict[str, int] = {}
             self._resolved: dict[str, int] = {}  # unidentified label -> user SPEAKING named later
+            self._voice_clients: set[int] = set()  # users op 11/12 says have media in the call
+
+        # -- voice gateway opcodes ----------------------------------------------------------------
+        def _install_speaking_hook(self, conn: Any) -> None:
+            """After Hermes wraps the voice websocket hook for SPEAKING (op 5), wrap it once more to
+            see CLIENTS_CONNECT (op 11, ``user_ids`` already in the call when we connect),
+            CLIENT_CONNECT (op 12) and CLIENT_DISCONNECT (op 13). discord.py hands every JSON voice
+            message to that hook. They carry user ids, never SSRCs: they widen the DAVE key
+            candidates; the SSRC is still proven by the key (DESIGN §4.1)."""
+            super()._install_speaking_hook(conn)
+            hermes_hook = conn.hook
+            receiver = self
+
+            async def hook(ws: Any, msg: Any) -> None:
+                if isinstance(msg, dict):
+                    receiver.note_voice_op(msg.get("op"), msg.get("d") or {})
+                await hermes_hook(ws, msg)
+
+            conn.hook = hook
+            live = getattr(conn, "ws", None)
+            if live is not None and getattr(live, "_hook", None) is hermes_hook:
+                live._hook = hook
+
+        def note_voice_op(self, op: Any, data: Any) -> None:
+            if not isinstance(data, dict):
+                return
+            if op == 11:
+                ids = {int(u) for u in data.get("user_ids") or () if str(u).isdigit()}
+                log.info("meeting-scribe: voice CLIENTS_CONNECT: %d user(s) already in the call: %s",
+                         len(ids), sorted(ids))
+                with self._lock:
+                    self._voice_clients |= ids
+            elif op in (12, 13) and str(data.get("user_id") or "").isdigit():
+                with self._lock:
+                    (self._voice_clients.add if op == 12 else self._voice_clients.discard)(int(data["user_id"]))
 
         # -- presence (event-loop thread) -------------------------------------------------------
         def update_presence(self, user_ids: Iterable[int], muted: Iterable[int] = ()) -> None:
@@ -245,8 +280,9 @@ def scribe_receiver_class(base: type) -> type:
             return bool(self._dave_session) and payload[-2:] == DAVE_MAGIC
 
         def _key_candidates(self) -> list[int]:
-            """Whose DAVE key to try: people in the channel plus the DAVE group, minus the bot."""
-            ids = set(self._present or ())
+            """Whose DAVE key to try: people in the channel, op 11/12 users and the DAVE group, minus
+            the bot."""
+            ids = set(self._present or ()) | self._voice_clients
             try:
                 ids.update(int(u) for u in self._dave_session.get_user_ids())
             except (AttributeError, TypeError, ValueError):  # a session without a group yet

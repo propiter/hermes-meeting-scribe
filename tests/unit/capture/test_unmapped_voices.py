@@ -122,6 +122,31 @@ def test_dave_candidates_include_the_group_even_before_presence(clock):
     assert list(rx.drain()) == [C]
 
 
+def test_clients_connect_user_ids_become_key_candidates(clock):
+    """The production pattern: people already in the call when the bot connects get no SPEAKING;
+    op 11 lists them (no SSRC), and their DAVE key proves which SSRC is theirs."""
+    import asyncio
+
+    dave = FakeDave([C])
+    dave.get_user_ids = lambda: []  # no group info, and C not in the member list yet
+    rx = make(clock, dave=dave, present=())
+    seen: list = []
+    conn = rx._vc._connection
+
+    async def deliver():
+        await conn.hook(None, {"op": 11, "d": {"user_ids": [str(C)]}})
+        await conn.hook(None, {"op": 5, "d": {"ssrc": 900, "user_id": str(A)}})
+        seen.append(True)
+
+    asyncio.run(deliver())
+    assert seen and rx._ssrc_to_user[900] == A  # Hermes' SPEAKING mapping still runs
+    talk_dave(rx, clock, 700, C, 3)
+    assert list(rx.drain()) == [C]
+    assert rx.voice_report().identified[700] == (C, "dave")
+    asyncio.run(conn.hook(None, {"op": 13, "d": {"user_id": str(C)}}))
+    assert C not in rx._voice_clients
+
+
 def test_late_speaking_replays_retained_dave_audio(clock):
     rx = make(clock, dave=FakeDave([C]), present=(A,))  # C's key not tried yet: no group info...
     rx._dave_session.members = [C]

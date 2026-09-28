@@ -26,6 +26,9 @@ class GoodReceiver:
     def map_ssrc(self, ssrc, user_id):
         pass
 
+    def _install_speaking_hook(self, conn):
+        pass
+
     def _on_packet(self, data):
         ssrc = 1
         if ssrc not in self._decoders:

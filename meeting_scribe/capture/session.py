@@ -8,10 +8,16 @@ inactivity timer. Playback is muted on our voice client (see :func:`mute_playbac
 voice-mode reply in another text chat of the guild can never be spoken into the meeting.
 
 A drain loop (0.5 s) moves timed frames from the receiver into per-speaker writers, sends the UDP
-keepalive, re-reads the DAVE session every tick, and decides when to stop: explicit stop, no
+keepalive, re-reads the DAVE session every tick, tells the receiver who is in the channel (the
+candidates for a voice SPEAKING never announced, DESIGN §4.1), and decides when to stop: explicit stop, no
 humans for ``autoleave_grace_seconds``, ``limits_max_duration_minutes``, or the voice client being
 lost (``/voice leave``/adapter disconnect immediately; a discord.py reconnect only after it has
 not recovered for ``vc.timeout`` seconds → partial).
+
+Missing audio (DESIGN §4.1): each tick adds the elapsed time to every unmuted person in the channel.
+At the end, a person unmuted there for more than ``MISSING_AUDIO_SECONDS`` whose voice never reached
+a track is recorded on the meeting (``missing_audio``) and logged as a WARNING with the SSRCs that
+could not be identified, so the notes, Desktop and ``status`` say whose audio is missing.
 
 Finalisation always completes (review W5): it runs as its own task shielded from the caller's
 cancellation and sets ``_finished`` in a ``finally``, so ``wait()`` and the controller's reaper
@@ -37,6 +43,7 @@ KEEPALIVE = b"\xf8\xff\xfe"
 KEEPALIVE_SECONDS = 15.0
 RECONNECT_GRACE_SECONDS = 30.0  # discord.py's own VoiceClient.timeout default
 PARTIAL_REASONS = frozenset({"disconnected", "shutdown", "error"})
+MISSING_AUDIO_SECONDS = 60.0
 
 
 class Busy(RuntimeError):
@@ -78,6 +85,11 @@ def mute_playback(vc: Any) -> None:
         log.debug("meeting-scribe: cannot mute playback: %s", exc)
 
 
+def _muted(member: Any) -> bool:
+    voice = getattr(member, "voice", None)
+    return bool(getattr(voice, "self_mute", False) or getattr(voice, "mute", False))
+
+
 def _conn_state_name(vc: Any) -> Optional[str]:
     return getattr(getattr(getattr(vc, "_connection", None), "state", None), "name", None)
 
@@ -97,8 +109,11 @@ class RecordingSession:
         self.t0 = 0.0
         self.reason: Optional[str] = None
         self.done = False
-        self._writers: dict[int, Writer] = {}
-        self._writer_errors: dict[int, str] = {}
+        self._writers: dict[Any, Writer] = {}  # user id, or an "unidentified-N" label
+        self._writer_errors: dict[Any, str] = {}
+        self._unmuted_seconds: dict[str, float] = {}
+        self._last_tick = 0.0
+        self.missing_audio: tuple[str, ...] = ()
         self._speakers: dict[str, Speaker] = {}
         self._task: Optional[asyncio.Task] = None
         self._teardown: Optional[asyncio.Task] = None
@@ -151,8 +166,9 @@ class RecordingSession:
             try:
                 self.receiver = self.deps.receiver_cls(self.vc, clock=self.deps.clock)
                 self.receiver.start()
-                self.t0 = self.deps.clock()
+                self.t0 = self._last_tick = self.deps.clock()
                 self._note_members()
+                self._update_presence()
                 # Known before the row exists: live_meeting_ids() must cover it for recover() (W7).
                 self.meeting = self._new_meeting()
                 self.meeting = await asyncio.to_thread(self.deps.service.begin_recording, self.meeting)
@@ -181,6 +197,20 @@ class RecordingSession:
         for m in self.humans():
             self._speakers.setdefault(str(m.id), Speaker(str(m.id), m.display_name))
 
+    def _update_presence(self) -> None:
+        """Tell the receiver who may own an unannounced SSRC: everyone in the channel but us (another
+        bot can talk too), and who is muted; count each unmuted person's time for ``missing_audio``."""
+        now = self.deps.clock()
+        elapsed, self._last_tick = max(0.0, now - self._last_tick), now
+        me = getattr(getattr(self.vc, "user", None), "id", None)
+        members = [m for m in getattr(self.channel, "members", []) if m.id != me]
+        muted = [m.id for m in members if _muted(m)]
+        self.receiver.update_presence([m.id for m in members], muted)
+        for m in members:
+            if not getattr(m, "bot", False) and m.id not in muted:
+                key = str(m.id)
+                self._unmuted_seconds[key] = self._unmuted_seconds.get(key, 0.0) + elapsed
+
     def _speaker_for(self, user_id: int) -> Optional[Speaker]:
         """Speaker for audio from ``user_id``; None for bots (their audio is not recorded)."""
         key = str(user_id)
@@ -208,7 +238,16 @@ class RecordingSession:
         grace = float(getattr(vc, "timeout", None) or RECONNECT_GRACE_SECONDS)
         return now - self._unhealthy_since >= grace  # a resume/move that never recovered
 
-    def _writer_for(self, user_id: int) -> Optional[Writer]:
+    def _unidentified_speaker(self, label: str) -> Speaker:
+        """The speaker of an "unidentified participant" track, named after the person a SPEAKING
+        that arrived later designated, if any (SPEAKING is authoritative)."""
+        if label not in self._speakers:
+            number = label.rsplit("-", 1)[-1]
+            name = t("capture.unidentified", self.lang) + ("" if number == "1" else f" {number}")
+            self._speakers[label] = Speaker(label, name)
+        return self._speakers[label]
+
+    def _writer_for(self, user_id: Any) -> Optional[Writer]:
         writer = self._writers.get(user_id)
         if writer is not None or user_id in self._writer_errors:
             return writer
@@ -231,6 +270,11 @@ class RecordingSession:
             writer = self._writer_for(user_id)
             if writer is not None:
                 writer.write(frames)
+        for label, frames in self.receiver.drain_unidentified().items():
+            self._unidentified_speaker(label)
+            writer = self._writer_for(label)
+            if writer is not None:
+                writer.write(frames)
 
     async def _run(self) -> None:
         clock = self.deps.clock
@@ -247,6 +291,7 @@ class RecordingSession:
                     reason = "disconnected"
                     break
                 self.receiver.refresh_connection()  # DAVE key/session changes apply on the next tick
+                self._update_presence()
                 self._drain()
                 if now - last_keepalive >= KEEPALIVE_SECONDS:
                     last_keepalive = now
@@ -308,6 +353,7 @@ class RecordingSession:
             except Exception:
                 log.exception("meeting-scribe final drain failed")
             self._stop_receiver()
+            self._check_missing_audio()
             await asyncio.to_thread(self._close_writers)
             await self.consent.restore_nickname()
             await self._release_voice()
@@ -332,6 +378,7 @@ class RecordingSession:
         self.reason = reason
         try:
             self._stop_receiver()
+            self._check_missing_audio()
             self._close_writers()
             self._finish(True)
         finally:
@@ -361,6 +408,30 @@ class RecordingSession:
             if writer.error:
                 log.warning("meeting-scribe: track %s had errors: %s", uid, writer.error)
 
+    def _check_missing_audio(self) -> None:
+        """People unmuted in the channel > ``MISSING_AUDIO_SECONDS`` whose voice reached no track."""
+        if self.receiver is None:
+            return
+        report = self.receiver.voice_report()
+        for label, uid in report.resolved.items():  # SPEAKING came after the audio went unidentified
+            sp = self._speaker_for(uid)
+            if sp is not None and label in self._speakers:
+                self._speakers[label] = Speaker(label, sp.name)
+        captured = {str(u) for u in self._writers} | {str(u) for u in self._writer_errors}
+        captured |= {str(u) for u in report.resolved.values()}
+        missing = tuple(uid for uid, secs in self._unmuted_seconds.items()
+                        if secs > MISSING_AUDIO_SECONDS and uid not in captured)
+        self.missing_audio = missing
+        if missing or report.undecided or report.unidentified:
+            names = {uid: self._speakers[uid].name if uid in self._speakers else uid for uid in missing}
+            log.warning("meeting-scribe %s: audio not captured for %s; ssrc never identified: %s; "
+                        "recorded as unidentified: %s; identified without SPEAKING: %s",
+                        self.meeting.id if self.meeting else "-",
+                        ", ".join(f"{n} ({u})" for u, n in names.items()) or "nobody",
+                        ", ".join(f"{s} ({n} packets)" for s, n in report.undecided.items()) or "none",
+                        ", ".join(f"{lbl}=ssrc {s}" for lbl, s in report.unidentified.items()) or "none",
+                        ", ".join(f"ssrc {s}->{u} ({how})" for s, (u, how) in report.identified.items()) or "none")
+
     @property
     def heard(self) -> bool:
         """Whether audio of any person (never a bot) reached a track writer during the recording.
@@ -373,7 +444,7 @@ class RecordingSession:
             return
         self.meeting = replace(self.meeting, speakers=tuple(self._speakers.values()))
         self.deps.service.finish_recording(self.meeting.id, speakers=tuple(self._speakers.values()),
-                                           partial=partial, heard=self.heard)
+                                           partial=partial, heard=self.heard, missing_audio=self.missing_audio)
 
     async def _release_voice(self) -> None:
         vc = self.vc

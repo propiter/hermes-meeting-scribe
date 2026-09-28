@@ -298,6 +298,9 @@ class Meeting:
     external_id: Optional[str] = None
     # The space (team/client) the meeting belongs to (DESIGN §23): fixed at creation, never crosses.
     space: str = ""
+    # User ids of people who were in the call (unmuted, > 1 min) but whose voice was never captured
+    # (DESIGN §4.1): every surface that shows the notes says so.
+    missing_audio: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("started_at", "ended_at"):
@@ -308,6 +311,12 @@ class Meeting:
     @property
     def human_speakers(self) -> tuple[Speaker, ...]:
         return tuple(s for s in self.speakers if not s.is_bot)
+
+    @property
+    def missing_audio_names(self) -> tuple[str, ...]:
+        """Display names of :attr:`missing_audio` (the id when the person is not a speaker)."""
+        names = {s.user_id: s.name for s in self.speakers}
+        return tuple(names.get(uid) or uid for uid in self.missing_audio)
 
     @property
     def duration_seconds(self) -> Optional[float]:
@@ -322,6 +331,7 @@ class Meeting:
         d["started_at"] = self.started_at.isoformat()
         d["ended_at"] = self.ended_at.isoformat() if self.ended_at else None
         d["speakers"] = [asdict(s) for s in self.speakers]
+        d["missing_audio"] = list(self.missing_audio)
         return d
 
     @classmethod
@@ -333,6 +343,7 @@ class Meeting:
         data["speakers"] = tuple(Speaker(str(s["user_id"]), str(s["name"]), bool(s.get("is_bot")),
                                          str(s.get("google_user") or ""))
                                  for s in data.get("speakers") or ())
+        data["missing_audio"] = tuple(str(u) for u in data.get("missing_audio") or ())
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 

@@ -33,6 +33,7 @@ class FakeService:
     begun: list = field(default_factory=list)
     finished: list = field(default_factory=list)
     heard: list = field(default_factory=list)
+    missing: list = field(default_factory=list)
 
     def begin_recording(self, meeting):
         assert meeting.state is MeetingState.RECORDING
@@ -42,9 +43,10 @@ class FakeService:
     def track_path(self, meeting, user_id):
         return self.root / meeting.id / "tracks" / f"{user_id}.ogg"
 
-    def finish_recording(self, meeting_id, *, speakers=(), partial=False, heard=True):
+    def finish_recording(self, meeting_id, *, speakers=(), partial=False, heard=True, missing_audio=()):
         self.finished.append((meeting_id, tuple(speakers), partial))
         self.heard.append(heard)
+        self.missing.append(tuple(missing_audio))
 
 
 class FakeWriter:
@@ -244,3 +246,66 @@ async def test_only_a_bot_heard_counts_as_nobody(world):
     await run_ticks()
     await s.stop("stopped")
     assert s.heard is False and world["service"].heard == [False]
+
+
+# -- voices without SPEAKING / missing audio (DESIGN §4.1) ---------------------------------------
+async def test_receiver_learns_who_is_in_the_channel_and_who_is_muted(world):
+    world["ana"].voice.self_mute = True
+    s = await started(world)
+    await run_ticks()
+    assert s.receiver._present == {42, 43, 77}  # another bot may own an SSRC too
+    assert s.receiver._unmuted == {43, 77}
+    await s.stop("stopped")
+
+
+async def test_present_unheard_for_over_a_minute_is_reported_missing(world, caplog):
+    s = await started(world)
+    s.receiver.map_ssrc(1, 42)
+    s.receiver._buffers[1].extend(FRAME)
+    await run_ticks(1)
+    world["clock"].t += 61  # Luis is in the call, unmuted, for over a minute; never heard
+    await run_ticks()
+    with caplog.at_level("WARNING"):
+        await s.stop("stopped")
+    assert s.missing_audio == ("43",) and world["service"].missing == [("43",)]
+    assert any("audio not captured for Luis (43)" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_short_stay_or_a_muted_person_is_not_reported(world):
+    world["ana"].voice.self_mute = True
+    s = await started(world)
+    world["clock"].t += 30
+    await run_ticks()
+    await s.stop("stopped")
+    assert world["service"].missing == [()]
+
+
+async def test_unidentified_audio_gets_its_own_labelled_track(world):
+    from .fakes import FakeCodec
+
+    s = await started(world)
+    s.receiver._codec = FakeCodec()
+    s.receiver._label_decoders["unidentified-1"] = FakeCodec()
+    s.receiver._labels["unidentified-1"] = 700
+    s.receiver._unidentified["unidentified-1"] = [(s.t0 + 1, FRAME)]
+    await run_ticks()
+    assert [w.path.name for w in FakeWriter.instances] == ["unidentified-1.ogg"]
+    await s.stop("stopped")
+    speakers = {sp.user_id: sp.name for sp in world["service"].finished[0][1]}
+    assert speakers["unidentified-1"] == "Unidentified participant"
+    assert s.heard
+
+
+async def test_speaking_after_unidentified_names_that_track(world):
+    s = await started(world)
+    s.receiver._pending[700] = __import__("meeting_scribe.capture.receiver", fromlist=["_Pending"])._Pending(
+        first=0.0, last=0.0, label="unidentified-1")
+    s.receiver._labels["unidentified-1"] = 700
+    s._unidentified_speaker("unidentified-1")
+    s.receiver.map_ssrc(700, 43)
+    world["clock"].t += 61
+    await run_ticks()
+    await s.stop("stopped")
+    speakers = {sp.user_id: sp.name for sp in world["service"].finished[0][1]}
+    assert speakers["unidentified-1"] == "Luis"
+    assert "43" not in s.missing_audio

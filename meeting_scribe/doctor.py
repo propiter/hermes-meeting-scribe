@@ -396,6 +396,23 @@ def check_capture(env: DoctorEnv) -> Check:
     return Check.ok(detail) if ok else Check.warn(detail)
 
 
+MISSING_AUDIO_RECENT = 20
+
+
+def check_missing_audio(env: Any) -> Check:
+    """Recent recordings in which someone was in the call but their voice never arrived (DESIGN §4.1)."""
+    service = getattr(env, "service", None)
+    if not callable(service):
+        return Check.ok("no runtime")
+    hits = [f"{m.id} ({', '.join(m.missing_audio_names)})"
+            for m in service().repo.list_meetings(limit=MISSING_AUDIO_RECENT) if m.missing_audio]
+    if not hits:
+        return Check.ok(f"every participant was heard in the last {MISSING_AUDIO_RECENT} meetings")
+    return Check.warn(f"audio of people in the call was not captured in {len(hits)} of the last "
+                      f"{MISSING_AUDIO_RECENT} meetings: " + "; ".join(hits)
+                      + ". Discord did not deliver their voice; see the gateway log (\"audio not captured\")")
+
+
 _RANK = {"ok": 0, "warn": 1, "fail": 2}
 
 
@@ -489,6 +506,7 @@ registry = CheckRegistry()
 for _name, _fn in (("owner", check_owner), ("settings", check_settings), ("ffmpeg", check_ffmpeg), ("faster_whisper", check_faster_whisper),
                    ("storage", check_storage), ("disk", check_disk), ("llm", check_llm), ("kanban", check_kanban),
                    ("linear", check_linear), ("obsidian", check_obsidian), ("capture", check_capture),
+                   ("missing_audio", check_missing_audio),
                    ("google_meet", check_google_meet), ("delivery", check_delivery), ("spaces", check_spaces)):
     registry.register_check(_name, _fn)
 

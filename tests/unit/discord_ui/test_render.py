@@ -66,6 +66,16 @@ def test_partial_meeting_and_empty_sections(meeting, notes):
     assert "interrupted" in body and "None." in body
 
 
+@pytest.mark.parametrize("lang,text", [("es", "No se pudo capturar el audio de: Luis, \\*Eve\\*"),
+                                       ("en", "Could not capture the audio of: Luis, \\*Eve\\*")])
+def test_missing_audio_is_said_in_plain_text_and_names_are_inert(meeting, notes, lang, text):
+    from meeting_scribe.domain.models import Speaker
+
+    m = replace(meeting, speakers=(Speaker("43", "Luis"), Speaker("44", "*Eve*")), missing_audio=("43", "44"))
+    msgs = render_header(m, notes, lang)
+    assert text in msgs[0].content and msgs[0].mentions == ()
+
+
 def test_custom_ids_of_the_new_actions_fit_discord_limits():
     for action, item in (("mine", "all"), ("pg", "m12"), ("pg", "a0"), ("tsel", "a0123456789")):
         cid = custom_id(action, "k3v7q2ab", item)

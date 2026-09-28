@@ -95,6 +95,21 @@ def split_text(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
     return [p for p in parts if p.strip()] or [""]
 
 
+_MD_SPECIAL = re.compile(r"([\\*_`~|>\[\]()#:-])")
+
+
+def safe_name(name: str) -> str:
+    """A display name as inert Discord text: no mentions, no Markdown, one line.
+
+    Google Meet names are typed by the participants themselves (anonymous guests included), so a
+    name like ``<@123>`` or ``**x**`` must never ping or format anything. Every ``@`` gets a
+    zero-width space (stricter than ``discord.utils.escape_mentions``, which only catches 17-20
+    digit ids) and Markdown characters are backslash-escaped (``escape_markdown``).
+    """
+    one_line = " ".join(str(name or "").split())
+    return _MD_SPECIAL.sub(r"\\\1", one_line).replace("@", "@\u200b")
+
+
 # -- rendering -----------------------------------------------------------------------------------
 def _header(meeting: Meeting, notes: Notes, lang: str, participants: str = "") -> str:
     none = t("notes.none", lang)
@@ -104,6 +119,9 @@ def _header(meeting: Meeting, notes: Notes, lang: str, participants: str = "") -
         out.append(participants)
     if meeting.partial:
         out.append(f"> ⚠️ {t('notes.partial', lang)}")
+    if meeting.missing_audio:
+        names = ", ".join(safe_name(n) for n in meeting.missing_audio_names)
+        out.append(f"> ⚠️ {t('notes.missing_audio', lang, names=names)}")
     out += [f"**{t('notes.tldr', lang)}:** {notes.tldr or none}", "", f"**{t('notes.decisions', lang)}**"]
     out += [f"- {d}" for d in notes.decisions] or [none]
     out += ["", f"**{t('notes.open_questions', lang)}**"]

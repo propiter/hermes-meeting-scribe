@@ -20,7 +20,8 @@ DECODER_SEAMS = ("ssrc not in self._decoders", "self._decoders[ssrc].decode(")
 
 # (owner label, attribute, kind) — kind: "method" (callable on the class), "attr" (instance attr
 # set in __init__), "coro" (async method).
-_RECEIVER = (("start", "method"), ("stop", "method"), ("map_ssrc", "method"), ("_on_packet", "method"))
+_RECEIVER = (("start", "method"), ("stop", "method"), ("map_ssrc", "method"), ("_on_packet", "method"),
+             ("_install_speaking_hook", "method"))
 _RECEIVER_ATTRS = ("_lock", "_buffers", "_decoders", "_ssrc_to_user", "_dave_session", "_secret_key", "_vc")
 _DAVE = (("decrypt", "method"), ("get_user_ids", "method"))
 _ADAPTER = (("leave_voice_channel", "coro"), ("get_user_voice_channel", "coro"), ("_resolve_channel", "coro"),

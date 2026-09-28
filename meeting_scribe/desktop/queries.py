@@ -258,6 +258,7 @@ class Library:
         projects = sorted({p for p in [meeting.project, *(t.get("project") for t in tasks)] if p}, key=str.lower)
         public = public_meeting(meeting.to_dict())
         public["people"] = _people(public)
+        public["missing_audio_names"] = list(meeting.missing_audio_names)
         public["private"] = self.private(meeting)
         return {"meeting": public, "notes": notes, "tasks": tasks, "projects": projects,
                 "transcript_total": self.repo.utterance_count(mid), "job": self.job(mid),

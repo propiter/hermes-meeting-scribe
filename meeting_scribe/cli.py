@@ -239,6 +239,8 @@ def _status(args: argparse.Namespace, rt: CliRuntime) -> int:
         else:
             extra = f" [{job.get('state')}: {job.get('error')}]" if job.get("error") else ""
         _print(f"  {row['id']}  {_space_col(space, row['space'])}{row['state']:<12} {row['title']}{extra}")
+        if row.get("missing_audio"):
+            _print(f"    ! {t('notes.missing_audio', lang, names=', '.join(row['missing_audio']))}")
     for mid, reason in (st.get("waiting_destination") or {}).items():
         _print(f"! {mid}: {reason}")
     for mid, reason in (st.get("dm_notes") or {}).items():

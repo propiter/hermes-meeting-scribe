@@ -111,7 +111,8 @@ class MeetingService:
         for m in self.repo.list_meetings(limit=recent, space=space):
             job = jobs.get(m.id)
             rows.append({"id": m.id, "space": m.space, "title": m.title or m.channel_name, "state": m.state.value,
-                         "started_at": m.started_at.isoformat(), "job": None if job is None else {
+                         "started_at": m.started_at.isoformat(), "missing_audio": list(m.missing_audio_names),
+                         "job": None if job is None else {
                              "state": job.state, "stage": job.stage.value, "attempts": job.attempts,
                              "failed_stage": job.failed_stage.value if job.failed_stage else None,
                              "error": job.error}})
@@ -177,16 +178,18 @@ class MeetingService:
         return path
 
     def finish_recording(self, meeting_id: str, *, speakers: Sequence[Speaker] = (), partial: bool = False,
-                         heard: bool = True) -> Meeting:
+                         heard: bool = True, missing_audio: Sequence[str] = ()) -> Meeting:
         """``heard=False``: the capture never received audio from anyone, so the meeting ends
-        ``empty`` right away (no job, no transcription, nothing published)."""
+        ``empty`` right away (no job, no transcription, nothing published). ``missing_audio``: people
+        present whose voice was not captured (DESIGN §4.1)."""
         meeting = self.repo.get_meeting(meeting_id)
         if meeting is None:
             raise KeyError(meeting_id)
         merged = {s.user_id: s for s in meeting.speakers}
         merged.update({s.user_id: s for s in speakers})
         meeting = replace(meeting, speakers=tuple(merged.values()), ended_at=meeting.ended_at or self.clock.now(),
-                          partial=meeting.partial or partial)
+                          partial=meeting.partial or partial,
+                          missing_audio=tuple(dict.fromkeys((*meeting.missing_audio, *missing_audio))))
         if not heard:
             log.info("meeting-scribe %s: nobody was heard; discarded without processing", meeting.id)
             return self.runner.stages.discard(meeting)

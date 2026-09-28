@@ -102,6 +102,10 @@ def test_detail_notes_tasks_sinks_and_redacted_job(repo, tmp_path, meeting, note
     assert d["waiting_destination"] == "set a channel"
     assert "started_by" not in d["meeting"] and "folder" not in d["meeting"]
     assert d["audio"] == {"available": False, "reason": "not_retained"}
+    assert d["meeting"]["missing_audio_names"] == []
+    from meeting_scribe.domain.models import Speaker
+    repo.save_meeting(replace(m, speakers=(Speaker("43", "Luis"),), missing_audio=("43", "44")))
+    assert Library(repo, tmp_path).detail(m.id)["meeting"]["missing_audio_names"] == ["Luis", "44"]
 
 
 def test_detail_survives_missing_or_damaged_notes(repo, tmp_path, meeting):

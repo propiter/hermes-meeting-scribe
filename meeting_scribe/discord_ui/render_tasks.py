@@ -20,7 +20,7 @@ from typing import Callable, Mapping, Optional, Sequence
 from ..domain.models import ActionItem, ActionStatus, Meeting, is_discord_user_id
 from ..i18n import t
 from ..storage.artifacts import fmt_ts
-from .render import MESSAGE_LIMIT, ButtonSpec, MessageSpec, RenderOptions, custom_id
+from .render import MESSAGE_LIMIT, ButtonSpec, MessageSpec, RenderOptions, custom_id, safe_name
 from .routing import Route
 
 TASKS_PER_PAGE = 4
@@ -63,21 +63,6 @@ class TaskPanel:
     nav: tuple[ButtonSpec, ...]
     page: int
     pages: int
-
-
-_MD_SPECIAL = re.compile(r"([\\*_`~|>\[\]()#:-])")
-
-
-def safe_name(name: str) -> str:
-    """A display name as inert Discord text: no mentions, no Markdown, one line.
-
-    Google Meet names are typed by the participants themselves (anonymous guests included), so a
-    name like ``<@123>`` or ``**x**`` must never ping or format anything. Every ``@`` gets a
-    zero-width space (stricter than ``discord.utils.escape_mentions``, which only catches 17-20
-    digit ids) and Markdown characters are backslash-escaped (``escape_markdown``).
-    """
-    one_line = " ".join(str(name or "").split())
-    return _MD_SPECIAL.sub(r"\\\1", one_line).replace("@", "@\u200b")
 
 
 def _clip(text: str, limit: int) -> str:
