@@ -15,6 +15,7 @@ from typing import Any, Mapping, Optional, Sequence
 from .result import Result
 
 BOT_GUILDS_KV = "discord.bot_guilds"
+CHANNELS_KV = "discord.channels."  # + guild id -> the bot's channel catalog of that server (DESIGN §19.3)
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,29 @@ class SpacesMixin:
             return [], None
         pairs = json.loads(row["value"] or "[]")
         return [(str(g), str(n)) for g, n in pairs], float(row["updated_at"])
+
+    def set_guild_channels(self, guild_id: str, channels: Sequence[Mapping[str, Any]]) -> None:
+        """The channel catalog of one server (written by the gateway at connect and when a channel is
+        created, deleted or renamed): ``[{id, name, type, parent_id, parent_name, public}]``."""
+        self._x("INSERT INTO kv (key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
+                " value=excluded.value, updated_at=excluded.updated_at",
+                (CHANNELS_KV + str(guild_id), json.dumps([dict(c) for c in channels], ensure_ascii=False), time.time()))
+
+    def guild_channels(self, guild_ids: Optional[Sequence[str]] = None) -> dict[str, tuple[list[dict[str, Any]], float]]:
+        """``{guild id: (channels, seen_at)}`` of every catalogued server (or only ``guild_ids``)."""
+        wanted = None if guild_ids is None else {str(g) for g in guild_ids}
+        out: dict[str, tuple[list[dict[str, Any]], float]] = {}
+        for r in self._x("SELECT key, value, updated_at FROM kv WHERE substr(key, 1, ?)=?",
+                         (len(CHANNELS_KV), CHANNELS_KV)).fetchall():
+            gid = str(r["key"])[len(CHANNELS_KV):]
+            if wanted is not None and gid not in wanted:
+                continue
+            try:
+                rows = json.loads(r["value"] or "[]")
+            except ValueError:
+                continue
+            out[gid] = ([dict(c) for c in rows if isinstance(c, dict)], float(r["updated_at"]))
+        return out
 
     def space_of_guild(self, guild_id: str) -> Optional[str]:
         row = self._x("SELECT space FROM space_guilds WHERE guild_id=?", (str(guild_id),)).fetchone()

@@ -60,7 +60,7 @@ async def test_unload_from_worker_thread_runs_bot_work_on_the_loop(rt, monkeypat
     bot.remove_listener = remove_listener
     ui_unload = [cb for cb in ctx.unload if cb.__name__ == "meeting_scribe_discord_unload"][0]
     await asyncio.to_thread(ui_unload)
-    assert seen == [True]
+    assert seen and all(seen)  # the voice listener and the channel-catalog listeners, all on the loop
 
 
 # -- W8 -----------------------------------------------------------------------------------------

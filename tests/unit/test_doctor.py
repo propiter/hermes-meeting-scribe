@@ -296,6 +296,6 @@ def test_delivery_check_lists_each_meeting_route_and_its_risks(tmp_path):
         {"origin": "category:Design", "kind": "category", "channel": "710", "private": False, "status": "missing",
          "detail": "channel 710 not found"}]))
     res = check_delivery(e)
-    assert "Leadership (voice channel) → forum #leadership-notes (700), private" in res.detail
+    assert "Leadership (voice channel) → forum #leadership-notes (700, visible to everyone), private" in res.detail
     assert "visible to @everyone" in res.detail and "channel 710 not found; its meetings wait" in res.detail
     repo.close()

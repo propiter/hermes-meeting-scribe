@@ -266,10 +266,23 @@ def route_rows(s: Settings, repo: Optional[Any]) -> list[dict[str, Any]]:
         for r in rows if isinstance(rows, list) else ():
             if isinstance(r, dict) and r.get("origin"):
                 seen.setdefault(str(r["origin"]), r)
+    catalog = space_catalog(repo, s.space) if repo is not None else None
     rows = []
     for rule in s.routes():
         row = {"origin": rule.origin, "kind": rule.kind, "channel": rule.channel, "private": rule.private,
-               "status": "invalid" if rule.error else "not_checked", "detail": rule.error}
+               "mode": rule.mode, "status": "invalid" if rule.error else "not_checked", "detail": rule.error,
+               "text": rule.text}
+        if catalog is not None and not rule.error:  # names and a first check from the channel catalog
+            checked = catalog.verify(rule)
+            row.update(origin_check=checked["origin_check"], target_check=checked["target_check"])
+            target = checked["target_check"] or {}
+            if target.get("id"):
+                row.update(channel_id=target["id"], channel_name=target["name"], target_kind=target["kind"],
+                           public=target["public"])
+            if checked["status"] != "not_checked":
+                row.update(status="ok" if checked["status"] == "ok" else "problem", detail=checked["detail"])
+            if checked["warning"]:
+                row["warning"] = checked["warning"]
         found = seen.get(rule.origin)
         if found and not rule.error and found.get("channel") == rule.channel:
             row.update({k: v for k, v in found.items() if k not in ("origin", "kind", "channel", "private")})
@@ -277,17 +290,39 @@ def route_rows(s: Settings, repo: Optional[Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def space_catalog(repo: Any, space: str) -> Any:
+    """The channel catalog of ``space``'s servers (every catalogued server when it has none assigned)."""
+    from .channel_catalog import Catalog
+
+    row = repo.get_space(space) if space and hasattr(repo, "get_space") else None
+    guilds = list(row.guild_ids) if row is not None and row.guild_ids else None
+    return Catalog.load(repo, guilds)
+
+
 def route_text(row: dict[str, Any]) -> str:
-    """``Leadership (voice channel) → forum #leadership-notes (123), private``."""
+    """``Leadership (voice channel, 300) → forum #leadership-notes (123, private), private``."""
     kinds = {"voice": "voice channel", "category": "category", "meet": "Google Meet",
              "any": "unreadable, covers every meeting"}
+    origin = (row.get("origin_check") or {})
+    where = kinds.get(row["kind"], row["kind"])
+    label = row["origin"]
+    if origin.get("id"):
+        label = origin.get("name") or label
+        where += f", {origin['id']}"
+    mode = row.get("mode") or ("private" if row.get("private") else "normal")
+    if mode == "dm":
+        return f"{label} ({where}) → direct messages to each participant, dm"
     target = row.get("channel_name") or row.get("channel") or "?"
     target = f"#{target}" if not str(target).isdigit() else str(target)
-    if row.get("channel_id") and str(row["channel_id"]) != str(row.get("channel")):
-        target += f" ({row['channel_id']})"
+    extra = []
+    if row.get("channel_id") and (row.get("channel_name") or str(row["channel_id"]) != str(row.get("channel"))):
+        extra.append(str(row["channel_id"]))
+    if row.get("public") is not None:
+        extra.append("visible to everyone" if row["public"] else "private channel")
+    if extra:
+        target += f" ({', '.join(extra)})"
     kind = {"forum": "forum ", "media": "forum "}.get(str(row.get("target_kind") or ""), "")
-    mode = "private" if row.get("private") else "normal"
-    return f"{row['origin']} ({kinds.get(row['kind'], row['kind'])}) → {kind}{target}, {mode}"
+    return f"{label} ({where}) → {kind}{target}, {mode}"
 
 
 def routes_summary(s: Settings, repo: Any) -> tuple[list[str], list[str]]:
@@ -302,7 +337,7 @@ def routes_summary(s: Settings, repo: Any) -> tuple[list[str], list[str]]:
             problems.append(f"{where}: {row['detail']}; {scope} (never published openly) until it is fixed")
         elif row["status"] not in ("ok", "not_checked"):
             problems.append(f"{where}: {row.get('detail') or row['status']}; its meetings wait")
-        if row.get("warning"):
+        if row.get("warning") and str(row["warning"]) not in problems:
             problems.append(str(row["warning"]))
     return lines, problems
 

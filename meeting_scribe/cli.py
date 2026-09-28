@@ -1,4 +1,4 @@
-"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|private-move|export|config|google|space`` (DESIGN §10, §17, §23).
+"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|private-move|export|config|google|space|route`` (DESIGN §10, §17, §23).
 
 ``setup_parser`` / ``dispatch`` are pure (the runtime is injected) so they are unit-tested
 without Hermes; ``register()`` binds them to the plugin runtime. Exit codes: 0 ok, 1 failure /
@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
-from . import cli_google, cli_spaces, doctor, llm_config
+from . import cli_google, cli_routes, cli_spaces, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
 from .config import DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
 from .domain.models import MeetingState, Stage
@@ -103,6 +103,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     s.add_argument("--google-meet-channel", help="Discord channel for Google Meet notes: id, <#id> or name")
     cli_google.add_parser(sub)
     cli_spaces.add_parser(sub)
+    cli_routes.add_parser(sub)
     parser.set_defaults(_ms_parser=parser)
 
 
@@ -651,7 +652,7 @@ def _llm(args: argparse.Namespace, rt: CliRuntime) -> int:
 _COMMANDS: dict[str, Callable[[argparse.Namespace, CliRuntime], int]] = {
     "setup": _setup, "doctor": _doctor, "status": _status, "list": _list, "show": _show,
     "reprocess": _reprocess, "private-move": _private_move, "export": _export, "config": _config, "google": cli_google.dispatch, "llm": _llm,
-    "space": cli_spaces.dispatch}
+    "space": cli_spaces.dispatch, "route": cli_routes.dispatch}
 
 
 def dispatch(args: argparse.Namespace, rt: CliRuntime) -> int:

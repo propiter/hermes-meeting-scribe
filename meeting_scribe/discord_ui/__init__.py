@@ -25,6 +25,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from ..domain.models import ActionItem, Meeting
 from .actions import ButtonActions
+from .channel_watch import ChannelWatch
 from .guild import DiscordChannelCatalog
 from .render import RenderOptions
 from .sink import DiscordNotesSink
@@ -49,6 +50,7 @@ class UiState:
     autojoin: Any = None
     listener: Optional[Callable[..., Any]] = field(default=None, repr=False)
     detached: bool = False
+    channels: Optional[ChannelWatch] = None  # the channel catalog writer (DESIGN §19.3)
 
     @property
     def adapter(self) -> Any:
@@ -123,9 +125,13 @@ def _factory(state: UiState) -> Callable[[Any, Any], None]:
                     previous.remove_listener(state.listener, "on_voice_state_update")
                 except Exception as exc:  # old client already torn down
                     log.debug("meeting-scribe: removing old listener failed: %s", exc)
+            if previous is not None and state.channels is not None:
+                state.channels.detach(previous)
             state.bot_ref = weakref.ref(bot)
             if state.listener is not None:
                 bot.add_listener(state.listener, "on_voice_state_update")
+            if state.channels is not None:
+                state.channels.attach(bot)
             state.kit.register(bot)
         adopt = getattr(runtime, "adopt_guilds", None)
         if callable(adopt):
@@ -133,6 +139,8 @@ def _factory(state: UiState) -> Callable[[Any, Any], None]:
                 adopt(list(getattr(bot, "guilds", None) or ()))
             except Exception:  # storage problems: commands and doctor report them
                 log.exception("meeting-scribe: adopting the bot's servers failed")
+        if state.channels is not None:  # names for config list / doctor / the rule editors
+            state.channels.record_all(getattr(bot, "guilds", None))
         capture = runtime.capture
         if capture is not None and hasattr(capture, "attach"):
             capture.attach(bot, adapter)
@@ -158,6 +166,8 @@ def _detach_from_bot(state: UiState) -> None:
             bot.remove_listener(state.listener, "on_voice_state_update")
         except Exception as exc:  # already gone / client torn down
             log.debug("meeting-scribe: removing listener on unload failed: %s", exc)
+    if state.channels is not None:
+        state.channels.detach(bot)
     remove_items = getattr(bot, "remove_dynamic_items", None)
     if callable(remove_items):
         try:
@@ -203,6 +213,8 @@ def install(ctx: Any, runtime: Any) -> UiState:
                             loop=lambda: holder["s"].loop, options=_render_options(runtime), views=kit,
                             space_guilds=getattr(runtime, "space_guilds", None))
     state = UiState(runtime=runtime, actions=actions, kit=kit, sink=sink)
+    if callable(getattr(runtime, "repo", None)):
+        state.channels = ChannelWatch(runtime.repo)
     holder["s"] = state
     capture = runtime.capture
     if capture is not None and hasattr(capture, "start_in"):

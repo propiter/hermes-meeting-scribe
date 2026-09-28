@@ -289,7 +289,7 @@ def test_config_set_and_list_meeting_routes(rt, capsys):
         {"origin": "Leadership", "kind": "voice", "channel": "leadership-notes", "private": True, "status": "ok",
          "channel_id": "700", "channel_name": "leadership-notes", "target_kind": "text", "public": False}]))
     code, out = run(rt, ["config", "list"], capsys)
-    assert "· Leadership (voice channel) → #leadership-notes (700), private" in out
+    assert "· Leadership (voice channel) → #leadership-notes (700, private channel), private" in out
     assert "· meet:abc-* (Google Meet) → 610, normal  (not checked against Discord yet)" in out
     code, out = run(rt, ["config", "list", "--json"], capsys)
     row = next(r for r in json.loads(out)["settings"] if r["key"] == "meeting_routes")

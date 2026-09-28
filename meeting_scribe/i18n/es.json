@@ -380,5 +380,19 @@
   "dm.index_note": "Esta reunión va solo por mensaje directo: cada participante recibió esta misma copia.",
   "dm.index_mine": "{count} de estas tareas son tuyas: van a continuación, con sus botones.",
   "dm.only_own_copy": "Esta reunión se envió por mensaje directo: usa los botones de tu propia copia.",
-  "dm.only_own_tasks": "En una reunión enviada por mensaje directo solo puedes actuar sobre tus propias tareas."
+  "dm.only_own_tasks": "En una reunión enviada por mensaje directo solo puedes actuar sobre tus propias tareas.",
+  "routes.origin_voice": "Canal de voz «{name}»",
+  "routes.origin_category": "Categoría «{name}»",
+  "routes.origin_meet": "Google Meet «{name}»",
+  "routes.to_channel": "canal «{name}»",
+  "routes.to_forum": "foro «{name}»",
+  "routes.to_dm": "mensajes directos a cada participante",
+  "routes.mode_normal": "Normal",
+  "routes.mode_private": "Privada",
+  "routes.mode_dm": "Solo mensajes directos",
+  "routes.cli_none": "No hay reglas: las reuniones van al canal de notas de su servidor (delivery_discord_channel).",
+  "routes.cli_not_checked": "(sin comprobar: los nombres se verifican cuando el bot haya informado de sus canales)",
+  "routes.cli_added": "Regla añadida: {rule}",
+  "routes.cli_removed": "Regla eliminada: {rule}",
+  "routes.cli_moved": "Regla movida a la posición {position}."
 }
