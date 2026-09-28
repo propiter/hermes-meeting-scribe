@@ -999,10 +999,24 @@ ordinary channels. `MeetingRoute.dm` is true and `MeetingRoute.private` is true 
 private for every purpose of §19.2. An unreadable entry mentioning `dm` fails closed exactly like one
 mentioning `private` (a broken rule of kind `any`).
 
-**Recipients.** The humans of the meeting (`Meeting.human_speakers`: who spoke or was in the call,
-as captured). A Discord speaker is its user id. An imported speaker (Google Meet) counts when exactly
-one person link of the space (`/meeting link`) matches its name or email (`fold`, whitespace
-collapsed); ambiguous or unknown names are counted as unmapped (`privacy.participants`).
+**Recipients** (`privacy.people`, also who is mentioned in §19.4). The humans of the meeting
+(`Meeting.human_speakers`: who spoke or was in the call, as captured). Only a verifiable identity
+becomes a Discord member:
+- A Discord speaker: its user id, captured by the bot itself.
+- A Google Meet attendee: only its **Google account** — the Meet API's `signedinUser.user`
+  (`users/<id>`, stored as `Speaker.google_user`) — linked to exactly one member of the space by a
+  plugin owner: `/meeting link @member google=users/<id>` (`links.google_user`, schema 101; linking
+  an account to a member takes it away from anyone else, so it never resolves to two people).
+- Never the name shown in Meet: the attendee types it (a guest too), so a guest named like a member
+  or like a member's email is nobody. A `/meeting link @member <name or email>` is a **Linear**
+  link only; it never identifies anyone in Meet. The Meet API gives no email for an attendee, so
+  there is no email match either.
+- Who may link: anyone may link THEMSELVES to Linear; linking another member, and every Google
+  link, is for the plugin's owners (`Runtime.owners`, the same admins as §16) — a Google link decides
+  who receives a direct-messages meeting.
+- Anyone else (guests, phone callers, an account nobody linked) is unmapped: named, never sent
+  anything. `status`/`doctor` list them with their account (`Name (Google users/<id>)`) so an owner
+  can link it (`privacy.participants`).
 
 **Delivery** (`discord_ui/dm_delivery.DmDelivery`, reached from `DiscordNotesSink.publish` when the
 destination is `dm`; the destination has no channel keys, so it never waits for one):
@@ -1014,12 +1028,14 @@ destination is `dm`; the destination has no channel keys, so it never waits for 
 - Pointers `pdm:<user>:notes|transcript|index|task:<item>` are saved as soon as each message exists;
   a reprocess or a refresh edits them in place, a task reassigned to someone else is deleted from
   the old assignee's DM, and a refresh never creates a copy that was not delivered.
-- **Anchor.** The first delivery records `privacy.private.<id>` = `{rule, channel:"", mode:"dm",
-  recipients:[…]}` (`privacy.anchor_dm`). From then on the meeting is a DM meeting whatever the rules
-  say (removing or editing the rule never publishes it in a channel) and its recipient list is
-  fixed. A meeting already anchored to a private channel is never turned into a DM meeting.
-- **Closed DMs.** A recipient whose DMs are closed (or who is unknown to Discord) is skipped; the
-  others get their copy. `privacy.dm_unreachable.<id>` lists who and why; `status`, `doctor` (check
+- **Anchor.** The first delivery that reaches AT LEAST ONE recipient records `privacy.private.<id>` =
+  `{rule, channel:"", mode:"dm", recipients:[…]}` (`privacy.anchor_dm`). From then on the meeting is a
+  DM meeting whatever the rules say (removing or editing the rule never publishes it in a channel)
+  and its recipient list is fixed. Until then nothing is anchored and the list is worked out again
+  at every attempt (someone linked or with their DMs opened later is included). A meeting already
+  anchored to a private channel is never turned into a DM meeting.
+- **Closed DMs.** A recipient whose DMs are closed (`Forbidden` 50007 / 403) or who is unknown to
+  Discord (`NotFound` 10013 Unknown User, a deleted account) is skipped; the others get their copy. `privacy.dm_unreachable.<id>` lists who and why; `status`, `doctor` (check
   `delivery`) and Desktop's status show it. Nothing is ever posted to a channel instead.
 - **Nobody reachable.** No recipient mapped, or every DM closed: the delivery is PENDING
   (`DestinationPending`, no attempts used) with the reason (link people with `/meeting link`, or open
@@ -1032,7 +1048,9 @@ destination is `dm`; the destination has no channel keys, so it never waits for 
 
 **Buttons** (`auth.check_dm`, `ButtonActions._dm_gate`): a click counts only in the DM the bot sent
 to the clicker (`interaction.channel` is the clicker's recorded DM channel, never a server) and only
-on a task assigned to the clicker. Meeting-wide buttons (share all, move) are refused. Decision: a
+on a task assigned to the clicker. Meeting-wide buttons (share all) and 📁 Move are refused, and a
+DM task message carries no 📁 Move button: moving would re-route the task to a server channel the
+participant may not see (and publish it there with 📣). Decision: a
 participant can NOT send another participant's task to them — every participant already received
 their own copy with their own tasks, so there is nothing to forward, and letting one DM act on
 someone else's task would let a participant decide what leaves for another.
@@ -1050,7 +1068,12 @@ Threads are not listed. Every other process only reads it (`channel_catalog.Cata
 outside the gateway talks to Discord.
 
 **Using it.** `doctor.route_rows` resolves each rule against the catalog of its space's servers
-(every catalogued server when the space has none assigned): a rule becomes `ok` (with ids, names,
+(`doctor.space_guilds`, §23): an install with one space owns every server; with several, a space
+sees only its assigned servers and **a space without servers sees no channel** (the catalog is
+empty, every rule side is refused with "assign a server to this space", REST
+`/v1/discord/channels` answers `no_servers: true` and Desktop says so). An id of a channel
+catalogued in another space's server is refused ("belongs to a server outside this space") even
+before the space's own servers were catalogued. A rule becomes `ok` (with ids, names,
 kinds and visibility), `problem` (missing, ambiguous, wrong kind) or stays `not_checked` without a
 catalog; a private rule on a channel @everyone sees gets the warning. The delivery report of §19.2
 still refines it when present. `config list`, `doctor`, `route list` and Desktop print
@@ -1094,9 +1117,9 @@ are there.
 - **Setting** `delivery_mention_participants` (bool, default `true`, group `delivery`, space-scoped;
   Desktop shows it as a switch in Delivery).
 - **Who** (`privacy.people`, shared with §19.3): `Meeting.human_speakers` — Discord speakers by id
-  (who spoke or was in the call); Google Meet attendees mapped through exactly one person link of the
-  space (name or email); anyone else by name only, as inert text (`safe_name`: a typed `@everyone`
-  never pings). The bot (client user / guild `me`) is never listed.
+  (who spoke or was in the call); Google Meet attendees only through their Google account linked by
+  an owner (§19.3: never by the name shown in Meet); anyone else by name only, as inert text
+  (`safe_name`: a typed `@everyone` never pings). The bot (client user / guild `me`) is never listed.
 - **Where in the message**: one line `-# 👥 Participants: <@a>, <@b>, Name` under the title of the
   FIRST part of the summary (`render_header(participants=…)`); at most 40 mentions, the rest counted.
 - **Pings** (`MessageSpec.mentions`, `Messages._mentions`, `DiscordViews.mention_kwargs`): the first
@@ -1110,6 +1133,15 @@ are there.
   @everyone can see and not under a private rule; otherwise they appear by name (fail closed: no
   forced notification for someone without access).
 - **Not applied** to direct-messages-only meetings (§19.3): each participant already gets their copy.
+- **Nothing else pings.** Every message the plugin sends names the users it may notify
+  (`MessageSpec.mentions`, empty by default) and is sent with exactly those: panels, index, summary
+  parts, transcript labels, shared copies. Text the plugin does not write — the model's summary,
+  decisions, questions, task titles, a Meet name — may contain `<@id>`, `<@&role>` or `@everyone`:
+  it shows as written but notifies nobody.
+- **Task messages** follow the same rule (`mentions.may_mention`): the assignee is shown as `<@id>`
+  (and pinged when the message is first posted) only if they can view the channel where it goes;
+  otherwise — a private channel they cannot open, or a member the bot cannot check there — by name
+  (`**Name**`). The tasks index and the "Sent to" line of a private task do the same.
 
 **Not verifiable without real Discord.** That `guild.get_member` is populated (members intent and
 cache) for everyone in a private channel; without it those people are named, not mentioned.
@@ -1238,7 +1270,8 @@ One installation and one bot serve several teams or clients. A **space** is one 
 settings (overrides on top of the global ones), Discord servers, meetings, jobs views, owners, person
 links, learned channel/project maps and Google connection. Nothing crosses from one space to another.
 
-**Storage baseline.** Schema `user_version` 100 is the baseline of record. A database written before
+**Storage baseline.** Schema `user_version` 100 is the baseline of record; later changes are
+ordinary migrations on top of it (101: `links.google_user`, §19.3). A database written before
 spaces (any version 1–99) is not migrated: under a cross-process file lock it is copied with SQLite's
 backup API into `backup-<UTC>/` together with its `meetings/` folders, and a fresh baseline is
 created. Meetings recorded before spaces were disposable; configuration (Hermes settings) and the
@@ -1267,6 +1300,10 @@ Discord connect, `main` adopts the bot's servers once, and only while it is the 
   space's servers. The restriction applies only with several spaces; with one space every server of
   the bot is allowed, as before. With several spaces, a channel id that is not cached cannot be
   checked, so it is refused.
+- Channel catalog (§19.3, `doctor.space_guilds`): a space's editors, `doctor`, `config list` and REST
+  `/v1/discord/channels` see only the channels of the space's servers. With several spaces, a space
+  without servers sees no channel at all — never another space's — and its rule editor refuses
+  every channel until a server is assigned; a channel id of another space's server is refused.
 - Per-space settings reach the sinks, the transcriber (`transcribe_language`), the analyzer, render
   options, the channel catalog (ignored prefixes) and the Meet pollers. Machine-wide keys
   (`pipeline_*`, `audio_bitrate_kbps`, `audio_ffmpeg_path`…) cannot be overridden per space.
@@ -1378,7 +1415,7 @@ Authentication is the host's (session token / OAuth gate). All bodies are JSON. 
 
 | Method, path | Params / body | Response |
 |---|---|---|
-| `GET /v1/discord/channels` | `space` | `{items:[{id, name, type:"voice"\|"text"\|"forum"\|"media"\|"category", parent_id, parent_name, public, guild_id, guild_name}], seen_at}` from the gateway's catalog of the space's servers; `items:[]`, `seen_at:null` before it reported |
+| `GET /v1/discord/channels` | `space` | `{items:[{id, name, type:"voice"\|"text"\|"forum"\|"media"\|"category", parent_id, parent_name, public, guild_id, guild_name}], seen_at, no_servers}` from the gateway's catalog of the space's servers only; `items:[]`, `seen_at:null` before it reported; a space without servers: `items:[]`, `no_servers:true` |
 | `GET /v1/routes` | `space`, `lang` | `{space, scope:"global"\|"space", catalog_seen_at, items:[rule]}` with `rule = {position, text, origin, kind, channel, private, mode:"normal"\|"private"\|"dm", status:"ok"\|"not_checked"\|"problem"\|"invalid", detail, warning?, sentence, origin_check, target_check, channel_id?, channel_name?, target_kind?, public?}` |
 | `POST /v1/routes` | `space`, `lang`; `{origin_kind:"voice"\|"category"\|"meet", origin, target? (not with dm), mode, position?}` | the list plus `{added, warning}`; 400 with the reason (unknown or ambiguous name, wrong kind, a channel with `dm`, same origin twice) |
 | `PUT /v1/routes/{position}` | same body | the list plus `{warning}` |

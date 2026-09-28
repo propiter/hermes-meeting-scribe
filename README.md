@@ -199,7 +199,8 @@ built-ins.
 | `show <id>` | Shows a meeting's notes |
 | `search <text>` | Full-text search across transcripts |
 | `reprocess <id> [from=transcribe\|analyze\|deliver]` | Re-runs a meeting from a stage |
-| `link @user <linear-email-or-name>` | Maps a Discord user to a Linear user |
+| `link @user <linear-email-or-name>` | Maps a Discord user to a Linear user (yourself; owners can link anyone) |
+| `link @user google=users/<id>` | Owners: links a Google Meet attendee's Google account to a Discord member (DMs and mentions) |
 | `project <id> <project>` | Sets or corrects a meeting's project, and teaches the channel → project map |
 | `config` | Shows the effective configuration |
 | `help` | Shows usage |
@@ -479,8 +480,12 @@ setup` offers to add rules too. With several spaces, add `--space <id>`.
    their DMs and nothing appears in the server.
 
 **Direct messages only, in detail.** The participants are the people the capture saw (who spoke or
-was in the call). For Google Meet, a participant counts when their name or email matches exactly one
-person linked with `/meeting link`. Someone with closed DMs is skipped and `status`/`doctor` say
+was in the call). For Google Meet, an attendee counts only through their Google account, linked to a
+Discord member by a plugin owner with `/meeting link @member google=users/<id>` (`status`/`doctor`
+show the account of each attendee nobody linked). The name shown in Meet never counts: anyone,
+guests included, can type any name. Guests without a Google account get nothing. The recipients
+are fixed at the first delivery that reaches someone; until then they are worked out again at each
+attempt. Someone with closed DMs is skipped and `status`/`doctor` say
 who; the others get it anyway, and it is never posted in a channel instead. If nobody can be reached
 the meeting waits and says why. Reprocessing edits the same messages. Buttons only work in your own
 copy and only on your own tasks (nobody can act on or forward someone else's task). The meeting
@@ -491,10 +496,11 @@ DMs. A meeting published before the rule existed is withdrawn from the channels 
 
 The first message of the notes (in a channel, its thread, a forum post or a private rule's channel)
 @mentions the people who were in the meeting, so they know the notes are there: Discord participants
-by their account, Google Meet attendees when they are linked with `/meeting link`, anyone else by
+by their account, Google Meet attendees when an owner linked their Google account, anyone else by
 name. It pings only once, when the notes are first posted (reprocessing edits the text without
 pinging again), never @everyone, @here, roles or the bot, and in a private channel only people who
-can see it. Direct-messages-only meetings skip it. Turn it off with
+can see it (the others are named; the same goes for a task's assignee). Nothing else notifies
+anyone: a `<@…>` or `@everyone` written by the model or typed in a name shows as text only. Direct-messages-only meetings skip it. Turn it off with
 `hermes meeting-scribe config set delivery_mention_participants false` (per space with `--space`) or
 in Desktop → Settings → Delivery.
 
@@ -607,7 +613,8 @@ After a meeting is processed, the plugin posts:
 - **In each project's channel:** a thread for the meeting, with **one message per task** and that
   task's buttons directly under it: ✅ Kanban · 🟣 Linear · ❌ Dismiss · 📁 Move. Once a task is
   handled, its message shows the result (``✅ Kanban `t_42` ``, `🟣 Linear ENG-7`, `❌ Dismissed`) and
-  loses its buttons. The other tasks are not affected.
+  loses its buttons. The other tasks are not affected. 📁 Move lists only channels the person
+  pressing it can see, and is not offered in direct-messages-only meetings.
 - **To each assignee:** a DM with their tasks and the same buttons (`delivery_dm_assignees`, on by
   default). If someone has DMs closed, that is noted in the index and nothing else fails.
 
@@ -708,7 +715,8 @@ hermes meeting-scribe google disconnect
   name. With no usable channel the meeting waits (it is still processed: CLI, agent tools, files,
   Kanban) and is posted as soon as you set one. `setup`, `config set` and `doctor` warn when the
   import is on without a channel, since the full transcript is posted with the notes.
-- Meet participants are not Discord users: tasks show their name, without mentions or DMs.
+- Meet participants are not Discord users: tasks show their name, without mentions or DMs, unless an
+  owner linked their Google account (`/meeting link @member google=users/<id>`).
 - `invalid_grant` (revoked or expired access) shows as "disconnected" in `google status` and
   `doctor`; run `connect` again.
 

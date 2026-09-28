@@ -205,7 +205,8 @@ comandos propios.
 | `show <id>` | Muestra las notas de una reunión |
 | `search <texto>` | Busca texto en todas las transcripciones |
 | `reprocess <id> [from=transcribe\|analyze\|deliver]` | Vuelve a procesar una reunión desde una etapa |
-| `link @usuario <email-o-nombre-en-linear>` | Vincula un usuario de Discord con uno de Linear |
+| `link @usuario <email-o-nombre-en-linear>` | Vincula un usuario de Discord con uno de Linear (a ti; los propietarios, a cualquiera) |
+| `link @usuario google=users/<id>` | Propietarios: vincula la cuenta de Google de un asistente de Meet con un miembro de Discord (DMs y menciones) |
 | `project <id> <proyecto>` | Asigna o corrige el proyecto de una reunión, y enseña el mapa canal → proyecto |
 | `config` | Muestra la configuración efectiva |
 | `help` | Muestra la ayuda |
@@ -486,8 +487,12 @@ meeting-scribe setup` también ofrece añadir reglas. Con varios espacios, añad
    en sus mensajes directos y no aparece nada en el servidor.
 
 **Solo mensajes directos, en detalle.** Los participantes son las personas que vio la captura
-(quienes hablaron o estuvieron en la llamada). En Google Meet cuenta un asistente cuyo nombre o email
-coincide con exactamente una persona vinculada con `/meeting link`. Quien tenga los mensajes
+(quienes hablaron o estuvieron en la llamada). En Google Meet un asistente cuenta solo por su cuenta
+de Google, vinculada a un miembro de Discord por un propietario del plugin con
+`/meeting link @miembro google=users/<id>` (`status`/`doctor` muestran la cuenta de cada asistente
+sin vincular). El nombre que se ve en Meet nunca cuenta: cualquiera, invitados incluidos, puede
+escribir cualquier nombre. Los invitados sin cuenta de Google no reciben nada. Los destinatarios se
+fijan en la primera entrega que llega a alguien; hasta entonces se recalculan en cada intento. Quien tenga los mensajes
 directos cerrados se omite y `status`/`doctor` dicen quién; los demás la reciben igual y nunca se
 publica en un canal como alternativa. Si no se puede llegar a nadie, la reunión espera y dice por
 qué. Reprocesar edita los mismos mensajes. Los botones solo funcionan en tu propia copia y sobre tus
@@ -499,10 +504,12 @@ Una reunión publicada antes de que existiera la regla se retira primero de los 
 
 El primer mensaje de las notas (en un canal, su hilo, un post de foro o el canal de una regla
 privada) menciona con @ a quienes estuvieron en la reunión, para que sepan que las notas están ahí:
-los participantes de Discord por su cuenta, los asistentes de Google Meet si están vinculados con
-`/meeting link` y el resto por su nombre. Notifica una sola vez, al publicar las notas por primera
+los participantes de Discord por su cuenta, los asistentes de Google Meet si un propietario vinculó
+su cuenta de Google y el resto por su nombre. Notifica una sola vez, al publicar las notas por primera
 vez (reprocesar edita el texto sin volver a notificar), nunca a @everyone, @here, roles ni al bot, y
-en un canal privado solo a quienes pueden verlo. Las reuniones de solo mensajes directos no lo usan.
+en un canal privado solo a quienes pueden verlo (a los demás se les nombra; igual con el responsable
+de una tarea). Nada más notifica a nadie: un `<@…>` o `@everyone` escrito por el modelo o en un
+nombre se ve como texto y no avisa. Las reuniones de solo mensajes directos no lo usan.
 Se desactiva con `hermes meeting-scribe config set delivery_mention_participants false` (por
 espacio con `--space`) o en Desktop → Ajustes → Entrega.
 
@@ -604,7 +611,8 @@ Cuando termina de procesarse una reunión, el plugin publica:
 - **En el canal de cada proyecto:** un hilo de la reunión con **un mensaje por tarea** y los botones
   de esa tarea justo debajo: ✅ Kanban · 🟣 Linear · ❌ Descartar · 📁 Mover. Cuando se resuelve una
   tarea, su mensaje muestra el resultado (``✅ Kanban `t_42` ``, `🟣 Linear ENG-7`, `❌ Descartada`) y
-  pierde sus botones. Las demás tareas no cambian.
+  pierde sus botones. Las demás tareas no cambian. 📁 Mover solo lista canales que puede ver quien lo
+  pulsa y no se ofrece en las reuniones de solo mensajes directos.
 - **A cada responsable:** un DM con sus tareas y los mismos botones (`delivery_dm_assignees`, activo
   por defecto). Si alguien tiene los DMs cerrados, queda anotado en el índice y nada más falla.
 
@@ -714,7 +722,7 @@ hermes meeting-scribe google disconnect
   `config set` y `doctor` avisan si la importación está activa sin canal, porque la transcripción
   completa se publica con las notas.
 - Los participantes de Meet no son usuarios de Discord: las tareas muestran su nombre, sin menciones
-  ni DMs.
+  ni DMs, salvo que un propietario vincule su cuenta de Google (`/meeting link @miembro google=users/<id>`).
 - `invalid_grant` (acceso revocado o caducado) aparece como "desconectado" en `google status` y
   `doctor`; vuelve a ejecutar `connect`.
 

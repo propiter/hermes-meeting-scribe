@@ -11,13 +11,13 @@ All notable changes to this project are documented here. The format follows
 - **Participants mentioned in the notes** (`delivery_mention_participants`, on by default,
   per space, a switch in Desktop). The first message of the notes — channel, thread, forum post or a
   private rule's channel — @mentions the humans of the meeting (Discord ids; Meet attendees via
-  person links; others by name). It pings exactly those users once, at the first publication
+  their owner-linked Google account; others by name). It pings exactly those users once, at the first publication
   (`allowed_mentions` users only: no @everyone/@here/roles, never the bot); edits and re-posts keep
   the text without pinging; in private channels only people who can see the channel are mentioned.
   Not used for direct-messages-only meetings.
 - **Direct-messages-only meetings** (`origin = :dm` in `meeting_routes`; `route add … --dm`; "Direct
   messages only" in Desktop). Nothing is posted in any channel: each participant (who spoke or was in
-  the call; Meet attendees mapped through `/meeting link`) gets the whole meeting by DM — summary,
+  the call; Meet attendees through their owner-linked Google account) gets the whole meeting by DM — summary,
   decisions, questions, the transcript file, the task list and their own tasks with Kanban/Linear/
   Dismiss and **Publish in #project** buttons. Private for every purpose (no project channels, no
   fallback, no automatic Kanban/Linear, reads only from those DMs, earlier public copies withdrawn,
@@ -235,6 +235,25 @@ All notable changes to this project are documented here. The format follows
   poller stops promptly and releases its lease from its own thread.
 - `setup`, `config set` and `doctor` warn when the Meet import has no notes channel.
 - Docs: the Meet API only lists conferences organised by the connected account.
+
+### Security
+
+- **Google Meet identities** can no longer be claimed by name: a Meet attendee becomes a Discord
+  member (a DM recipient of a direct-messages-only meeting, a mention) only through their Google
+  account (`signedinUser.user`) linked by a plugin owner with `/meeting link @member google=users/<id>`
+  (schema 101, `links.google_user`). A guest named like a member or a member's email is nobody, and
+  `/meeting link` for someone else is owners-only (anyone may still link themselves to Linear).
+- **📁 Move** is no longer offered or accepted in direct-messages-only meetings, and everywhere it
+  lists and accepts only channels the clicker can see (an uncached member is judged as @everyone).
+- **Direct-messages-only meetings** anchor their recipients only after someone got the copy (until
+  then they are recomputed at each attempt), and a deleted Discord account (10013 Unknown User) is
+  skipped like closed DMs instead of blocking the others.
+- **Channel catalog**: a space sees only its own servers' channels; with several spaces a space
+  without servers sees none (REST `no_servers: true`, Desktop says to assign a server) and a channel
+  id of another space's server is refused by the rule editors.
+- **Mentions**: every message notifies only the users it names (nobody by default); `<@…>`,
+  `<@&…>` or `@everyone` in model output or typed names never pings. A task's assignee is mentioned
+  only where they can see the channel, otherwise named.
 
 ## [0.2.0] - 2026-09-27
 
