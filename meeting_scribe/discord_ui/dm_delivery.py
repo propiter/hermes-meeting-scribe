@@ -72,22 +72,27 @@ class DmDelivery:
         self.repo = pub.repo
         self.lang = pub.o.lang
 
-    async def recipients(self, meeting: Meeting) -> tuple[list[str], list[str]]:
-        """``(anchored recipients, participant names that match no Discord user)``; the first call with
-        someone reachable anchors the meeting to them."""
+    async def recipients(self, meeting: Meeting) -> tuple[list[str], list[str], bool]:
+        """``(recipients, participant names that match no Discord user, anchored)``: the anchored list
+        once someone got a copy; before that, the participants as they resolve NOW (a person linked
+        after a failed attempt is included in the next one)."""
         found, unmapped = await asyncio.to_thread(privacy.participants, self.repo, meeting)
         rec = await asyncio.to_thread(privacy.record, self.repo, meeting.id) or {}
-        people = [str(u) for u in rec.get("recipients") or ()]
-        if not people and found:
-            rule = str(rec.get("rule") or self.pub._destination(meeting).rule or "")
-            people = await asyncio.to_thread(privacy.anchor_dm, self.repo, meeting.id, rule, found)
-        return people, unmapped
+        anchored = [str(u) for u in rec.get("recipients") or ()]
+        return (anchored or found), unmapped, bool(anchored)
+
+    async def _anchor(self, meeting: Meeting, people: list[str]) -> None:
+        """The first delivery that reached someone fixes the recipients (DESIGN §19.3)."""
+        rec = await asyncio.to_thread(privacy.record, self.repo, meeting.id) or {}
+        rule = str(rec.get("rule") or self.pub._destination(meeting).rule or "")
+        await asyncio.to_thread(privacy.anchor_dm, self.repo, meeting.id, rule, people)
 
     async def publish(self, meeting: Meeting, notes: Notes, *, deliver: bool) -> DmReport:
         """Post what is missing and edit the rest, for every recipient. ``deliver`` (the pipeline's
-        DELIVER) records who could not be reached and waits (``DestinationPending``) when nobody was."""
+        DELIVER) records who could not be reached and waits (``DestinationPending``) when nobody was;
+        the recipients are anchored only after at least one of them got the copy."""
         ptrs = Pointers(self.repo, meeting.id)
-        people, unmapped = await self.recipients(meeting)
+        people, unmapped, anchored = await self.recipients(meeting)
         place = set((await asyncio.to_thread(privacy.dm_channels, self.repo, meeting.id)).values())
         await withdraw_public(self.pub, ptrs, place)  # a rule added later: the public copies leave first
         report = DmReport(unmapped=unmapped)
@@ -106,6 +111,8 @@ class DmDelivery:
                 continue
             report.sent.append(uid)
             report.url = report.url or url
+        if deliver and report.sent and not anchored:
+            await self._anchor(meeting, people)
         await sync_copies(self.pub, board, ptrs)  # the tasks their assignees shared in project channels
         if deliver:
             await self._note(meeting, report)

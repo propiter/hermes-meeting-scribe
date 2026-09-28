@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from meeting_scribe import privacy
 from meeting_scribe.domain.models import Speaker
 
 from .test_dm_routes import SUMMARY_WORD, deliver, env, texts  # noqa: F401 - fixture reuse
@@ -26,3 +27,24 @@ async def test_a_deleted_discord_account_is_skipped_and_the_others_still_get_the
     res = await deliver(env)
     assert res.ok, res.errors
     assert SUMMARY_WORD in texts(env.luis.dm.ordered())
+
+
+async def test_nothing_is_anchored_while_nobody_got_the_copy(env):
+    env.luis.dms_open = False
+    res = await deliver(env)
+    assert res.waiting
+    assert not (privacy.record(env.svc.repo, env.meeting.id) or {}).get("recipients")
+
+
+async def test_the_recipients_are_worked_out_again_until_someone_got_it(env):
+    """Nobody reachable at first; a participant who becomes reachable later is included (never frozen out)."""
+    env.luis.dms_open = False
+    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("11", "Luis"),)))
+    env.meeting = env.svc.repo.get_meeting(env.meeting.id)
+    assert (await deliver(env)).waiting
+    env.svc.repo.save_meeting(replace(env.meeting, speakers=(Speaker("11", "Luis"), Speaker("12", "Marta"))))
+    env.meeting = env.svc.repo.get_meeting(env.meeting.id)
+    marta = env.bot.user(12)
+    res = await deliver(env)
+    assert res.ok and SUMMARY_WORD in texts(marta.dm.ordered()), res.errors
+    assert privacy.record(env.svc.repo, env.meeting.id)["recipients"] == ["11", "12"]
