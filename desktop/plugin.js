@@ -16,8 +16,8 @@
  * Every read and write goes through `ctx.rest` to this plugin's backend
  * (`/api/plugins/meeting-scribe/v1/...`, meeting_scribe/desktop/api.py). The page never runs the
  * pipeline: «Reprocess» and «Prepare audio» queue a command that the gateway's worker executes,
- * and the page polls it. The data belongs to the profile where the plugin is installed, so every
- * Desktop profile shows the same library; query keys carry the connection (a different Hermes) and
+ * and the page polls it. The data belongs to the owner profile (DESIGN §1.5), so every Desktop
+ * profile shows the same library; query keys carry the connection (a different Hermes) and
  * polling runs only while something is in progress and stops on a 4xx.
  */
 
@@ -101,8 +101,8 @@ export const LOCALES = {
     },
     disabled: {
       title: 'Meetings is not available in this window',
-      body: 'Hermes was opened with a profile that does not have Meetings installed, so there is nothing to show here. Your meetings are safe.',
-      steps: 'Close Hermes and open it again with the profile where Meetings is installed. Once it is open, you can switch to any profile and keep seeing the same meetings.'
+      body: 'Hermes was opened with a profile where Meetings is not turned on, so there is nothing to show here. Your meetings are safe.',
+      steps: 'Open Hermes with a profile where Meetings is turned on, or ask whoever manages Hermes to turn it on for this profile too (README: «Use Meetings from any profile»). Every profile shows the same meetings, and turning it on in another profile does not start a second bot.'
     },
     error: {
       title: 'Could not load this',
@@ -309,8 +309,8 @@ export const LOCALES = {
     },
     disabled: {
       title: 'Reuniones no está disponible en esta ventana',
-      body: 'Hermes se abrió con un perfil que no tiene Reuniones instalado, así que aquí no hay nada que mostrar. Tus reuniones siguen a salvo.',
-      steps: 'Cierra Hermes y vuelve a abrirlo con el perfil donde está instalado Reuniones. Una vez abierto, puedes cambiar a cualquier perfil y seguirás viendo las mismas reuniones.'
+      body: 'Hermes se abrió con un perfil que no tiene Reuniones activado, así que aquí no hay nada que mostrar. Tus reuniones siguen a salvo.',
+      steps: 'Abre Hermes con un perfil que tenga Reuniones activado, o pide a quien administra Hermes que lo active también en este perfil (README: «Usar Reuniones desde cualquier perfil»). Todos los perfiles muestran las mismas reuniones, y activarlo en otro perfil no arranca un segundo bot.'
     },
     error: {
       title: 'No se pudo cargar',
@@ -531,8 +531,8 @@ export function parseError(error) {
 
 /** The host answers `404 {"detail":"Plugin not found"}` when the profile Desktop's backend was
  *  LAUNCHED with does not have meeting-scribe enabled (Hermes gates plugin routes on the launch
- *  profile, whatever profile is active): a guided empty state, not an error. Enabling the plugin in
- *  that other profile would be wrong advice — it would start a second bot. */
+ *  profile, whatever profile is active): a guided empty state, not an error. Enabling it in that
+ *  profile is safe: only the owner profile runs the bot (DESIGN §1.5). */
 export function isPluginMissing(error) {
   const { status, message } = parseError(error)
   if (status === 404 && /plugin not found/i.test(message)) return true

@@ -131,6 +131,46 @@ instalas desde una shell no interactiva y el plugin queda desactivado, ejecuta
 hermes meeting-scribe setup --non-interactive --language es --model small --kanban-mode approve
 ```
 
+### Usar Reuniones desde cualquier perfil
+
+Los perfiles de Hermes son agentes separados, y cada uno solo carga los plugins de su propia carpeta
+`plugins/`. Aun así, Reuniones se instala **una sola vez**: un perfil es el **dueño**, ejecuta el bot
+(grabación, procesamiento, Google Meet) y guarda las reuniones, los ajustes y la conexión con Google.
+Cualquier otro perfil donde actives Reuniones solo muestra la página de Desktop con las reuniones del
+dueño: no arranca un segundo bot ni escribe nada propio.
+
+1. Deja una sola copia real (normalmente en el perfil dueño, donde la dejó `hermes plugins install`)
+   e indica qué perfil es el dueño en el `config.yaml` del perfil por defecto (`~/.hermes/config.yaml`):
+
+   ```yaml
+   plugins:
+     entries:
+       meeting-scribe:
+         owner_profile: equipo      # el perfil con el bot de Discord ("default" para el perfil por defecto)
+   ```
+
+   Sin esta línea, el dueño es el perfil que tiene la copia real.
+
+2. En cada otro perfil que deba mostrar la página, enlaza esa copia y actívala:
+
+   ```bash
+   ln -s ~/.hermes/profiles/equipo/plugins/meeting-scribe ~/.hermes/plugins/meeting-scribe          # default
+   ln -s ~/.hermes/profiles/equipo/plugins/meeting-scribe ~/.hermes/profiles/trabajo/plugins/meeting-scribe
+   hermes plugins enable meeting-scribe
+   hermes -p trabajo plugins enable meeting-scribe
+   ```
+
+   Un enlace, no una segunda instalación: dos copias del mismo plugin rompen el entorno de
+   dependencias compartido de Hermes ("two workspace members are both named hermes-meeting-scribe");
+   para Hermes, un enlace es el mismo plugin. Actualiza solo con
+   `hermes -p equipo plugins update meeting-scribe`.
+
+   Hazlo con una versión que ya tenga esta sección. `plugins enable` carga el plugin en el gateway
+   de ese perfil en ese mismo momento, y una versión anterior arrancaría ahí un segundo bot.
+
+`hermes meeting-scribe doctor` empieza con una línea `owner`. En un perfil que no es el dueño, cada
+comando `hermes meeting-scribe` solo indica qué perfil usar (`hermes -p equipo meeting-scribe …`).
+
 ### Bot de Discord
 
 El plugin reutiliza el bot que ya ejecuta el adaptador de Discord de Hermes. No necesita un token
@@ -645,7 +685,7 @@ título, fecha, participantes, proyecto y etiquetas.
     recording.ogg              retención mixed
 ```
 
-El almacenamiento es independiente para cada perfil de Hermes. `reprocess --from transcribe` vuelve
+`<HERMES_HOME>` es el home del perfil dueño ([Usar Reuniones desde cualquier perfil](#usar-reuniones-desde-cualquier-perfil)). `reprocess --from transcribe` vuelve
 a extraer las pistas de cada hablante de `recording.mka`.
 
 ## Privacidad y consentimiento
@@ -691,8 +731,14 @@ monte la API de la página. Luego abre **Capabilities → Plugins** en Desktop y
   validación y si el valor es el predeterminado, uno personalizado o no válido; y **Modelos**
   (modelo principal y respaldos en orden, que puedes añadir, quitar y reordenar).
 
-La página lee los archivos y la base de datos del perfil y nunca inicia una grabación ni un proceso:
-**Reprocesar** lo ejecuta el worker del gateway, así que el gateway debe estar corriendo. Los ajustes
+**Cualquier perfil.** La página muestra siempre las reuniones del dueño, sin importar con qué perfil
+se abrió Desktop ni a cuál cambies. Hermes solo sirve la página de un plugin cuando Desktop se *abrió*
+con un perfil que tiene el plugin activado; si no, la página lo dice. Actívalo en los perfiles con
+los que abres Desktop, como en [Usar Reuniones desde cualquier perfil](#usar-reuniones-desde-cualquier-perfil):
+no arranca un segundo bot.
+
+La página lee los archivos y la base de datos del dueño y nunca inicia una grabación ni un proceso:
+**Reprocesar** lo ejecuta el worker del gateway del dueño, así que ese gateway debe estar corriendo. Los ajustes
 se guardan con las mismas reglas que `hermes meeting-scribe config set` y `llm set`.
 
 **Pendiente de verificar:** la página está cubierta por tests de render en Node y por `plugins
@@ -710,6 +756,8 @@ multipista (`.mka`) no se pueden reproducir.
 | Falta la primera palabra de un hablante nuevo | Limitación conocida de Discord/DAVE: el audio de un hablante nuevo se descarta hasta que Discord asocia su flujo, lo que tarda unos 100 ms. |
 | Idioma equivocado o palabras mal transcritas | Fija `transcribe_language`, y prueba un `transcribe_model` más grande. |
 | Una reunión quedó atascada o falló | `hermes meeting-scribe status` muestra la etapa y el error. Luego ejecuta `hermes meeting-scribe reprocess <id> --from <etapa>`. |
+| Reuniones dice "no está disponible en esta ventana" | Desktop se abrió con un perfil sin Reuniones activado: ver [Usar Reuniones desde cualquier perfil](#usar-reuniones-desde-cualquier-perfil). |
+| Un comando `hermes meeting-scribe` solo dice que uses otro perfil | Ese perfil no es el dueño; ejecútalo como `hermes -p <dueño> meeting-scribe …`. |
 | Se encuentra ffmpeg pero sin libopus | Instala una versión de ffmpeg que incluya libopus. `doctor` muestra qué binario eligió. |
 
 ## Limitaciones

@@ -20,37 +20,86 @@ faster-whisper 1.2.1, Python 3.11–3.14.
 3. **Durable & idempotent**: every meeting is a state machine persisted in
    SQLite; a gateway restart resumes unfinished work. Every external side
    effect carries an idempotency key; reprocessing never duplicates.
-4. **Owned by one profile**: the plugin's data and configuration belong to the
-   Hermes home where it is INSTALLED (`<home>/plugins/meeting-scribe` → `<home>`),
-   resolved by one function, `meeting_scribe.home` (see §1.5). Nothing follows a
-   request's profile scope. Secrets via `agent.secret_scope.get_secret`; threads
-   via `agent.memory_provider.spawn_context_thread`.
+4. **Owned by one profile**: one installation has one OWNER profile, which runs capture, the worker
+   and the pollers and holds the data, settings and secrets. Other profiles may turn the plugin on
+   only to serve the Desktop page with the owner's data. `meeting_scribe.home` is the only resolver
+   (see §1.5). Nothing follows a request's profile scope. Secrets via
+   `agent.secret_scope.get_secret`; threads via `agent.memory_provider.spawn_context_thread`.
 5. **Local-first**: audio never leaves the machine. Only transcript text goes to
    the user's own configured LLM.
 6. **Strict TDD**: tests first, fakes for Discord/RTP/LLM/Linear.
 
-### 1.5 Where data lives: the owner profile
+### 1.5 One installation, one owner profile, any Desktop profile
 
-Hermes Desktop runs ONE backend (`hermes serve`, launched with Desktop's primary profile) and scopes
-plugin REST calls to the page's active profile with `?profile=<name>` (a context-local HERMES_HOME
-override). Resolving the data dir through `get_hermes_home()` therefore showed an empty library as
-soon as another profile was active. `meeting_scribe.home` is the single resolver:
+**Problem.** Hermes Desktop runs ONE backend (`hermes serve`) launched with the profile Desktop was
+opened with, and scopes plugin REST calls to the page's active profile with `?profile=<name>`.
+Hermes serves a plugin's API only when that LAUNCH profile has it in `plugins.enabled`
+(`hermes_cli/web_server.py::_plugin_api_runtime_gate`, `web_server_dashboard.py::_mount_plugin_api_routes`),
+otherwise every call is `404 Plugin not found`. The page therefore worked only when Desktop was opened
+with the one profile that had the plugin.
 
-- `owner_home()`: `<home>` when the package sits at `<home>/plugins/meeting-scribe`; otherwise (a
-  checkout, tests) the process home (`get_process_hermes_home`, which ignores request overrides).
-- `data_dir()`: `<owner home>/plugin-data/meeting-scribe`, used by the gateway, the CLI and the REST
-  API alike.
-- `owner_scope()`: the REST API enters Hermes' own request scope (`_config_profile_scope`) for the
-  owner profile on every request, so settings and secrets are the owner's too. The `?profile=` Desktop
-  sends is ignored on purpose.
+**What the host allows (hermes-agent `6e69a8933`, read-only):**
 
-**Hermes limit (cannot be changed from a plugin).** Hermes' runtime gate
-(`hermes_cli/web_server.py::_plugin_api_runtime_gate`) and its dashboard plugin discovery
-(`web_server_dashboard.py::_dashboard_plugin_search_dirs`) look at the profile the backend was
-LAUNCHED with. If that profile does not have meeting-scribe enabled, every call answers
-`404 Plugin not found`, whatever profile is active. The page then says, in plain words, to open
-Hermes Desktop with the profile where Meetings is installed. It must never suggest enabling the plugin
-in the other profile: that would load a second copy with its own Discord bot and its own data.
+- The Desktop backend finds dashboard halves in `<launch home>/plugins` and ALSO `<root>/plugins`
+  (`web_server_dashboard.py::_dashboard_plugin_search_dirs`); the gate still needs `plugins.enabled`
+  of the launch profile.
+- A gateway's agent loader scans ONLY `<its home>/plugins`
+  (`plugins_discovery.py::collect_directory_manifests`, `user_dir = get_hermes_home() / "plugins"`), and
+  so do `hermes plugins enable/update/remove` (`plugins_cmd.py::_plugins_dir`, `_discover_all_plugins`).
+  A copy only in the root is invisible to a named profile's gateway.
+- Hermes keeps ONE dependency environment for every live profile (`pm/plugins_state.py::dependency_homes`,
+  `enabled_plugins_ordered`). Each enabled plugin directory becomes a uv workspace member keyed by its
+  RESOLVED path (`pm/workspace.py::member_sources`, `_member_key`). Two real copies are two members;
+  this project has a build backend, so both keep the package name `hermes-meeting-scribe` and `uv lock`
+  refuses them ("Two workspace members are both named…", comment in `_workspace_member`). A symlink to
+  the copy resolves to the same identity: one member however many profiles enable it.
+- Every enabled profile's gateway (its own systemd unit) and every Desktop backend calls `register()`.
+  Module names are per home (`plugins_loader.py::_directory_module_name`), so each gets its own
+  runtime unless the plugin refuses.
+
+**Decision.**
+
+- ONE real copy. Profiles that need the plugin but do not hold the copy get a SYMLINK
+  `<home>/plugins/meeting-scribe → <copy>` and `hermes -p <profile> plugins enable meeting-scribe`.
+  Both layouts are supported and covered by `tests/integration/test_any_profile_hermes.py`: the copy in
+  the owner profile (what `hermes plugins install` produces; recommended in the README) or in the root.
+- ONE owner, resolved by `meeting_scribe.home.owner()`:
+  1. `plugins.entries.meeting-scribe.owner_profile` in the ROOT `config.yaml` (the default profile's).
+     The root is the one file every profile can reach, the same place Hermes itself looks for shared
+     plugins. A per-profile key could disagree between profiles; the root one cannot.
+  2. Otherwise the home holding the REAL files (`plugin_root().resolve()`, symlinks followed), so a
+     single-profile install needs no configuration and a linked profile is never an owner by accident.
+  A checkout outside `plugins/` (tests) uses the process home. "The profile with the Discord adapter"
+  was rejected as the rule: several profiles may have Discord (with different bots), and it would tie
+  Google Meet-only installs to Discord.
+- A declaration that cannot be used (not a profile id, missing profile, unreadable root config) is an
+  `OwnerError`: no profile is the owner (nothing records), the REST API answers `503` with the reason,
+  and doctor says it. Never a fallback to another profile's data.
+- `register()` asks `home.role(get_hermes_home())` (Hermes binds discovery to the profile's home,
+  `plugins_loader.py::_plugin_home_scope`):
+  - owner: everything as before (runtime, tools, chat commands, skill, Phase B capture, worker, Meet
+    pollers). The runtime keeps the role sentence for doctor's first check, `owner`.
+  - any other profile: no runtime, no worker, no capture, no tools, chat commands or skill (their
+    reads would bootstrap a database in the wrong home). Only `hermes meeting-scribe` stays, and it
+    prints which profile to use (`hermes -p <owner> meeting-scribe …`); `doctor` exits 0, any other
+    subcommand 2.
+- Every process resolves data through `home.data_dir()` → `<owner home>/plugin-data/meeting-scribe`.
+  The REST API enters Hermes' own request scope for the owner on every request (`owner_scope()` →
+  `web_server_profiles._config_profile_scope`), so settings and secrets are the owner's; `?profile=`
+  is ignored. Commands from the page are rows in the owner's `desktop_commands`, executed by the
+  owner's worker (§21).
+- The root config is parsed once per change (mtime+size cache): the worker's pulse asks often.
+
+**Operational rules (README «Use Meetings from any profile»).** Update the copy through its owner
+only (`hermes -p <owner> plugins update meeting-scribe`); links follow. Put the new code in place
+BEFORE linking or enabling other profiles: `hermes plugins enable` reloads that profile's running
+gateway immediately (`plugins_activation.activate_plugin_now`), and a release without this section
+would start a second runtime there. Entering the owner's scope turns a Desktop backend launched
+with another profile into a multi-profile host (`tui_gateway.launch_profile_policy.activate_multi_profile_hosting`),
+the same switch Hermes flips for any `?profile=` request.
+
+**Still needs a live check.** The four-profile setup in a real Desktop (open it with each profile),
+and a gateway reload of a linked profile while the owner records.
 
 ## 2. Architecture
 
@@ -824,7 +873,9 @@ The page's texts are its own `ctx.i18n.register({en, es})` bundles, separate fro
 `meeting_scribe/i18n` catalogs. Field labels come from the schema (`/v1/settings?lang=`).
 
 **Data.** Every call goes through `ctx.rest` (namespace-scoped) and the SDK's React Query. The data is
-the owner profile's (§1.5), so a Desktop profile switch changes nothing on this page; query keys carry
+the owner profile's (§1.5) whichever profile Desktop was opened with, so a profile switch changes
+nothing on this page. A launch profile without the plugin gets Hermes' `404 Plugin not found`; the
+page then says to open Desktop with a profile where Meetings is on, or to turn it on there; query keys carry
 the connection (another Hermes install), and a connection switch closes the open meeting.
 Updates come from polling, not events (`broadcast_plugin_event` is process-local): the library every
 30 s, status every 15 s, an unfinished meeting every 10 s, and a pending command every 2 s until it
@@ -998,6 +1049,7 @@ Authentication is the host's (session token / OAuth gate). All bodies are JSON. 
 | 404 | unknown meeting, command, space (`there is no space called 'x'`) or server-of-space; a meeting of another space is "not found" |
 | 409 | several spaces and no `?space=` on a data endpoint (`this installation has several spaces: say which one with ?space=<id> (the list is at /v1/spaces)`); slug taken; server owned by another space; deleting a non-empty or the last space |
 | 422 | FastAPI parameter validation (e.g. `limit` out of range) |
+| 503 | `owner_profile` cannot be used (§1.5); the detail says why |
 
 `space` (query, ≤ 40 chars): optional with one space; required (409) with several on
 `/v1/meetings*`, `/v1/commands/*` and `POST …/commands`. Optional everywhere else as described.
@@ -1019,7 +1071,7 @@ Authentication is the host's (session token / OAuth gate). All bodies are JSON. 
 | Method, path | Params | Response |
 |---|---|---|
 | `GET /v1/status` | `space` (optional) | `{worker:{state:"recent"\|"stale"\|"unknown", last_seen}, queue:{running,queued,failed} (machine), space, counts, jobs, waiting_destination, dm_notes, commands, google, settings_warnings}`. With a space: `counts/jobs/…` are that space's and `google` is its connection (`{enabled, client_stored, connected, revoked, connected_at, commands:{connect,status,enable}, last_poll_at?, last_poll_ok?, last_error?, last_import_at?, last_import_meeting?, records_given_up?, records_given_up_last?, retry_after_until?}`). Several spaces and no `space`: `space:null, google:null`, lists empty, `counts` = `queue`. |
-| `GET /v1/doctor` | – | `{exit_code, checks:[{name, status:"ok"\|"warn"\|"fail", detail}]}`; walks every space |
+| `GET /v1/doctor` | – | `{exit_code, checks:[{name, status:"ok"\|"warn"\|"fail", detail}]}`; walks every space; the first check, `owner`, names the owner profile whose data is served |
 
 ### Spaces and servers
 

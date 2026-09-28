@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Meetings from any profile**: one installation, one owner profile. `owner_profile` (under
+  `plugins.entries.meeting-scribe` in the default profile's `config.yaml`) names the profile that
+  runs the bot and keeps the data; without it, the owner is the profile that holds the real copy.
+  Other profiles link that copy and turn it on: their gateways start no runtime, register no tools or
+  chat commands, and their `hermes meeting-scribe` only points to the owner; their Desktop backend
+  serves the owner's meetings, so the page works whichever profile Desktop was opened with. New
+  `owner` doctor check; the REST API answers 503 with the reason when `owner_profile` cannot be used.
+
 - **Spaces**: one bot serves several teams or clients, each with its own Discord servers, meetings,
   settings overrides, people links and Google Meet connection. `hermes meeting-scribe space …`
   manages them; `--space` on `status`, `list`, `show`, `export`, `reprocess`, `config` and `google`;

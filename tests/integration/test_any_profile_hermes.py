@@ -1,17 +1,16 @@
 """One installation used from every profile, against the REAL Hermes (DESIGN §1.5).
 
-Layout of the throwaway Hermes root (``$HOME/.hermes``), the recommended multi-profile install:
-
-- ``profiles/owner/plugins/meeting-scribe``: the ONE real copy, in the profile with the Discord bot
-  (its gateway's loader scans only ``<its home>/plugins``, ``plugins_discovery.collect_directory_manifests``);
-- ``plugins/meeting-scribe`` (root, the default profile) and ``profiles/guest/plugins/meeting-scribe``:
-  symlinks to it, enabled in those profiles so their Desktop backend serves the page;
-- ``config.yaml`` (root): ``plugins.entries.meeting-scribe.owner_profile: owner`` (param: with and
-  without it; without it the owner is where the real copy is).
+A throwaway Hermes root (``$HOME/.hermes``) with profiles ``owner`` (the Discord bot), ``guest`` and
+``bare``. ONE real copy of the plugin, either in the root ``plugins/`` (the recommended shape) or in
+the owner profile; every other home that uses it has a symlink to it in its own ``plugins/`` (each
+gateway's loader scans only ``<its home>/plugins``, ``plugins_discovery.collect_directory_manifests``;
+``hermes plugins enable`` too, ``plugins_cmd._discover_all_plugins``). ``owner_profile`` is declared
+in the root ``config.yaml`` except in the layout that relies on where the real files are.
 
 Proves: the owner's loader builds the runtime and writes to the owner's data; another profile's loader
 registers nothing that writes; a Desktop backend launched with another profile serves the owner's
-meetings; Hermes' dependency environment sees one member, not two.
+meetings; a profile without the plugin enabled still gets Hermes' 404; Hermes' dependency environment
+sees one member, not two.
 """
 from __future__ import annotations
 
@@ -34,16 +33,26 @@ def _write(path: Path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
 
 
-@pytest.fixture(params=["declared", "by-install"])
+LAYOUTS = {  # where the real copy is, whether owner_profile is declared
+    "root-copy": ("root", True),               # the recommended shape (README «Use Meetings from any profile»)
+    "owner-copy": ("owner", True),
+    "owner-copy-undeclared": ("owner", False),  # the owner is where the real files are
+}
+
+
+@pytest.fixture(params=sorted(LAYOUTS))
 def root(request, tmp_path, monkeypatch):
     os_home = tmp_path / "os-home"
     root = os_home / ".hermes"
-    real = root / "profiles" / "owner" / "plugins" / "meeting-scribe"
+    where, declared = LAYOUTS[request.param]
+    homes = {"root": root, "owner": root / "profiles" / "owner", "guest": root / "profiles" / "guest"}
+    real = homes[where] / "plugins" / "meeting-scribe"
     shutil.copytree(REPO, real, ignore=IGNORE)
-    for linked in (root / "plugins", root / "profiles" / "guest" / "plugins"):
-        linked.mkdir(parents=True)
-        (linked / "meeting-scribe").symlink_to(real)
-    entries = {"entries": {"meeting-scribe": {"owner_profile": "owner"}}} if request.param == "declared" else {}
+    for name, profile_home in homes.items():
+        if name != where:
+            (profile_home / "plugins").mkdir(parents=True)
+            (profile_home / "plugins" / "meeting-scribe").symlink_to(real)
+    entries = {"entries": {"meeting-scribe": {"owner_profile": "owner"}}} if declared else {}
     _write(root / "config.yaml", {"plugins": {"enabled": ["meeting-scribe"], **entries}})
     _write(root / "profiles" / "owner" / "config.yaml", {"plugins": {
         "enabled": ["meeting-scribe"], "entries": {"meeting-scribe": {"settings": {"transcribe_language": "es"}}}}})
@@ -205,5 +214,5 @@ def test_the_dependency_environment_sees_one_member_for_the_copy_and_its_links(r
 
     monkeypatch.setenv("HERMES_HOME", str(root / "profiles" / "guest"))
     selected = enabled_member_dirs()
-    assert len(selected) == 3  # default, guest (links) and owner (the copy)
-    assert list(member_sources(selected)) == [(root / "profiles" / "owner" / "plugins" / "meeting-scribe").resolve()]
+    assert len(selected) == 3  # default, owner and guest: one real copy, two links
+    assert len(member_sources(selected)) == 1

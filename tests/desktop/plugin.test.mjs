@@ -263,13 +263,14 @@ test('page: nothing selected shows the pick-a-meeting pane; empty library and er
   assert.match(html, /boom/)
 })
 
-test('a backend launched without the plugin gets plain guidance, never "enable it here"', opts, async () => {
+test('a backend launched without the plugin gets plain guidance, no commands to type', opts, async () => {
   const { createElement } = await import('react')
   mod.$view.set('library'); mod.$selected.set(null)
   const missing = new Error(`Error invoking remote method 'hermes:api': Error: 404: {"detail":"Plugin not found"}`)
   const html = await render(createElement(mod.MeetingsPage), { '/v1/status': missing }, 'es')
   assert.match(html, /Reuniones no está disponible en esta ventana/)
-  assert.match(html, /vuelve a abrirlo con el perfil donde está instalado Reuniones/)
+  assert.match(html, /Abre Hermes con un perfil que tenga Reuniones activado/)
+  assert.match(html, /no arranca un segundo bot/)
   assert.doesNotMatch(html, /plugins enable|gateway restart/)
   assert.doesNotMatch(html, /data-sdk="segmented"/)
   assert.doesNotMatch(html, /No se pudo cargar/)

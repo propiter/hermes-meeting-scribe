@@ -127,6 +127,45 @@ from a non-interactive shell and the plugin is left disabled, run
 hermes meeting-scribe setup --non-interactive --language es --model small --kanban-mode approve
 ```
 
+### Use Meetings from any profile
+
+Hermes profiles are separate agents, and each one only loads the plugins in its own `plugins/`
+folder. Meetings is still installed **once**: one profile is the **owner** and runs the bot
+(recording, processing, Google Meet) and keeps the meetings, settings and Google connection. Any
+other profile where you turn Meetings on only shows the Desktop page with the owner's meetings: it
+starts no second bot and writes nothing of its own.
+
+1. Keep one real copy (normally in the owner profile, where `hermes plugins install` put it) and
+   say which profile owns it, in the default profile's `config.yaml` (`~/.hermes/config.yaml`):
+
+   ```yaml
+   plugins:
+     entries:
+       meeting-scribe:
+         owner_profile: team        # the profile with the Discord bot ("default" for the default one)
+   ```
+
+   Without this line the owner is the profile that holds the real copy.
+
+2. In every other profile that should show the page, link that copy and turn it on:
+
+   ```bash
+   ln -s ~/.hermes/profiles/team/plugins/meeting-scribe ~/.hermes/plugins/meeting-scribe          # default
+   ln -s ~/.hermes/profiles/team/plugins/meeting-scribe ~/.hermes/profiles/work/plugins/meeting-scribe
+   hermes plugins enable meeting-scribe
+   hermes -p work plugins enable meeting-scribe
+   ```
+
+   A link, not a second install: two copies of the same plugin break Hermes' shared dependency
+   environment ("two workspace members are both named hermes-meeting-scribe"); a link is the same
+   plugin to it. Update with `hermes -p team plugins update meeting-scribe` only.
+
+   Do this with a release that has this section. `plugins enable` loads the plugin into that
+   profile's running gateway right away, and an older release there would start a second bot.
+
+`hermes meeting-scribe doctor` starts with an `owner` line. In a profile that is not the owner, every
+`hermes meeting-scribe` command just says which profile to use (`hermes -p team meeting-scribe …`).
+
 ### Discord bot
 
 The plugin reuses the bot that Hermes' Discord adapter already runs. It needs no token of its own.
@@ -626,7 +665,7 @@ date, participants, project and tags.
     recording.ogg              mixed retention
 ```
 
-Storage is separate for each Hermes profile. `reprocess --from transcribe` extracts the speaker
+`<HERMES_HOME>` is the owner profile's home ([Use Meetings from any profile](#use-meetings-from-any-profile)). `reprocess --from transcribe` extracts the speaker
 streams back out of `recording.mka`.
 
 ## Privacy and consent
@@ -703,15 +742,14 @@ default). A **Meetings** row appears in the sidebar and in the command palette.
   whether it is the default, a custom value or invalid; and **Models** (main model plus ordered
   backups you can add, remove and reorder).
 
-**Launch Desktop with the plugin's profile.** The page always shows the data of the profile where the
-plugin is installed, whichever profile you switch to in Desktop. Hermes only serves a plugin's page API when
-Desktop was *opened* with a profile that has the plugin enabled. If Desktop was opened with another
-profile, the page says so: close it and open it with the profile where Meetings is installed. Do not
-enable the plugin in a second profile to "fix" this; that starts a second copy of the bot with its own
-separate data.
+**Any profile.** The page always shows the owner's meetings, whichever profile Desktop was opened
+with and whichever profile you switch to. Hermes only serves a plugin's page when Desktop was
+*opened* with a profile that has the plugin turned on; otherwise the page says so. Turn it on in the
+profiles you open Desktop with, as in [Use Meetings from any profile](#use-meetings-from-any-profile):
+it does not start a second bot.
 
-The page reads the owner profile's files and database and never starts a recording or a pipeline:
-**Reprocess** is carried out by the gateway's worker, so the gateway must be running. Settings are
+The page reads the owner's files and database and never starts a recording or a pipeline:
+**Reprocess** is carried out by the owner's gateway worker, so that gateway must be running. Settings are
 written with the same rules as `hermes meeting-scribe config set` and `llm set`.
 
 **Not verified yet:** the page is covered by Node render tests and Hermes' `plugins validate`, but it
@@ -734,6 +772,8 @@ spaces and servers (contract: [DESIGN, Appendix A](docs/DESIGN.md#appendix-a-res
 | The first word from a new speaker is missing | Known Discord/DAVE limitation: a new speaker's audio is dropped until Discord maps their stream, which takes about 100 ms. |
 | Wrong language or misheard words | Pin `transcribe_language`, and try a larger `transcribe_model`. |
 | A meeting is stuck or failed | `hermes meeting-scribe status` shows the stage and the error. Then run `hermes meeting-scribe reprocess <id> --from <stage>`. |
+| Meetings says "not available in this window" | Desktop was opened with a profile where Meetings is not turned on: see [Use Meetings from any profile](#use-meetings-from-any-profile). |
+| A `hermes meeting-scribe` command only says to use another profile | That profile is not the owner; run it as `hermes -p <owner> meeting-scribe …`. |
 | ffmpeg is found but reports no libopus | Install an ffmpeg build that includes libopus. `doctor` shows which binary it picked. |
 
 ## Limitations
