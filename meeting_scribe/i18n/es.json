@@ -226,6 +226,7 @@
   "notes.open_questions": "Preguntas abiertas",
   "notes.partial": "La grabación se interrumpió; las notas pueden estar incompletas.",
   "notes.missing_audio": "No se pudo capturar el audio de: {names}",
+  "notes.unheard": "🔇 **{title}** (`{id}`): no se pudo capturar el audio de {names}. Estaban en la llamada, pero Discord no entregó su voz al bot, así que no hay transcripción ni notas de esta reunión.",
   "notes.participants": "Participantes",
   "notes.quote": "Cita",
   "notes.summary": "Resumen",

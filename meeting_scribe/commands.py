@@ -247,6 +247,8 @@ class MeetingCommands:
                           stage=stage_label(job.get("failed_stage") or job.get("stage"), lang))
             elif (row.get("delivery") or {}).get("state") == "waiting_destination":
                 extra = t("cmd.status_waiting_channel", lang)
+            if row.get("missing_audio"):
+                extra += " — " + t("notes.missing_audio", lang, names=", ".join(row["missing_audio"]))
             lines.append(t("cmd.status_line", lang, id=row["id"], title=row["title"],
                            state=state_label(row["state"], lang), extra=extra))
         return "\n".join(lines)

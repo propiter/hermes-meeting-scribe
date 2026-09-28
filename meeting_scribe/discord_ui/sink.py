@@ -21,8 +21,9 @@ from typing import Any, Callable, Optional
 from .. import privacy
 from ..config import Settings
 from ..domain.errors import ChannelUnavailable, ForumTagRequired, NotPrivate
-from ..domain.models import KV_MOVE_FROM_DM, Meeting, Notes, SinkResult, is_discord_user_id
+from ..domain.models import KV_MOVE_FROM_DM, Meeting, MeetingState, Notes, SinkResult, is_discord_user_id
 from ..domain.names import clean_channel_name
+from ..i18n import t
 from ..storage.artifacts import read_notes, read_transcript, render_transcript_md
 from .board import Board, move_options
 from .destination import (REPORT_KV, ROUTES_REPORT_KV, Destination, DestinationPending, Resolved, is_forum, pick_tags,
@@ -30,12 +31,13 @@ from .destination import (REPORT_KV, ROUTES_REPORT_KV, Destination, DestinationP
 from .guild import viewable_by
 from .private_share import ShareReport, share_all, share_dm, share_project, sync_copies, withdraw_public
 from .publisher import Pointers, ViewFactory
-from .render import RenderOptions
+from .render import MessageSpec, RenderOptions, safe_name
 from .render_tasks import render_panel
 from .task_publisher import TaskPublisher
 
 log = logging.getLogger(__name__)
 SINK = "discord"
+UNHEARD_POINTER = "unheard"  # the notice of a meeting discarded with people unheard
 
 __all__ = ["DiscordNotesSink", "ViewFactory", "SINK", "DestinationPending"]
 
@@ -203,6 +205,55 @@ class DiscordNotesSink:
                 await asyncio.to_thread(self._service().repo.kv_set, KV_MOVE_FROM_DM + meeting.id, None)
             if private:
                 await self._remember_channel(meeting)
+            return url
+
+    async def notice_unheard(self, meeting_id: str) -> Optional[str]:
+        """A recording discarded as ``empty`` although people were in the call (``missing_audio``):
+        post one short notice where its notes would have gone, so it is not lost in silence
+        (DESIGN §4.1). Follows the meeting's rules: a private meeting only in its private channel, a
+        direct-messages meeting nowhere (no channel is ever used for it), a meeting waiting for a
+        destination nowhere; the voice chat is skipped when the stop announcement already said it
+        there. Posted once (pointer ``unheard``). Returns the message URL, or ``None``."""
+        svc = self._service()
+        meeting = await asyncio.to_thread(svc.repo.get_meeting, meeting_id)
+        if meeting is None or meeting.state is not MeetingState.EMPTY or not meeting.missing_audio:
+            return None
+        if not self.enabled(meeting):
+            return None
+        ptrs = Pointers(svc.repo, meeting.id)
+        async with self._lock(meeting.id):
+            if await ptrs.load(UNHEARD_POINTER) is not None:
+                return None
+            dest = self.destination(meeting)
+            if dest.dm or dest.held or not dest.targets:
+                log.info("meeting-scribe: %s: no channel for the missing-audio notice (%s)", meeting.id,
+                         "direct messages only" if dest.dm else dest.problem or "held")
+                return None
+            pub = self._publisher(meeting)
+            try:
+                channel = await pub._chat_channel(meeting)
+            except (LookupError, DestinationPending) as exc:
+                log.info("meeting-scribe: %s: missing-audio notice not posted: %s", meeting.id, exc)
+                return None
+            settings = self._settings(meeting)
+            voice_chat = {str(c) for c in (meeting.text_channel_id, meeting.channel_id) if c}
+            if settings.consent_announce and str(getattr(channel, "id", "")) in voice_chat:
+                return None  # the stop announcement already said it in this chat
+            lang = settings.ui_language
+            names = ", ".join(safe_name(n) for n in meeting.missing_audio_names)
+            spec = MessageSpec(t("notes.unheard", lang, title=safe_name(meeting.title or meeting.channel_name),
+                                 id=meeting.id, names=names))
+            if is_forum(channel):
+                name = f"{meeting.started_at:%Y-%m-%d} · {' '.join((meeting.title or meeting.channel_name).split())}"
+                try:
+                    channel, message, _tags = await pub._new_post(channel, name[:100], spec, ())
+                except DestinationPending as exc:
+                    log.warning("meeting-scribe: %s: missing-audio notice not posted: %s", meeting.id, exc)
+                    return None
+            else:
+                message = await pub.msgs.send(channel, spec=spec)
+            url = str(getattr(message, "jump_url", "") or "")
+            await ptrs.save(UNHEARD_POINTER, {"channel": channel.id, "message": message.id}, url)
             return url
 
     async def _remember_channel(self, meeting: Meeting) -> None:

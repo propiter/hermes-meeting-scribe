@@ -186,3 +186,11 @@ def test_chat_status_names_a_recording_captured_by_another_process(prepo, layout
     prepo.set_capture_owner(live.id, f"{socket.gethostname()}:{os.getppid()}:feedbeef")
     head = cmds.handle("status", CALLER, "meeting").splitlines()[0]
     assert head.startswith("Recording now:") and f"`{live.id}`" in head
+
+
+def test_chat_status_says_whose_audio_a_discarded_meeting_missed(prepo, layout, settings, clock, meeting):
+    """A recording discarded with people unheard is visible in status, not a bare "no audio"."""
+    cmds, service, runner = make(prepo, layout, settings, clock)
+    prepo.save_meeting(replace(meeting, state=MeetingState.EMPTY, missing_audio=("10", "11")))
+    line = next(ln for ln in cmds.handle("status", CALLER, "meeting").splitlines() if meeting.id in ln)
+    assert "Could not capture the audio of: Ana, Luis" in line

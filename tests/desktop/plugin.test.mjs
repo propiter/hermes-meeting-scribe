@@ -129,6 +129,8 @@ test('pure helpers: state tone, row subtitle, date range, speaker tone, matches,
   assert.equal(mod.rowSubtitle(t, { state: 'done', people: 0, task_count: 0 }), 'library.noTasks')
   assert.equal(mod.rowSubtitle(t, { state: 'transcribing' }), 'state.transcribing')
   assert.equal(mod.rowSubtitle(t, { state: 'failed' }), 'state.failed')
+  assert.equal(mod.rowSubtitle(t, { state: 'empty' }), 'state.empty')
+  assert.equal(mod.rowSubtitle(t, { state: 'empty', missing_audio: ['Ana'] }), 'state.emptyUnheard')
   const now = new Date('2026-09-27T12:00:00Z')
   assert.deepEqual(mod.dateRange('today', now), { since: '2026-09-27', until: '2026-09-27' })
   assert.deepEqual(mod.dateRange('week', now), { since: '2026-09-21', until: '2026-09-27' })

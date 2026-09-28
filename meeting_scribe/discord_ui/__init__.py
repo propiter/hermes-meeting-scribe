@@ -199,6 +199,21 @@ def unload(state: UiState) -> None:
         log.exception("meeting-scribe: detaching from the Discord client failed")
 
 
+def _notice_unheard(sink: DiscordNotesSink, session: Any) -> None:
+    """Session-end callback (event loop): a recording discarded with people in the call gets a notice
+    where its notes would have gone (DESIGN §4.1), instead of vanishing in silence."""
+    meeting = getattr(session, "meeting", None)
+    if meeting is None or session.heard or not session.missing_audio:
+        return
+
+    async def post() -> None:
+        try:
+            await sink.notice_unheard(meeting.id)
+        except Exception:  # a notice must never break the capture controller
+            log.exception("meeting-scribe: missing-audio notice of %s failed", meeting.id)
+    asyncio.ensure_future(post())
+
+
 def install(ctx: Any, runtime: Any) -> UiState:
     from .views import ViewKit  # discord.py needed from here on
 
@@ -230,6 +245,7 @@ def install(ctx: Any, runtime: Any) -> UiState:
         state.listener = on_voice_state_update
         if hasattr(capture, "on_session_end"):
             capture.on_session_end.append(state.autojoin.note_session_end)
+            capture.on_session_end.append(lambda session: _notice_unheard(sink, session))
     on_unload = getattr(ctx, "on_unload", None)
     if callable(on_unload):
         def meeting_scribe_discord_unload() -> None:

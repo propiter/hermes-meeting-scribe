@@ -176,3 +176,54 @@ def test_enabled_follows_setting(env, meeting):
     assert env["make"]().enabled(meeting)
     env["cfg"]["delivery_discord_enabled"] = False
     assert not env["make"]().enabled(meeting)
+
+
+
+# -- a recording discarded with people unheard (DESIGN §4.1) ------------------------------------
+def _unheard(env, **over):
+    from meeting_scribe.domain.models import MeetingState
+    m = replace(env["meeting"], state=MeetingState.EMPTY, missing_audio=("10", "11"), **over)
+    env["svc"].repo.save_meeting(m)
+    env["meeting"] = m
+    return m
+
+
+async def test_unheard_meeting_gets_one_notice_in_the_notes_channel(env):
+    env["cfg"]["delivery_discord_channel"] = "300"
+    m = _unheard(env)
+    sink = env["make"]()
+    url = await sink.notice_unheard(m.id)
+    (msg,) = env["notes_ch"].ordered()
+    assert url == msg.jump_url
+    assert "could not capture the audio of Ana, Luis" in msg.content and m.id in msg.content
+    assert "allowed_mentions" in msg.sent_kwargs  # names stay inert, nobody pinged
+    assert await sink.notice_unheard(m.id) is None and len(env["notes_ch"].ordered()) == 1  # once
+
+
+async def test_unheard_notice_skips_the_voice_chat_the_stop_announcement_used(env):
+    m = _unheard(env)  # no notes channel: it would go to the voice chat, which already got the announcement
+    assert await env["make"]().notice_unheard(m.id) is None
+    assert not env["voice"].ordered()
+    env["cfg"]["consent_announce"] = False  # no announcement there: the notice is the only word
+    assert await env["make"]().notice_unheard(m.id)
+    assert "could not capture the audio" in env["voice"].ordered()[0].content
+
+
+async def test_unheard_notice_follows_private_and_dm_rules(env):
+    env["cfg"].update({"delivery_discord_channel": "300", "meeting_routes": ["Daily Sync = :dm"]})
+    m = _unheard(env)
+    assert await env["make"]().notice_unheard(m.id) is None  # direct messages only: never a channel
+    assert not env["notes_ch"].ordered() and not env["voice"].ordered()
+    private = env["adapter"]._client.add(700, "leads-private")
+    env["cfg"]["meeting_routes"] = ["Daily Sync = 700:private"]
+    assert await env["make"]().notice_unheard(m.id)
+    assert private.ordered() and not env["notes_ch"].ordered()
+
+
+async def test_no_notice_for_a_heard_or_silent_meeting(env):
+    env["cfg"]["delivery_discord_channel"] = "300"
+    sink = env["make"]()
+    assert await sink.notice_unheard(env["meeting"].id) is None  # captured, being processed
+    m = _unheard(env)
+    env["svc"].repo.save_meeting(replace(m, missing_audio=()))  # nobody was there long enough
+    assert await sink.notice_unheard(m.id) is None and not env["notes_ch"].ordered()

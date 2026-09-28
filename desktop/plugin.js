@@ -136,7 +136,7 @@ export const LOCALES = {
       recording: 'Recording', captured: 'Waiting to be processed', transcribing: 'Transcribing',
       transcribed: 'Transcribed', analyzing: 'Writing the notes', analyzed: 'Notes written',
       delivering: 'Publishing', done: 'Ready', failed: 'Needs attention', processing: 'In progress',
-      empty: 'Discarded: no audio'
+      empty: 'Discarded: no audio', emptyUnheard: 'No audio: voices not captured'
     },
     stateGroup: { recording: 'Recording', processing: 'In progress', done: 'Ready', failed: 'Needs attention', empty: 'Discarded' },
     stage: { transcribe: 'Transcribing', analyze: 'Writing the notes', deliver: 'Publishing', archive: 'Saving the audio' },
@@ -151,6 +151,7 @@ export const LOCALES = {
       noNotes: 'The notes are not ready yet. They appear here once the meeting has been processed.',
       noNotesFailed: 'Processing stopped before the notes were written. See «Processing».',
       empty: 'No audio was captured (nobody spoke), so there are no notes. Nothing was published.',
+      emptyUnheard: 'People were in the call but their audio could not be captured, so there are no notes. A notice was posted where the notes would have gone.',
       recording: 'This meeting is being recorded. Notes appear once it ends and is processed.',
       noDecisions: 'No decisions were recorded.', noQuestions: 'No open questions.',
       waiting: 'Waiting for a place to publish',
@@ -372,7 +373,7 @@ export const LOCALES = {
       recording: 'Grabando', captured: 'Esperando proceso', transcribing: 'Transcribiendo',
       transcribed: 'Transcrita', analyzing: 'Escribiendo las notas', analyzed: 'Notas escritas',
       delivering: 'Publicando', done: 'Lista', failed: 'Requiere atención', processing: 'En proceso',
-      empty: 'Descartada: sin audio'
+      empty: 'Descartada: sin audio', emptyUnheard: 'Sin audio: voces no capturadas'
     },
     stateGroup: { recording: 'Grabando', processing: 'En proceso', done: 'Listas', failed: 'Requieren atención', empty: 'Descartadas' },
     stage: { transcribe: 'Transcribiendo', analyze: 'Escribiendo las notas', deliver: 'Publicando', archive: 'Guardando el audio' },
@@ -387,6 +388,7 @@ export const LOCALES = {
       noNotes: 'Las notas aún no están listas. Aparecerán aquí cuando termine el proceso de la reunión.',
       noNotesFailed: 'El proceso se detuvo antes de escribir las notas. Mira «Procesamiento».',
       empty: 'No se captó audio (nadie habló), así que no hay notas. No se publicó nada.',
+      emptyUnheard: 'Había gente en la llamada pero no se pudo capturar su audio, así que no hay notas. Se publicó un aviso donde habrían ido las notas.',
       recording: 'Esta reunión se está grabando. Las notas aparecerán cuando termine y se procese.',
       noDecisions: 'No se registraron decisiones.', noQuestions: 'No hay preguntas abiertas.',
       waiting: 'Esperando un lugar donde publicar',
@@ -717,7 +719,7 @@ export function isInProgress(state) {
 /** Row subtitle: the step under way, or «N people · M tasks». */
 export function rowSubtitle(t, m) {
   if (m.state === 'failed') return t(`state.failed`)
-  if (m.state === 'empty') return t('state.empty')
+  if (m.state === 'empty') return t(m.missing_audio?.length ? 'state.emptyUnheard' : 'state.empty')
   if (isInProgress(m.state)) {
     if (m.waiting_destination) return t('detail.waiting')
     return t(`state.${m.state}`)
@@ -1157,7 +1159,7 @@ function SummaryTab({ detail: d, tasks, audioRef, commandId, onSubmitted, onFini
     d.dm_notes ? h(Callout, { tone: 'muted', title: t('detail.dmNotes') }, h('p', null, t('detail.dmNotesHelp'))) : null)
   const audio = h(AudioBlock, { id: m.id, audio: d.audio || {}, audioRef, commandId, onSubmitted, onFinished })
   if (!n) {
-    const text = m.state === 'empty' ? t('detail.empty') : m.state === 'recording' ? t('detail.recording') : m.state === 'failed' ? t('detail.noNotesFailed') : t('detail.noNotes')
+    const text = m.state === 'empty' ? t(m.missing_audio_names?.length ? 'detail.emptyUnheard' : 'detail.empty') : m.state === 'recording' ? t('detail.recording') : m.state === 'failed' ? t('detail.noNotesFailed') : t('detail.noNotes')
     return h('div', { className: 'ms-stack' }, notices,
       h(Empty, { icon: m.state === 'empty' ? 'circle-slash' : m.state === 'failed' ? 'warning' : m.state === 'recording' ? 'record' : 'loading~spin' },
         h('p', null, text),

@@ -159,3 +159,21 @@ def test_capture_status_delegates_to_controller(rt):
 def test_packages_expose_install():
     assert callable(capture.install) and callable(discord_ui.install)
     assert Path(capture.__file__).name == "__init__.py"
+
+
+async def test_a_recording_discarded_with_people_unheard_posts_a_notice(rt, monkeypatch):
+    """DESIGN §4.1: the session-end listener hands a discarded recording with ``missing_audio`` to
+    the Discord sink, which posts the notice; a heard one, or one with nobody missing, is left alone."""
+    install_all(rt, monkeypatch)
+    sink = discord_ui.state_for(rt).sink
+    posted: list[str] = []
+
+    async def notice(mid):
+        posted.append(mid)
+    monkeypatch.setattr(sink, "notice_unheard", notice)
+    meeting = SimpleNamespace(id="m1")
+    for heard, missing in ((False, ("10",)), (True, ("10",)), (False, ())):
+        for cb in rt.capture.on_session_end:
+            cb(SimpleNamespace(meeting=meeting, heard=heard, missing_audio=missing, guild_id=1))
+    await asyncio.sleep(0)
+    assert posted == ["m1"]
