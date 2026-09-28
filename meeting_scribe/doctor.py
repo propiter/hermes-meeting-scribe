@@ -290,13 +290,26 @@ def route_rows(s: Settings, repo: Optional[Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def space_guilds(repo: Any, space: str) -> Optional[list[str]]:
+    """The Discord servers whose channels ``space`` may see (DESIGN §23); ``None``: every server the bot
+    reported. An install with ONE space (or none yet) owns every server — an unowned one joins it on
+    first use (``claim_guild``) — so nothing of another team can show. With several spaces, only the
+    servers assigned to ``space`` (none: it sees no channel); the operator's global view (no space)
+    sees the servers assigned to some space, never an unowned one."""
+    rows = repo.list_spaces()
+    if len(rows) <= 1 and (not space or not rows or rows[0].slug == space):
+        return None
+    if not space:
+        return list(dict.fromkeys(g for r in rows for g in r.guild_ids))
+    row = next((r for r in rows if r.slug == space), None)
+    return list(row.guild_ids) if row is not None else []
+
+
 def space_catalog(repo: Any, space: str) -> Any:
-    """The channel catalog of ``space``'s servers (every catalogued server when it has none assigned)."""
+    """The channel catalog of ``space``'s servers only; a space without servers sees no channel."""
     from .channel_catalog import Catalog
 
-    row = repo.get_space(space) if space and hasattr(repo, "get_space") else None
-    guilds = list(row.guild_ids) if row is not None and row.guild_ids else None
-    return Catalog.load(repo, guilds)
+    return Catalog.load(repo, space_guilds(repo, space))
 
 
 def route_text(row: dict[str, Any]) -> str:

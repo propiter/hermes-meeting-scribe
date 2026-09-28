@@ -296,6 +296,7 @@ export const LOCALES = {
       },
       publicWarning: name => `#${name} is visible to the whole server. A private rule keeps the meeting there, so everyone who sees that channel reads it: choose a private channel.`,
       noCatalog: 'The bot has not reported its channels yet (it does when it connects to Discord). Type the ids or names; they are checked later.',
+      noServers: 'Assign a Discord server to this space first: until then it sees no channel.',
       manualOrigin: 'Channel or category name or id', manualTarget: 'Text channel or forum name or id',
       status: { ok: 'Checked', not_checked: 'Not checked yet', problem: 'Problem', invalid: 'Invalid' },
       rule: n => `Rule ${n}`
@@ -527,6 +528,7 @@ export const LOCALES = {
       },
       publicWarning: name => `#${name} lo ve todo el servidor. Una regla privada deja la reunión ahí, así que la lee cualquiera que vea ese canal: elige un canal privado.`,
       noCatalog: 'El bot todavía no ha informado de sus canales (lo hace al conectarse a Discord). Escribe los ids o nombres; se comprueban después.',
+      noServers: 'Asigna un servidor de Discord a este espacio: hasta entonces no ve ningún canal.',
       manualOrigin: 'Nombre o id del canal o categoría', manualTarget: 'Nombre o id del canal de texto o foro',
       status: { ok: 'Comprobada', not_checked: 'Sin comprobar', problem: 'Problema', invalid: 'No válida' },
       rule: n => `Regla ${n}`
@@ -1822,6 +1824,7 @@ export function RoutesEditor({ lang }) {
   const [warning, setWarning] = useState('')
   const channels = catalog.data?.items || []
   const known = channels.length > 0
+  const noServers = catalog.data?.no_servers === true
   const items = rules.data?.items || []
 
   const call = async (path, opts) => {
@@ -1877,6 +1880,7 @@ export function RoutesEditor({ lang }) {
           h(SelectContent, null, spaces.map(sp => h(SelectItem, { key: sp.slug, value: sp.slug }, sp.name)))))
       : null,
     list,
+    noServers ? h(Callout, { tone: 'muted' }, t('routes.noServers')) : null,
     draft ? h(RuleForm, { draft, setDraft, channels, known, busy, onAdd: add, onCancel: () => { setDraft(null); setError('') } }) : null,
     !draft
       ? h('div', { className: 'ms-inline' },

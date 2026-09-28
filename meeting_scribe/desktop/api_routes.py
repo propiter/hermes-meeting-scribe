@@ -62,11 +62,13 @@ def _apply(c: dict[str, Any], space: str, change: Any) -> list[str]:
 
 @router.get("/v1/discord/channels")
 def list_channels(request: Request, space: str = SpaceParam) -> dict[str, Any]:
-    """``{"items": [{id, name, type, parent_id, parent_name, public, guild_id, guild_name}], "seen_at"}``;
-    an empty list and ``seen_at: null`` until the gateway has reported the channels."""
+    """``{"items": [{id, name, type, parent_id, parent_name, public, guild_id, guild_name}], "seen_at",
+    "no_servers"}``: only the channels of the space's own servers. An empty list and ``seen_at: null``
+    until the gateway has reported them; a space without servers gets ``no_servers: true`` and nothing
+    else (never another space's channels)."""
     with _ctx(request) as c:
         cat = _catalog(c, _space(c, space) or "")
-        return {"items": cat.channels(), "seen_at": cat.seen_at}
+        return {"items": cat.channels(), "seen_at": cat.seen_at, "no_servers": cat.no_servers}
 
 
 @router.get("/v1/routes")

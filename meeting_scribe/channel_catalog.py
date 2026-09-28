@@ -56,7 +56,7 @@ def snapshot_guild(guild: Any) -> list[dict[str, Any]]:
 @dataclass(frozen=True)
 class Check:
     """A rule side resolved against the catalog. ``status``: ``ok`` | ``missing`` | ``ambiguous`` |
-    ``wrong_kind`` | ``unknown`` (no catalog for the space yet)."""
+    ``wrong_kind`` | ``unknown`` (no catalog for the space yet) | ``no_servers`` (the space has none)."""
     status: str
     id: str = ""
     name: str = ""
@@ -69,20 +69,38 @@ class Check:
                 "detail": self.detail}
 
 
+NO_SERVERS = ("this space has no Discord server assigned, so it sees no channel: assign a server to this space "
+              "first (hermes meeting-scribe space add-guild <space> <server id>)")
+
+
 class Catalog:
-    """The channels of a set of servers (a space's), as last seen by the gateway."""
+    """The channels of a set of servers (a space's), as last seen by the gateway. ``no_servers``: the
+    space has no server at all — it sees nothing and every lookup is refused (never another space's
+    channels). ``foreign``: ids of channels catalogued in servers OUTSIDE the space, refused even
+    before the space's own servers were catalogued."""
 
     def __init__(self, by_guild: Mapping[str, tuple[Sequence[Mapping[str, Any]], float]],
-                 guild_names: Optional[Mapping[str, str]] = None) -> None:
+                 guild_names: Optional[Mapping[str, str]] = None, *, no_servers: bool = False,
+                 foreign: Iterable[str] = ()) -> None:
         self.by_guild = {g: [dict(c, guild_id=g, guild_name=(guild_names or {}).get(g, "")) for c in rows]
                          for g, (rows, _seen) in by_guild.items()}
         self.seen_at = max((seen for _rows, seen in by_guild.values()), default=None)
+        self.no_servers = no_servers
+        self.foreign = frozenset(str(x) for x in foreign)
 
     @classmethod
-    def load(cls, repo: Any, guild_ids: Optional[Iterable[str]] = None) -> "Catalog":
-        """The catalog of ``guild_ids`` (``None``: every server the bot reported)."""
+    def load(cls, repo: Any, guild_ids: Optional[Iterable[str]]) -> "Catalog":
+        """The catalog of the servers ``guild_ids`` (``None``: every server the bot reported; empty: a
+        catalog that refuses every lookup)."""
         names = dict(repo.bot_guilds()[0])
-        return cls(repo.guild_channels(None if guild_ids is None else list(guild_ids)), names)
+        if guild_ids is None:
+            return cls(repo.guild_channels(None), names)
+        wanted = [str(g) for g in guild_ids]
+        if not wanted:
+            return cls({}, no_servers=True)
+        everything = repo.guild_channels(None)
+        foreign = {str(c.get("id")) for g, (rows, _seen) in everything.items() if g not in wanted for c in rows}
+        return cls({g: v for g, v in everything.items() if g in wanted}, names, foreign=foreign)
 
     @property
     def known(self) -> bool:
@@ -99,10 +117,14 @@ class Catalog:
         """An id or a name (``#`` optional, case/accents/decoration ignored) among ``kinds``."""
         kinds = tuple(kinds)
         label = "/".join(kinds)
+        if self.no_servers:
+            return Check("no_servers", detail=NO_SERVERS)
+        ref = str(ref or "").strip().lstrip("#")
+        if ref in self.foreign:
+            return Check("missing", ref, detail=f"channel {ref} belongs to a server outside this space")
         if not self.known:
             return Check("unknown", detail="the bot has not reported its channels yet (the gateway writes them when "
                                            "it connects to Discord)")
-        ref = str(ref or "").strip().lstrip("#")
         if ref.isdigit():
             hit = self.get(ref)
             if hit is None:

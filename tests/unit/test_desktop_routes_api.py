@@ -24,7 +24,7 @@ def seed(env, guild="100", rows=CATALOG):
 
 def test_channels_before_the_gateway_reported_them(env):
     r = env["client"].get(f"{PREFIX}/v1/discord/channels").json()
-    assert r == {"items": [], "seen_at": None}
+    assert r == {"items": [], "seen_at": None, "no_servers": False}
 
 
 def test_channels_and_rule_crud_with_one_space(env):
@@ -95,3 +95,39 @@ def test_with_several_spaces_rules_are_the_space_override_and_the_catalog_is_its
     assert r["scope"] == "space" and r["added"] == "meet:standup=601"
     assert "meeting_routes" not in env["mem"].entry["settings"]
     assert c.get(f"{PREFIX}/v1/routes", params={"space": "main"}).json()["items"] == []
+
+
+def _third_space(env):
+    repo = Repository(env["root"] / "index.sqlite")
+    repo.insert_space("client", "Client")
+    repo.close()
+
+
+def test_a_space_without_servers_sees_no_channel_of_any_other_space(env):
+    """DESIGN §23: nothing crosses from one space to another, not even before a server is assigned."""
+    c, _mid = two_spaces(env)
+    seed(env, "100")
+    seed(env, "200", [dict(CATALOG[3], id="701", name="team-secret-board")])
+    seed(env, "300", [dict(CATALOG[2], id="801", name="stray-unowned")])
+    _third_space(env)
+    r = c.get(f"{PREFIX}/v1/discord/channels", params={"space": "client"}).json()
+    assert r["items"] == [] and r["no_servers"] is True
+    assert c.get(f"{PREFIX}/v1/discord/channels", params={"space": "team"}).json()["no_servers"] is False
+
+
+@pytest.mark.parametrize("target", ["team-secret-board", "701"])
+def test_the_editor_of_a_space_without_servers_refuses_every_channel(env, target):
+    c, _mid = two_spaces(env)
+    seed(env, "200", [dict(CATALOG[3], id="701", name="team-secret-board")])
+    _third_space(env)
+    r = c.post(f"{PREFIX}/v1/routes", params={"space": "client"},
+               json={"origin_kind": "meet", "origin": "x", "target": target, "mode": "private"})
+    assert r.status_code == 400 and "assign a server to this space" in r.json()["detail"]
+
+
+def test_a_channel_id_of_another_spaces_server_is_refused_even_before_its_own_catalog(env):
+    c, _mid = two_spaces(env)
+    seed(env, "100", [dict(CATALOG[3], id="701", name="main-secret-board")])  # main's server only
+    r = c.post(f"{PREFIX}/v1/routes", params={"space": "team"},
+               json={"origin_kind": "meet", "origin": "x", "target": "701", "mode": "private"})
+    assert r.status_code == 400 and "outside this space" in r.json()["detail"]
