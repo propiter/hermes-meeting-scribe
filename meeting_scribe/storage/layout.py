@@ -37,7 +37,9 @@ class Layout:
         if meeting.folder:
             return self.resolve(meeting.folder)
         ts = meeting.started_at
-        return self.meetings_dir() / f"{ts:%Y}" / f"{ts:%m}" / self.folder_name(meeting)
+        if not meeting.space:
+            raise ValueError(f"meeting {meeting.id} has no space")
+        return self.meetings_dir() / meeting.space / f"{ts:%Y}" / f"{ts:%m}" / self.folder_name(meeting)
 
     def relative(self, folder: Path) -> str:
         return folder.resolve().relative_to(self.root().resolve()).as_posix()

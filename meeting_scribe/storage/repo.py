@@ -1,9 +1,12 @@
-"""SQLite index (DESIGN §9): meetings, speakers, utterances + FTS5, jobs, deliveries, action items,
-person links and the learned channel→project map.
+"""SQLite index (DESIGN §9, §23): meetings, speakers, utterances + FTS5, jobs, deliveries, action
+items, person links and the learned channel↔project maps — every meeting-derived row belongs to ONE
+space (``meetings.space``), and every query that lists, searches or learns takes the space.
 
-WAL mode so the CLI can read while the gateway's worker writes. One connection per repository
-guarded by an RLock: the pipeline thread and command handlers share it, and SQLite serialises
-writers anyway. Schema changes go through ``_MIGRATIONS`` keyed by ``PRAGMA user_version``.
+WAL mode so the CLI can read while the gateway's workers write. One connection per repository
+guarded by an RLock: pipeline workers and command handlers share it, and SQLite serialises writers
+anyway. ``BASELINE`` is the schema of record; a database written by an older layout (before spaces)
+is moved aside to a timestamped backup by :mod:`.baseline` and a fresh one is created. Later schema
+changes append to ``_MIGRATIONS``.
 """
 from __future__ import annotations
 
@@ -18,18 +21,22 @@ from typing import Any, Iterable, Optional, Sequence
 
 from ..domain.text import fold
 from ..domain.models import SOURCE_DISCORD, ActionItem, ActionStatus, Meeting, MeetingState, Speaker, Utterance
+from . import baseline
 from .deliveries import Claim, DeliveriesMixin
 from .jobs import Job, JobsMixin
 from .result import Result
+from .spaces import SpacesMixin
 
 __all__ = ["Claim", "Job", "Repository", "SCHEMA_VERSION"]
 
-_V1 = """
+_BASELINE = """
 CREATE TABLE meetings (
-  id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, state TEXT NOT NULL,
-  started_at TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', folder TEXT NOT NULL DEFAULT '',
-  data TEXT NOT NULL, updated_at REAL NOT NULL);
-CREATE INDEX meetings_started ON meetings(started_at DESC);
+  id TEXT PRIMARY KEY, space TEXT NOT NULL, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+  state TEXT NOT NULL, started_at TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', folder TEXT NOT NULL DEFAULT '',
+  data TEXT NOT NULL, updated_at REAL NOT NULL, capture_owner TEXT,
+  source TEXT NOT NULL DEFAULT 'discord', external_id TEXT);
+CREATE INDEX meetings_space_started ON meetings(space, started_at DESC);
+CREATE UNIQUE INDEX meetings_source_external ON meetings(space, source, external_id) WHERE external_id IS NOT NULL;
 CREATE TABLE speakers (
   meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
   name TEXT NOT NULL, is_bot INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (meeting_id, user_id));
@@ -42,90 +49,56 @@ CREATE VIRTUAL TABLE utterances_fts USING fts5(
 CREATE TABLE jobs (
   id INTEGER PRIMARY KEY, meeting_id TEXT NOT NULL UNIQUE REFERENCES meetings(id) ON DELETE CASCADE,
   stage TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-  failed_stage TEXT, error TEXT, next_retry_at REAL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+  failed_stage TEXT, error TEXT, next_retry_at REAL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+  owner TEXT, heartbeat REAL);
 CREATE TABLE deliveries (
   id INTEGER PRIMARY KEY, meeting_id TEXT NOT NULL, sink TEXT NOT NULL, key TEXT NOT NULL,
-  external_id TEXT, url TEXT, created_at REAL NOT NULL, UNIQUE (sink, key));
+  external_id TEXT, url TEXT, created_at REAL NOT NULL, state TEXT NOT NULL DEFAULT 'done', claim TEXT,
+  claimed_at REAL, UNIQUE (sink, key));
 CREATE TABLE action_items (
   meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE, id TEXT NOT NULL,
   position INTEGER NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (meeting_id, id));
-CREATE TABLE links (
-  discord_user_id TEXT PRIMARY KEY, linear_user_id TEXT, email TEXT, name TEXT, updated_at REAL NOT NULL);
-CREATE TABLE channel_projects (
-  channel_id TEXT PRIMARY KEY, project_key TEXT NOT NULL, project_name TEXT NOT NULL, updated_at REAL NOT NULL);
-"""
-# v2 (review findings 1, 2, 6): job leases, recording ownership, delivery claims, per-sink decisions.
-_V2 = """
-ALTER TABLE jobs ADD COLUMN owner TEXT;
-ALTER TABLE jobs ADD COLUMN heartbeat REAL;
-ALTER TABLE meetings ADD COLUMN capture_owner TEXT;
-ALTER TABLE deliveries ADD COLUMN state TEXT NOT NULL DEFAULT 'done';
-ALTER TABLE deliveries ADD COLUMN claim TEXT;
-ALTER TABLE deliveries ADD COLUMN claimed_at REAL;
 CREATE TABLE item_sinks (
   meeting_id TEXT NOT NULL, item_id TEXT NOT NULL, sink TEXT NOT NULL, status TEXT NOT NULL,
   updated_at REAL NOT NULL, PRIMARY KEY (meeting_id, item_id, sink));
-INSERT OR IGNORE INTO item_sinks (meeting_id, item_id, sink, status, updated_at)
-  SELECT meeting_id, substr(key, length('mtg:' || meeting_id || ':') + 1), sink, 'delivered', created_at
-  FROM deliveries WHERE key LIKE 'mtg:%' AND sink IN ('kanban', 'linear');
-"""
-# v3 (DESIGN §16): project name -> Discord channel learned from 📁 corrections.
-_V3 = """
-CREATE TABLE project_channels (
-  project TEXT PRIMARY KEY, channel_id TEXT NOT NULL, updated_at REAL NOT NULL);
 CREATE TABLE item_overrides (
   meeting_id TEXT NOT NULL, item_id TEXT NOT NULL, project TEXT, project_key TEXT, updated_at REAL NOT NULL,
   PRIMARY KEY (meeting_id, item_id));
-"""
-# v4 (DESIGN §17): meeting source + external id (Google Meet imports are idempotent through the
-# unique index), a small key/value table for integration status and named leases (one poller).
-_V4 = """
-ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'discord';
-ALTER TABLE meetings ADD COLUMN external_id TEXT;
-CREATE UNIQUE INDEX meetings_source_external ON meetings(source, external_id) WHERE external_id IS NOT NULL;
+CREATE TABLE links (
+  space TEXT NOT NULL, discord_user_id TEXT NOT NULL, linear_user_id TEXT, email TEXT, name TEXT,
+  updated_at REAL NOT NULL, PRIMARY KEY (space, discord_user_id));
+CREATE TABLE channel_projects (
+  space TEXT NOT NULL, channel_id TEXT NOT NULL, project_key TEXT NOT NULL, project_name TEXT NOT NULL,
+  updated_at REAL NOT NULL, PRIMARY KEY (space, channel_id));
+CREATE TABLE project_channels (
+  space TEXT NOT NULL, project TEXT NOT NULL, channel_id TEXT NOT NULL, updated_at REAL NOT NULL,
+  PRIMARY KEY (space, project));
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT, updated_at REAL NOT NULL);
 CREATE TABLE leases (name TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at REAL NOT NULL);
-"""
-_V5 = """
+CREATE TABLE spaces (
+  slug TEXT PRIMARY KEY, name TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}',
+  adopt_guilds INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL);
+CREATE TABLE space_guilds (
+  guild_id TEXT PRIMARY KEY, space TEXT NOT NULL REFERENCES spaces(slug) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '');
 CREATE TABLE desktop_commands (
   id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued', error TEXT NOT NULL DEFAULT '',
-  created_at REAL NOT NULL, updated_at REAL NOT NULL);
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, owner TEXT);
 CREATE INDEX desktop_commands_state ON desktop_commands(state, created_at);
 """
-_V6 = """
-ALTER TABLE desktop_commands ADD COLUMN owner TEXT;
-"""
-# v7: a recording in which nobody was heard is ``empty`` (discarded), no longer ``failed``. Rows an
-# older version parked as failed for exactly that reason ("no audio tracks" while transcribing)
-# are reclassified; every other failure is left alone. Data-only and idempotent (it only matches
-# rows still ``failed``); the ``meta.json`` mirror is rewritten the next time the row is saved.
-_V7 = """
-UPDATE meetings SET state='empty', data=json_set(data, '$.state', 'empty')
-  WHERE state='failed' AND id IN (SELECT meeting_id FROM jobs WHERE state='failed'
-    AND failed_stage='transcribe' AND error LIKE 'TranscriptionError: no audio tracks in %');
-UPDATE jobs SET state='done', error=NULL, failed_stage=NULL, next_retry_at=NULL, owner=NULL, heartbeat=NULL
-  WHERE state='failed' AND meeting_id IN (SELECT id FROM meetings WHERE state='empty');
-"""
-# v8: the ``source``/``external_id`` columns are authoritative (they are written once, at insert).
-# A gateway running pre-v4 code rewrote the JSON of imported meetings without those fields, so
-# ``data`` said ``discord``/null while the columns kept ``google_meet`` + the record. Reads already
-# prefer the columns; this makes the stored JSON coherent again. Data only, idempotent.
-_V8 = """
-UPDATE meetings SET data=json_set(data, '$.source', source, '$.external_id', external_id)
-  WHERE json_extract(data, '$.source') IS NOT source OR json_extract(data, '$.external_id') IS NOT external_id;
-"""
-_MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)
-SCHEMA_VERSION = len(_MIGRATIONS)
+BASELINE = baseline.BASELINE_VERSION
+_MIGRATIONS: tuple[str, ...] = ()  # schema changes after the baseline, in order (BASELINE + 1, ...)
+SCHEMA_VERSION = BASELINE + len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 
-_MEETING_COLS = "data, source, external_id"
+_MEETING_COLS = "data, source, external_id, space"
 
 
 def meeting_from_row(row: sqlite3.Row) -> Meeting:
-    """A meeting from its index row: ``source``/``external_id`` come from the COLUMNS, never the JSON
-    (an older gateway may have rewritten ``data`` without them)."""
+    """A meeting from its index row: ``source``/``external_id``/``space`` come from the COLUMNS (fixed
+    at insert), never the JSON."""
     return Meeting.from_dict(meeting_dict_from_row(row))
 
 
@@ -133,6 +106,7 @@ def meeting_dict_from_row(row: sqlite3.Row) -> dict[str, Any]:
     data = json.loads(row["data"])
     data["source"] = row["source"] or SOURCE_DISCORD
     data["external_id"] = row["external_id"]
+    data["space"] = row["space"]
     return data
 
 
@@ -151,9 +125,10 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-class Repository(JobsMixin, DeliveriesMixin):
+class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.retired = baseline.retire_legacy(path)  # a pre-spaces database is backed up, not migrated
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
@@ -164,20 +139,23 @@ class Repository(JobsMixin, DeliveriesMixin):
 
     # -- plumbing -------------------------------------------------------------------------------
     def _migrate(self) -> None:
-        """Apply pending migrations atomically, safe against processes opening the DB at once.
-
-        ``user_version`` is read INSIDE a ``BEGIN IMMEDIATE`` transaction (the write lock), so a
-        second process waits for the first one's COMMIT and then sees the new version instead of
-        re-running ``ALTER TABLE`` ("duplicate column name"). ``executescript`` is not used: it
-        commits any open transaction first.
+        """Create the baseline on an empty database, then apply later migrations — atomically and safe
+        against processes opening the database at once: ``user_version`` is read INSIDE a
+        ``BEGIN IMMEDIATE`` transaction (the write lock), so a second process waits for the first one's
+        COMMIT and sees the new version. ``executescript`` is not used: it commits any open transaction.
         """
         with self._lock:
-            if self.user_version() >= len(_MIGRATIONS):
+            if self.user_version() >= SCHEMA_VERSION:
                 return  # fast path: no write lock taken on an up-to-date database
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 current = self.user_version()
-                for version, script in enumerate(_MIGRATIONS[current:], start=current + 1):
+                if current == 0:
+                    for statement in _statements(_BASELINE):
+                        self._conn.execute(statement)
+                    current = BASELINE
+                    self._conn.execute(f"PRAGMA user_version={BASELINE}")
+                for version, script in enumerate(_MIGRATIONS[current - BASELINE:], start=current + 1):
                     for statement in _statements(script):
                         self._conn.execute(statement)
                     self._conn.execute(f"PRAGMA user_version={int(version)}")
@@ -231,14 +209,17 @@ class Repository(JobsMixin, DeliveriesMixin):
 
     # -- meetings -------------------------------------------------------------------------------
     def save_meeting(self, meeting: Meeting) -> None:
+        if not meeting.space:
+            raise ValueError(f"meeting {meeting.id} has no space")
         self._tx([(
-            "INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at,"
-            " source, external_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,"
+            "INSERT INTO meetings (id, space, guild_id, channel_id, state, started_at, title, folder, data, updated_at,"
+            " source, external_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,"
             " title=excluded.title, folder=excluded.folder, updated_at=excluded.updated_at,"
-            # source/external_id are fixed at insert: a stale copy (older code, old in-memory
-            # object) can never turn an import into a Discord meeting; the JSON follows the columns.
-            " data=json_set(excluded.data, '$.source', meetings.source, '$.external_id', meetings.external_id)",
-            (meeting.id, meeting.guild_id, meeting.channel_id, meeting.state.value,
+            # space/source/external_id are fixed at insert: a stale in-memory copy can never move a
+            # meeting to another space or turn an import into a Discord meeting.
+            " data=json_set(excluded.data, '$.source', meetings.source, '$.external_id', meetings.external_id,"
+            " '$.space', meetings.space)",
+            (meeting.id, meeting.space, meeting.guild_id, meeting.channel_id, meeting.state.value,
              meeting.started_at.isoformat(), meeting.title, meeting.folder,
              json.dumps(meeting.to_dict(), ensure_ascii=False), time.time(), meeting.source, meeting.external_id),
         )] + [(
@@ -250,18 +231,18 @@ class Repository(JobsMixin, DeliveriesMixin):
     def create_imported_meeting(self, meeting: Meeting, utterances: Sequence[Utterance]) -> bool:
         """Insert an imported meeting (row + speakers + utterances) in ONE transaction.
 
-        ``False`` when ``(source, external_id)`` already exists — another process or an earlier run
-        imported it — and nothing is written. A crash can never leave a row without its transcript.
+        ``False`` when ``(space, source, external_id)`` already exists — another process or an earlier
+        run imported it — and nothing is written. A crash can never leave a row without its transcript.
         """
-        if not meeting.external_id:
-            raise ValueError("imported meetings need an external_id")
+        if not meeting.external_id or not meeting.space:
+            raise ValueError("imported meetings need an external_id and a space")
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 cur = self._conn.execute(
-                    "INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data, updated_at,"
-                    " source, external_id) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
-                    (meeting.id, meeting.guild_id, meeting.channel_id, meeting.state.value,
+                    "INSERT INTO meetings (id, space, guild_id, channel_id, state, started_at, title, folder, data,"
+                    " updated_at, source, external_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                    (meeting.id, meeting.space, meeting.guild_id, meeting.channel_id, meeting.state.value,
                      meeting.started_at.isoformat(), meeting.title, meeting.folder,
                      json.dumps(meeting.to_dict(), ensure_ascii=False), time.time(), meeting.source,
                      meeting.external_id))
@@ -283,13 +264,14 @@ class Repository(JobsMixin, DeliveriesMixin):
                 self._conn.execute("ROLLBACK")
                 raise
 
-    def find_by_external(self, source: str, external_id: str) -> Optional[Meeting]:
-        row = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE source=? AND external_id=?",
-                      (source, external_id)).fetchone()
+    def find_by_external(self, space: str, source: str, external_id: str) -> Optional[Meeting]:
+        row = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE space=? AND source=? AND external_id=?",
+                      (space, source, external_id)).fetchone()
         return meeting_from_row(row) if row else None
 
-    def known_external_ids(self, source: str) -> set[str]:
-        rows = self._x("SELECT external_id FROM meetings WHERE source=? AND external_id IS NOT NULL", (source,))
+    def known_external_ids(self, space: str, source: str) -> set[str]:
+        rows = self._x("SELECT external_id FROM meetings WHERE space=? AND source=? AND external_id IS NOT NULL",
+                       (space, source))
         return {r["external_id"] for r in rows.fetchall()}
 
     # -- key/value status & named leases (DESIGN §17) -------------------------------------------
@@ -328,16 +310,20 @@ class Repository(JobsMixin, DeliveriesMixin):
         row = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE id=?", (meeting_id,)).fetchone()
         return meeting_from_row(row) if row else None
 
-    def find_meeting(self, id_or_prefix: str) -> Optional[Meeting]:
-        """Exact id, else a *unique* prefix match (users type the first few chars)."""
+    def find_meeting(self, id_or_prefix: str, space: Optional[str] = None) -> Optional[Meeting]:
+        """Exact id, else a *unique* prefix match (users type the first few chars); with ``space``, only
+        that space's meetings are candidates."""
         needle = (id_or_prefix or "").strip().lower()
         if not needle:
             return None
         exact = self.get_meeting(needle)
-        if exact:
+        if exact and (space is None or exact.space == space):
             return exact
-        rows = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE id LIKE ? ESCAPE '\\' LIMIT 2",
-                       (needle.replace("%", "\\%").replace("_", "\\_") + "%",)).fetchall()
+        where, params = ("id LIKE ? ESCAPE '\\'", [needle.replace("%", "\\%").replace("_", "\\_") + "%"])
+        if space is not None:
+            where += " AND space=?"
+            params.append(space)
+        rows = self._x(f"SELECT {_MEETING_COLS} FROM meetings WHERE {where} LIMIT 2", params).fetchall()
         return meeting_from_row(rows[0]) if len(rows) == 1 else None
 
     def meetings_without_job(self, states: Iterable[MeetingState], *, updated_before: float) -> list[str]:
@@ -350,14 +336,26 @@ class Repository(JobsMixin, DeliveriesMixin):
                        (*wanted, float(updated_before))).fetchall()
         return [r["id"] for r in rows]
 
-    def list_meetings(self, limit: int = 20, states: Optional[Iterable[MeetingState]] = None) -> list[Meeting]:
+    def list_meetings(self, limit: int = 20, states: Optional[Iterable[MeetingState]] = None, *,
+                      space: Optional[str] = None) -> list[Meeting]:
+        """Newest first; ``space=None`` lists every space (only the pipeline's own recovery does that)."""
         wanted = [s.value for s in states] if states is not None else None
         if wanted is not None and not wanted:
             return []
-        where = f"WHERE state IN ({','.join('?' * len(wanted))})" if wanted else ""
+        clauses, params = [], []
+        if wanted:
+            clauses.append(f"state IN ({','.join('?' * len(wanted))})")
+            params += wanted
+        if space is not None:
+            clauses.append("space=?")
+            params.append(space)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._x(f"SELECT {_MEETING_COLS} FROM meetings {where} ORDER BY started_at DESC LIMIT ?",
-                       (*(wanted or ()), int(limit))).fetchall()
+                       (*params, int(limit))).fetchall()
         return [meeting_from_row(r) for r in rows]
+
+    def space_meeting_count(self, space: str) -> int:
+        return int(self._x("SELECT COUNT(*) FROM meetings WHERE space=?", (space,)).fetchone()[0])
 
     def set_capture_owner(self, meeting_id: str, owner: Optional[str]) -> None:
         """The process whose capture writes this recording (only it — or a successor after it died —
@@ -391,8 +389,8 @@ class Repository(JobsMixin, DeliveriesMixin):
                 self._conn.execute("ROLLBACK")
                 raise
 
-    def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        """AND of the query's words; each word is quoted so FTS syntax in user input is inert."""
+    def search(self, query: str, space: str, limit: int = 10) -> list[dict[str, Any]]:
+        """AND of the query's words within ``space``; each word is quoted so FTS syntax is inert."""
         words = _WORD_RE.findall(query or "")
         if not words:
             return []
@@ -400,8 +398,8 @@ class Repository(JobsMixin, DeliveriesMixin):
         rows = self._x(
             "SELECT u.meeting_id, u.t0, u.t1, u.speaker_id, u.speaker, u.text, m.title, m.started_at"
             " FROM utterances_fts f JOIN utterances u ON u.id = f.rowid JOIN meetings m ON m.id = u.meeting_id"
-            " WHERE utterances_fts MATCH ? ORDER BY bm25(utterances_fts), m.started_at DESC LIMIT ?",
-            (match, int(limit))).fetchall()
+            " WHERE utterances_fts MATCH ? AND m.space=? ORDER BY bm25(utterances_fts), m.started_at DESC LIMIT ?",
+            (match, space, int(limit))).fetchall()
         return [dict(r) for r in rows]
 
     def utterance_count(self, meeting_id: str) -> int:
@@ -453,40 +451,42 @@ class Repository(JobsMixin, DeliveriesMixin):
     def set_action_status(self, meeting_id: str, item_id: str, status: ActionStatus) -> None:
         self._x("UPDATE action_items SET status=? WHERE meeting_id=? AND id=?", (status.value, meeting_id, item_id))
 
-    # -- people links & learned projects --------------------------------------------------------
-    def set_link(self, discord_user_id: str, *, linear_user_id: Optional[str] = None,
+    # -- people links & learned projects (per space) -------------------------------------------
+    def set_link(self, space: str, discord_user_id: str, *, linear_user_id: Optional[str] = None,
                  email: Optional[str] = None, name: Optional[str] = None) -> None:
-        self._x("INSERT INTO links (discord_user_id, linear_user_id, email, name, updated_at) VALUES (?,?,?,?,?)"
-                " ON CONFLICT(discord_user_id) DO UPDATE SET"
+        self._x("INSERT INTO links (space, discord_user_id, linear_user_id, email, name, updated_at)"
+                " VALUES (?,?,?,?,?,?) ON CONFLICT(space, discord_user_id) DO UPDATE SET"
                 " linear_user_id=COALESCE(excluded.linear_user_id, linear_user_id),"
                 " email=COALESCE(excluded.email, email), name=COALESCE(excluded.name, name),"
-                " updated_at=excluded.updated_at", (discord_user_id, linear_user_id, email, name, time.time()))
+                " updated_at=excluded.updated_at", (space, discord_user_id, linear_user_id, email, name, time.time()))
 
-    def get_link(self, discord_user_id: str) -> Optional[dict[str, Any]]:
-        row = self._x("SELECT * FROM links WHERE discord_user_id=?", (discord_user_id,)).fetchone()
+    def get_link(self, space: str, discord_user_id: str) -> Optional[dict[str, Any]]:
+        row = self._x("SELECT * FROM links WHERE space=? AND discord_user_id=?", (space, discord_user_id)).fetchone()
         return dict(row) if row else None
 
-    def learn_channel_project(self, channel_id: str, project_key: str, project_name: str) -> None:
-        self._x("INSERT INTO channel_projects (channel_id, project_key, project_name, updated_at) VALUES (?,?,?,?)"
-                " ON CONFLICT(channel_id) DO UPDATE SET project_key=excluded.project_key,"
+    def learn_channel_project(self, space: str, channel_id: str, project_key: str, project_name: str) -> None:
+        self._x("INSERT INTO channel_projects (space, channel_id, project_key, project_name, updated_at)"
+                " VALUES (?,?,?,?,?) ON CONFLICT(space, channel_id) DO UPDATE SET project_key=excluded.project_key,"
                 " project_name=excluded.project_name, updated_at=excluded.updated_at",
-                (channel_id, project_key, project_name, time.time()))
+                (space, channel_id, project_key, project_name, time.time()))
 
-    def channel_project(self, channel_id: str) -> Optional[dict[str, str]]:
-        row = self._x("SELECT project_key, project_name FROM channel_projects WHERE channel_id=?",
-                      (channel_id,)).fetchone()
+    def channel_project(self, space: str, channel_id: str) -> Optional[dict[str, str]]:
+        row = self._x("SELECT project_key, project_name FROM channel_projects WHERE space=? AND channel_id=?",
+                      (space, channel_id)).fetchone()
         return dict(row) if row else None
 
-    def learn_project_channel(self, project: str, channel_id: str) -> None:
-        """Remember where tasks of ``project`` (folded name) belong (a 📁 move)."""
-        self._x("INSERT INTO project_channels (project, channel_id, updated_at) VALUES (?,?,?)"
-                " ON CONFLICT(project) DO UPDATE SET channel_id=excluded.channel_id, updated_at=excluded.updated_at",
-                (fold(project), str(channel_id), time.time()))
+    def learn_project_channel(self, space: str, project: str, channel_id: str) -> None:
+        """Remember where tasks of ``project`` (folded name) belong in ``space`` (a 📁 move)."""
+        self._x("INSERT INTO project_channels (space, project, channel_id, updated_at) VALUES (?,?,?,?)"
+                " ON CONFLICT(space, project) DO UPDATE SET channel_id=excluded.channel_id,"
+                " updated_at=excluded.updated_at", (space, fold(project), str(channel_id), time.time()))
 
-    def project_channel(self, project: str) -> Optional[str]:
-        row = self._x("SELECT channel_id FROM project_channels WHERE project=?", (fold(project),)).fetchone()
+    def project_channel(self, space: str, project: str) -> Optional[str]:
+        row = self._x("SELECT channel_id FROM project_channels WHERE space=? AND project=?",
+                      (space, fold(project))).fetchone()
         return str(row["channel_id"]) if row else None
 
-    def all_channel_projects(self) -> list[dict[str, str]]:
-        rows = self._x("SELECT channel_id, project_key, project_name FROM channel_projects ORDER BY channel_id")
+    def all_channel_projects(self, space: str) -> list[dict[str, str]]:
+        rows = self._x("SELECT channel_id, project_key, project_name FROM channel_projects WHERE space=?"
+                       " ORDER BY channel_id", (space,))
         return [dict(r) for r in rows.fetchall()]

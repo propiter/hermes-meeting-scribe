@@ -291,6 +291,8 @@ class Meeting:
     # name); ``(source, external_id)`` is unique so an import can never be processed twice.
     source: str = SOURCE_DISCORD
     external_id: Optional[str] = None
+    # The space (team/client) the meeting belongs to (DESIGN §23): fixed at creation, never crosses.
+    space: str = ""
 
     def __post_init__(self) -> None:
         for name in ("started_at", "ended_at"):

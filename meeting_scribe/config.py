@@ -45,6 +45,9 @@ class Opt:
     # ``discord_channel``: a text channel id, ``<#id>`` (unwrapped) or a channel NAME resolved at runtime
     # against the server; ``discord_guild``: a server id or name.
     format: str = ""
+    # ``space``: a space may override the global value (DESIGN §23); ``global``: one value for the
+    # whole install (the machine: models, worker counts, ffmpeg, the shared bot's commands).
+    scope: str = "space"
 
     @property
     def yaml_type(self) -> str:
@@ -74,21 +77,21 @@ SPEC: dict[str, Opt] = {
     "autojoin_ignore_channels": Opt("list", (), "capture"),
     "autoleave_grace_seconds": Opt("int", 60, "capture", minimum=0),
     "limits_max_duration_minutes": Opt("int", 240, "capture", minimum=1),
-    "audio_bitrate_kbps": Opt("int", 48, "capture", minimum=8, maximum=256),
-    "audio_ffmpeg_path": Opt("str", "", "capture"),
+    "audio_bitrate_kbps": Opt("int", 48, "capture", minimum=8, maximum=256, scope="global"),
+    "audio_ffmpeg_path": Opt("str", "", "capture", scope="global"),
     # transcription
-    "transcribe_model": Opt("str", "medium", "transcription"),
-    "transcribe_device": Opt("str", "auto", "transcription", choices=("auto", "cpu", "cuda")),
+    "transcribe_model": Opt("str", "medium", "transcription", scope="global"),
+    "transcribe_device": Opt("str", "auto", "transcription", choices=("auto", "cpu", "cuda"), scope="global"),
     "transcribe_compute_type": Opt("str", "auto", "transcription",
-                                   choices=("auto", "int8", "int8_float16", "float16", "float32")),
-    "transcribe_cpu_threads": Opt("int", 0, "transcription", minimum=0),
+                                   choices=("auto", "int8", "int8_float16", "float16", "float32"), scope="global"),
+    "transcribe_cpu_threads": Opt("int", 0, "transcription", minimum=0, scope="global"),
     "transcribe_language": Opt("str", "auto", "transcription"),
-    "transcribe_beam_size": Opt("int", 5, "transcription", minimum=1, maximum=10),
+    "transcribe_beam_size": Opt("int", 5, "transcription", minimum=1, maximum=10, scope="global"),
     # analysis
     "analysis_language": Opt("str", "auto", "analysis"),
-    "analysis_chunk_chars": Opt("int", 12000, "analysis", minimum=2000),
-    "analysis_timeout_seconds": Opt("int", 600, "analysis", minimum=30, maximum=7200),
-    "analysis_max_tokens": Opt("int", 8192, "analysis", minimum=256, maximum=200000),
+    "analysis_chunk_chars": Opt("int", 12000, "analysis", minimum=2000, scope="global"),
+    "analysis_timeout_seconds": Opt("int", 600, "analysis", minimum=30, maximum=7200, scope="global"),
+    "analysis_max_tokens": Opt("int", 8192, "analysis", minimum=256, maximum=200000, scope="global"),
     # delivery
     "delivery_discord_enabled": Opt("bool", True, "delivery"),
     "delivery_discord_guild": Opt("str", "", "delivery", format="discord_guild"),
@@ -107,7 +110,7 @@ SPEC: dict[str, Opt] = {
     "channel_name_ignore_prefixes": Opt("list", (), "projects"),
     # google meet
     "google_meet_enabled": Opt("bool", False, "google_meet"),
-    "google_meet_poll_minutes": Opt("int", 5, "google_meet", minimum=2, maximum=1440),
+    "google_meet_poll_minutes": Opt("int", 5, "google_meet", minimum=2, maximum=1440, scope="global"),
     "google_meet_discord_channel": Opt("str", "", "google_meet", format=_CH),
     # integrations
     "owners": Opt("list", (), "integrations"),
@@ -122,12 +125,12 @@ SPEC: dict[str, Opt] = {
     "consent_announce": Opt("bool", True, "privacy"),
     "consent_nickname_prefix": Opt("str", "[REC] ", "privacy"),
     # pipeline
-    "pipeline_max_attempts": Opt("int", 3, "pipeline", minimum=1, maximum=20),
-    "pipeline_workers": Opt("int", 2, "pipeline", minimum=1, maximum=8),
-    "pipeline_max_transcriptions": Opt("int", 1, "pipeline", minimum=1, maximum=8),
+    "pipeline_max_attempts": Opt("int", 3, "pipeline", minimum=1, maximum=20, scope="global"),
+    "pipeline_workers": Opt("int", 2, "pipeline", minimum=1, maximum=8, scope="global"),
+    "pipeline_max_transcriptions": Opt("int", 1, "pipeline", minimum=1, maximum=8, scope="global"),
     # ui
     "ui_language": Opt("str", "en", "ui", choices=("en", "es")),
-    "commands_aliases": Opt("list", ("meet", "rec"), "ui"),
+    "commands_aliases": Opt("list", ("meet", "rec"), "ui", scope="global"),
 }
 CHANNEL_KEYS = tuple(k for k, o in SPEC.items() if o.format == _CH)
 # Pre-0.2 dotted names. ``ctx.set_config("kanban.mode")`` stored NESTED YAML while Hermes' Desktop
@@ -154,6 +157,18 @@ LEGACY_KEYS: dict[str, str] = {
 }
 _BY_LEGACY = {v: k for k, v in LEGACY_KEYS.items()}
 _MISSING = object()
+
+
+def raw_value(getter: Getter, key: str, space: str = "",
+              overrides: Mapping[str, Any] = {}) -> tuple[Any, str]:  # noqa: B006 - read only
+    """``(stored value or _MISSING, where it came from)``: the space's override first, then the global
+    value (flat, else its pre-0.2 dotted spelling)."""
+    if SPEC[key].scope == "space" and overrides.get(key) is not None:
+        return overrides[key], f"space {space}: {key}"
+    raw = getter(key, _MISSING)
+    if raw is _MISSING and key in LEGACY_KEYS:
+        raw = getter(LEGACY_KEYS[key], _MISSING)  # value saved by a pre-0.2 version (nested)
+    return raw, key
 
 
 def canonical_key(key: str) -> str:
@@ -293,23 +308,24 @@ class Settings:
     ui_language: str
     consent_announce: bool
     consent_nickname_prefix: str
+    space: str = ""  # the space these values were resolved for ("" = the global defaults)
     warnings: tuple[str, ...] = field(default=(), compare=False)
 
     @classmethod
-    def load(cls, getter: Getter) -> "Settings":
+    def load(cls, getter: Getter, space: str = "", overrides: Optional[Mapping[str, Any]] = None) -> "Settings":
+        """Global values (``getter``), with ``space``'s ``overrides`` on top for the keys a space may
+        override (DESIGN §23)."""
         values: dict[str, Any] = {}
         warnings: list[str] = []
         for key, opt in SPEC.items():
-            raw = getter(key, _MISSING)
-            if raw is _MISSING and key in LEGACY_KEYS:
-                raw = getter(LEGACY_KEYS[key], _MISSING)  # value saved by a pre-0.2 version (nested)
+            raw, where = raw_value(getter, key, space, overrides or {})
             try:
                 values[key] = opt.default if raw is None or raw is _MISSING else _coerce(opt, raw)
-            except (ValueError, TypeError) as exc:
-                warnings.append(f"{key}=invalid; using {opt.yaml_default!r}")
+            except (ValueError, TypeError):
+                warnings.append(f"{where}=invalid; using {opt.yaml_default!r}")
                 values[key] = opt.default
         values["commands_aliases"] = _normalize_aliases(values["commands_aliases"])
-        return cls(**values, warnings=tuple(warnings))
+        return cls(**values, space=space, warnings=tuple(warnings))
 
     @classmethod
     def defaults(cls) -> "Settings":
@@ -372,7 +388,7 @@ def schema_for_manifest() -> dict[str, dict[str, Any]]:
 def _field(key: str, opt: Opt, lang: str) -> dict[str, Any]:
     entry: dict[str, Any] = {"key": key, "type": opt.kind, "group": opt.group, "label": opt.label(key, lang),
                              "help": opt.help(key, lang), "default": opt.yaml_default, "storage": "plugin",
-                             "path": f"plugins.entries.meeting-scribe.settings.{key}"}
+                             "scope": opt.scope, "path": f"plugins.entries.meeting-scribe.settings.{key}"}
     for name in ("choices", "minimum", "maximum", "format"):
         value = getattr(opt, name)
         if value not in ((), None, ""):
@@ -397,10 +413,16 @@ def config_schema(lang: str = "en") -> dict[str, Any]:
             "groups": [{"key": g, "label": t(f"cfg.group.{g}", lang)} for g in GROUPS], "fields": fields_}
 
 
-def settings_from_mapping(values: Mapping[str, Any]) -> Settings:
+def settings_from_mapping(values: Mapping[str, Any], space: str = "",
+                          overrides: Optional[Mapping[str, Any]] = None) -> Settings:
     """Convenience for tests/CLI: load from a mapping of canonical (or legacy dotted) keys."""
     flat = {_BY_LEGACY.get(k, k): v for k, v in values.items()}
-    return Settings.load(lambda key, default=None: flat.get(key, default))
+    return Settings.load(lambda key, default=None: flat.get(key, default), space, overrides)
+
+
+def space_keys() -> tuple[str, ...]:
+    """The settings a space may override, in form order."""
+    return tuple(k for k, o in SPEC.items() if o.scope == "space")
 
 
 def validate_value(key: str, raw: Any) -> Any:

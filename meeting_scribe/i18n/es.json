@@ -311,5 +311,6 @@
   "ui.source.hermes": "Proyecto de Hermes",
   "ui.source.kanban": "Tablero Kanban",
   "ui.source.learned": "Usado antes en este canal",
-  "ui.source.linear": "Proyecto de Linear"
+  "ui.source.linear": "Proyecto de Linear",
+  "space.first_name": "Principal"
 }
