@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from ..domain.models import ActionItem, ActionStatus, Meeting, is_discord_user_id
 from ..i18n import t
@@ -84,12 +84,19 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:max(0, limit - 1)].rstrip() + "…"
 
 
-def _who(item: ActionItem, lang: str) -> str:
+def _who(item: ActionItem, lang: str, mention: bool = True) -> str:
+    """The assignee: a mention, or — for an imported speaker or someone who cannot see the channel
+    (``mention=False``, DESIGN §19.4) — their name as inert text."""
     if not item.owner_speaker_id:
         return f"_{t('notes.unassigned', lang)}_"
-    if not is_discord_user_id(item.owner_speaker_id):  # imported speaker (Google Meet): no mention
+    if not is_discord_user_id(item.owner_speaker_id) or not mention:
         return f"**{safe_name(item.owner_name or item.owner_speaker_id)}**"
     return f"<@{item.owner_speaker_id}>" + (f" ({safe_name(item.owner_name)})" if item.owner_name else "")
+
+
+def _pings(item: ActionItem, mention: bool) -> tuple[str, ...]:
+    """Who a NEW task message notifies: its assignee, when shown as a mention; nobody else."""
+    return (str(item.owner_speaker_id),) if mention and is_discord_user_id(item.owner_speaker_id) else ()
 
 
 def _result(view: TaskView, lang: str) -> list[str]:
@@ -103,13 +110,13 @@ def _result(view: TaskView, lang: str) -> list[str]:
     return out
 
 
-def task_text(meeting: Meeting, view: TaskView, lang: str, *, meeting_ref: bool = True) -> str:
+def task_text(meeting: Meeting, view: TaskView, lang: str, *, meeting_ref: bool = True, mention: bool = True) -> str:
     item = view.item
     title = f"~~{item.title}~~" if item.status is ActionStatus.DISMISSED else f"**{item.title}**"
     extra = ([f"📅 {item.due}"] if item.due else []) + ([f"[{fmt_ts(item.t0)}]"] if item.t0 is not None else [])
     lines = [f"{_ICON[item.status]} {title}" + (f" — {' · '.join(extra)}" if extra else "")]
     project = view.route.project or t("tasks.no_project", lang)
-    lines.append(f"👤 {_who(item, lang)} · 📁 {project}")
+    lines.append(f"👤 {_who(item, lang, mention)} · 📁 {project}")
     if view.route.uncertain and item.status not in _FINISHED:
         lines.append(f"⚠️ {t('tasks.uncertain', lang)}")
     if item.description and item.description != item.title:
@@ -137,18 +144,20 @@ def task_buttons(meeting: Meeting, view: TaskView, o: RenderOptions) -> tuple[Bu
     return tuple(out)
 
 
-def render_task(meeting: Meeting, view: TaskView, o: RenderOptions) -> MessageSpec:
+def render_task(meeting: Meeting, view: TaskView, o: RenderOptions, *, mention: bool = True) -> MessageSpec:
+    """``mention``: the assignee can see where this message goes (see ``mentions.may_mention``)."""
     if view.sharing is not None:
-        return render_private_task(meeting, view, o)
-    return MessageSpec(_clip(task_text(meeting, view, o.lang), MESSAGE_LIMIT), task_buttons(meeting, view, o))
+        return render_private_task(meeting, view, o, mention=mention)
+    return MessageSpec(_clip(task_text(meeting, view, o.lang, mention=mention), MESSAGE_LIMIT),
+                       task_buttons(meeting, view, o), _pings(view.item, mention))
 
 
 # -- private meetings (DESIGN §19.2) ---------------------------------------------------------------
-def share_lines(view: TaskView, lang: str) -> list[str]:
+def share_lines(view: TaskView, lang: str, mention: bool = True) -> list[str]:
     s = view.sharing
     if s is None:
         return []
-    done = ([f"✉️ {t('share.sent_to', lang, user=f'<@{view.item.owner_speaker_id}>')}"] if s.dm else [])
+    done = ([f"✉️ {t('share.sent_to', lang, user=_who(view.item, lang, mention))}"] if s.dm else [])
     done += [f"📣 {t('share.published_in', lang, channel=f'<#{s.channel}>')}"] if s.channel else []
     return done or [f"🔒 {t('share.not_shared', lang)}"]
 
@@ -169,20 +178,21 @@ def share_buttons(meeting: Meeting, view: TaskView, lang: str) -> tuple[ButtonSp
     return tuple(out)
 
 
-def render_private_task(meeting: Meeting, view: TaskView, o: RenderOptions) -> MessageSpec:
+def render_private_task(meeting: Meeting, view: TaskView, o: RenderOptions, *, mention: bool = True) -> MessageSpec:
     """The task in the private channel: its full text, where it was shared, and its buttons (the usual
     ones on the first row, the share ones on the second)."""
-    text = "\n".join([task_text(meeting, view, o.lang), *share_lines(view, o.lang)])
-    return MessageSpec(_clip(text, MESSAGE_LIMIT), task_buttons(meeting, view, o) + share_buttons(meeting, view, o.lang))
+    text = "\n".join([task_text(meeting, view, o.lang, mention=mention), *share_lines(view, o.lang, mention)])
+    return MessageSpec(_clip(text, MESSAGE_LIMIT), task_buttons(meeting, view, o) + share_buttons(meeting, view, o.lang),
+                       _pings(view.item, mention))
 
 
-def shared_task_text(meeting: Meeting, view: TaskView, lang: str) -> str:
+def shared_task_text(meeting: Meeting, view: TaskView, lang: str, mention: bool = True) -> str:
     """What leaves a private meeting: the task only — title, description, assignee, due date, project.
     Never the summary, the quote, the meeting title or a link to the private channel."""
     item = view.item
     title = f"~~{item.title}~~" if item.status is ActionStatus.DISMISSED else f"**{item.title}**"
     lines = [f"{_ICON[item.status]} {title}" + (f" — 📅 {item.due}" if item.due else "")]
-    lines.append(f"👤 {_who(item, lang)}" + (f" · 📁 {view.route.project}" if view.route.project else ""))
+    lines.append(f"👤 {_who(item, lang, mention)}" + (f" · 📁 {view.route.project}" if view.route.project else ""))
     if item.description and item.description != item.title:
         lines.append(_clip(item.description, QUOTE_LIMIT))
     if item.status is ActionStatus.DISMISSED:
@@ -191,9 +201,10 @@ def shared_task_text(meeting: Meeting, view: TaskView, lang: str) -> str:
     return "\n".join(lines)
 
 
-def render_shared_task(meeting: Meeting, view: TaskView, lang: str) -> MessageSpec:
+def render_shared_task(meeting: Meeting, view: TaskView, lang: str, *, mention: bool = True) -> MessageSpec:
     """A shared copy (project channel): text only, no buttons — decisions stay in the private channel."""
-    return MessageSpec(_clip(shared_task_text(meeting, view, lang), MESSAGE_LIMIT))
+    return MessageSpec(_clip(shared_task_text(meeting, view, lang, mention), MESSAGE_LIMIT),
+                       mentions=_pings(view.item, mention))
 
 
 def render_shared_dm(meeting: Meeting, view: TaskView, lang: str) -> MessageSpec:
@@ -224,15 +235,15 @@ def _project_lines(views: Sequence[TaskView], threads: Mapping[Optional[str], st
     return lines
 
 
-def _person_lines(views: Sequence[TaskView], lang: str) -> list[str]:
+def _person_lines(views: Sequence[TaskView], lang: str, shown: Callable[[str], bool]) -> list[str]:
     people: dict[Optional[str], int] = {}
     names: dict[str, str] = {}
     for v in views:
         people[v.item.owner_speaker_id or None] = people.get(v.item.owner_speaker_id or None, 0) + 1
         if v.item.owner_speaker_id and v.item.owner_name:
             names.setdefault(v.item.owner_speaker_id, v.item.owner_name)
-    lines = [f"- <@{uid}> — {n}" if is_discord_user_id(uid) else f"- **{safe_name(names.get(uid, uid))}** — {n}"
-             for uid, n in people.items() if uid]
+    lines = [f"- <@{uid}> — {n}" if is_discord_user_id(uid) and shown(uid)
+             else f"- **{safe_name(names.get(uid, uid))}** — {n}" for uid, n in people.items() if uid]
     if None in people:
         lines.append(f"- {t('notes.unassigned', lang)} — {people[None]}")
     return lines
@@ -251,18 +262,22 @@ def _shareable(view: TaskView) -> bool:
 
 
 def render_index(meeting: Meeting, views: Sequence[TaskView], threads: Mapping[Optional[str], str],
-                 dm_failed: Sequence[str], o: RenderOptions, *, private: bool = False) -> MessageSpec:
+                 dm_failed: Sequence[str], o: RenderOptions, *, private: bool = False,
+                 shown: Callable[[str], bool] = lambda uid: True) -> MessageSpec:
+    """``shown(uid)``: that person can see the channel (``mentions.may_mention``) — shown as a mention,
+    otherwise by name. The index notifies nobody (each task message pings its own assignee)."""
     lang = o.lang
     lines = [f"## 📋 {t('tasks.index_title', lang)} · {len(views)}"]
     if private:
         lines += _private_lines(views, lang)
     if views:
         lines += [f"**{t('tasks.by_project', lang)}**", *_project_lines(views, threads, lang),
-                  f"**{t('tasks.by_person', lang)}**", *_person_lines(views, lang)]
+                  f"**{t('tasks.by_person', lang)}**", *_person_lines(views, lang, shown)]
     else:
         lines.append(t("notes.none", lang))
     if dm_failed:
-        lines.append(f"✉️ {t('tasks.dm_failed', lang, users=', '.join(f'<@{u}>' for u in dm_failed))}")
+        who = ", ".join(f"<@{u}>" if shown(u) else f"`{u}`" for u in dm_failed)
+        lines.append(f"✉️ {t('tasks.dm_failed', lang, users=who)}")
     buttons = (ButtonSpec(t("ui.btn_my_tasks", lang), custom_id("mine", meeting.id, "all"), "primary", 0, "📋"),)
     if private and any(_shareable(v) for v in views):
         buttons += (ButtonSpec(t("ui.btn_share_all", lang), custom_id("sha", meeting.id, "all"), "secondary", 0, "📤"),)

@@ -126,6 +126,8 @@ async def test_each_private_task_has_share_buttons_where_they_apply(env):
 
 
 async def test_share_with_assignee_sends_only_the_task_and_is_idempotent(env):
+    env.bot.guild.add_member(11)
+    env.bot.channels[700].viewers = {11}  # Luis can see the private channel: shown as a mention
     sink, _ = await deliver(env)
     assert await sink.share(env.meeting.id, "a1", "dm") == "dm"
     [dm] = env.bot.users[11].dm.ordered()
@@ -274,3 +276,36 @@ async def test_private_rule_has_no_fallback_and_reports_the_rule(env):
     await deliver(env)
     [row] = json.loads(env.svc.repo.kv_get("discord.routes_report.main"))
     assert row["origin"] == "Leadership" and row["status"] == "ok" and row["private"] and row["public"] is False
+
+
+# -- who a message may notify (DESIGN §19.4) ------------------------------------------------------------------
+async def test_a_task_in_a_private_channel_names_an_assignee_who_cannot_see_it(env):
+    env.bot.guild.add_member(10)
+    env.bot.guild.add_member(11)
+    env.private.viewers = {11}  # Ana (10) cannot open the private channel
+    await deliver(env)
+    ana, luis = task_msg(env, "Contract review"), task_msg(env, "Landing page")
+    assert "<@10>" not in ana.content and "**Ana**" in ana.content
+    assert ana.sent_kwargs["allowed_mentions"]["users"] == ()
+    assert "<@11>" in luis.content and luis.sent_kwargs["allowed_mentions"]["users"] == ("11",)
+    assert all("<@10>" not in m.content for m in inside(env))
+
+
+async def test_an_assignee_the_bot_cannot_check_is_named_in_a_private_channel(env):
+    env.private.viewers = {10, 11}  # neither is a cached member
+    await deliver(env)
+    msg = task_msg(env, "Landing page")
+    assert "<@11>" not in msg.content and msg.sent_kwargs["allowed_mentions"]["users"] == ()
+
+
+async def test_model_text_never_notifies_anyone(env):
+    env.cfg["meeting_routes"] = []
+    env.notes = replace(env.notes, tldr="Ask <@66> and <@&77> today", decisions=("Ping <@66> about it",),
+                        action_items=tuple(replace(i, title=f"{i.title} <@66>") if i.id == "a1" else i
+                                           for i in ITEMS))
+    await deliver(env)
+    sent = [m for c in env.bot.channels.values() for m in c.ordered()]
+    assert any("<@66>" in m.content for m in sent)  # shown as written…
+    for m in sent:  # …but never allowed to ping 66 (or any role / @everyone)
+        rule = m.sent_kwargs.get("allowed_mentions")
+        assert rule is not None and "66" not in rule["users"] and rule["roles"] is False and rule["everyone"] is False

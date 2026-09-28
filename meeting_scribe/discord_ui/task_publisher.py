@@ -45,7 +45,7 @@ from .destination import (MAX_FORUM_TAGS, Destination, DestinationPending, chann
 from .guild import snapshot_channels
 from .private_share import sync_copies, with_sharing, withdraw_public
 from .publisher import Messages, Pointers, ViewFactory, is_missing
-from .mentions import participants_line
+from .mentions import may_mention, participants_line
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
 from .transcript_file import SUFFIX as TRANSCRIPT_SUFFIX, mark_legacy, publish_transcript
@@ -436,6 +436,17 @@ class TaskPublisher:
             return None
 
     # -- tasks ----------------------------------------------------------------------------------
+    @staticmethod
+    def shown(channel: Any, private: bool) -> Callable[[str], bool]:
+        """Who a message in ``channel`` may show as a mention (DESIGN §19.4): a Discord member who can
+        view it; anyone else is named."""
+        return lambda uid: is_discord_user_id(uid) and may_mention(channel, uid, private=private)
+
+    def _task_spec(self, meeting: Meeting, view: TaskView, channel: Any) -> Any:
+        owner = str(view.item.owner_speaker_id or "")
+        return render_task(meeting, view, self.o,
+                           mention=self.shown(channel, view.sharing is not None)(owner))
+
     async def place_task(self, meeting: Meeting, view: TaskView, target: Any, ptrs: Pointers) -> dict:
         suffix = f"task:{view.item.id}"
         ptr = await ptrs.load(suffix)
@@ -444,7 +455,7 @@ class TaskPublisher:
         notice = (t("share.moved_private", self.o.lang) if private else
                   t("tasks.moved_notice", self.o.lang, title=view.item.title,
                     channel=f"<#{view.route.channel_id or target.id}>"))
-        placed = await self.msgs.edit_or_send(ptr, target, spec=render_task(meeting, view, self.o),
+        placed = await self.msgs.edit_or_send(ptr, target, spec=self._task_spec(meeting, view, target),
                                               moved_notice=notice)
         new = {**placed, "target": self.task_target(view, private)}
         await ptrs.save(suffix, new, placed.get("url", ""))
@@ -456,7 +467,7 @@ class TaskPublisher:
             return False  # never posted or it must move: the caller re-publishes
         try:
             channel = await self.msgs.channel(ptr["channel"])
-            await self.msgs.edit(channel, ptr["message"], spec=render_task(meeting, view, self.o))
+            await self.msgs.edit(channel, ptr["message"], spec=self._task_spec(meeting, view, channel))
             return True
         except Exception as exc:
             if not is_missing(exc):
@@ -497,7 +508,8 @@ class TaskPublisher:
 
     # -- index ----------------------------------------------------------------------------------
     async def index(self, board: Board, chat: Any, threads: dict, dm_failed: Sequence[str], ptrs: Pointers) -> None:
-        spec = render_index(board.meeting, board.views, threads, dm_failed, self.o, private=board.private)
+        spec = render_index(board.meeting, board.views, threads, dm_failed, self.o, private=board.private,
+                            shown=self.shown(chat, board.private))
         ptr = await ptrs.load("index")
         placed = await self.msgs.edit_or_send(ptr, chat, spec=spec)
         await ptrs.save("index", {**placed, "threads": {str(k): v for k, v in threads.items()},
@@ -511,7 +523,8 @@ class TaskPublisher:
         chat = await self.msgs.channel(ptr["channel"])
         await self.msgs.edit(chat, ptr["message"], spec=render_index(board.meeting, board.views, threads,
                                                                      ptr.get("dm_failed") or (), self.o,
-                                                                     private=board.private))
+                                                                     private=board.private,
+                                                                     shown=self.shown(chat, board.private)))
 
     async def _drop_stale_tasks(self, board: Board, ptrs: Pointers) -> None:
         """A reprocess that no longer finds a task deletes its message (and its pointer)."""

@@ -123,7 +123,7 @@ async def share_project(pub: "TaskPublisher", board: Board, item_id: str, ptrs: 
         raise ChannelUnavailable(f"channel {s.target} is not reachable ({exc})") from exc
     if not pub._in_server(channel, pub._destination(board.meeting)):
         raise ChannelUnavailable(f"channel {s.target} is not a channel of the meeting's server")
-    spec = render_shared_task(board.meeting, view, pub.o.lang)
+    spec = render_shared_task(board.meeting, view, pub.o.lang, mention=_shown(pub, channel, view))
     ptr = await ptrs.load(COPY + item_id)
     if is_forum(channel):
         new = await _forum_copy(pub, channel, view, spec, ptr, s.target, ptrs)
@@ -202,10 +202,11 @@ async def sync_copies(pub: "TaskPublisher", board: Board, ptrs: Pointers) -> Non
                 await ptrs.drop(prefix + item_id)
                 await ptrs.drop(SHARE + item_id)
                 continue
-            spec = (render_shared_task(board.meeting, view, pub.o.lang) if prefix == COPY
-                    else render_shared_dm(board.meeting, view, pub.o.lang))
             try:
-                await pub.msgs.edit(await pub.msgs.channel(ptr["channel"]), ptr["message"], spec=spec)
+                channel = await pub.msgs.channel(ptr["channel"])
+                spec = (render_shared_task(board.meeting, view, pub.o.lang, mention=_shown(pub, channel, view))
+                        if prefix == COPY else render_shared_dm(board.meeting, view, pub.o.lang))
+                await pub.msgs.edit(channel, ptr["message"], spec=spec)
             except Exception as exc:  # deleted by someone, DM closed: the decision stands, nothing re-posted
                 if not is_missing(exc):
                     raise
@@ -267,3 +268,8 @@ async def withdraw_public(pub: "TaskPublisher", ptrs: Pointers, place: set[str])
                 await w.thread(ptr["thread"])
         await ptrs.drop(f"thread:{suffix}")
     await w.report()
+
+
+def _shown(pub: Any, channel: Any, view: TaskView) -> bool:
+    """The assignee is shown as a mention in a shared copy only if they can view that channel (§19.4)."""
+    return pub.shown(channel, False)(str(view.item.owner_speaker_id or ""))

@@ -7,6 +7,8 @@ sees (a private rule's channel, or any channel @everyone cannot view), only memb
 are mentioned: a member the bot cannot check is named instead (fail closed). The mention pings only
 at the first publication: the message is sent with ``allowed_mentions`` listing exactly those users
 (no @everyone/@here, no roles); every later edit or re-post carries the same text with no pings.
+The same rule (:func:`may_mention`) decides whether a task message shows its assignee as a mention
+(pinged on its first post) or by name.
 """
 from __future__ import annotations
 
@@ -46,6 +48,14 @@ def _everyone_sees(channel: Any) -> bool:
     return bool(getattr(target.permissions_for(role), "view_channel", False))
 
 
+def may_mention(channel: Any, uid: str, *, private: bool) -> bool:
+    """May a message in ``channel`` show (and ping) ``<@uid>``? Only if that member can view it; a member
+    the bot cannot check only in a channel @everyone sees that is not a private meeting's (fail closed:
+    otherwise they are named, never notified into a channel they cannot open)."""
+    seen = _visible(channel, uid)
+    return seen is True or (seen is None and not private and _everyone_sees(channel))
+
+
 def _bot_ids(adapter: Any, channel: Any) -> set[str]:
     client = getattr(adapter, "_client", None)
     ids = {getattr(getattr(client, "user", None), "id", None), getattr(getattr(getattr(channel, "guild", None), "me", None), "id", None)}
@@ -56,17 +66,14 @@ def participants_line(repo: Any, meeting: Meeting, channel: Any, adapter: Any, *
                       lang: str) -> Participants:
     """The line for a NEW notes message in ``channel`` and the users it may ping."""
     bots = _bot_ids(adapter, channel)
-    open_to_all = not private and _everyone_sees(channel)
     mentioned: list[str] = []
     named: list[str] = []
     for uid, name in people(repo, meeting):
         if uid in bots:
             continue
-        if uid and len(mentioned) < MAX_MENTIONS:
-            seen = _visible(channel, uid)
-            if seen is True or (seen is None and open_to_all):
-                mentioned.append(uid)
-                continue
+        if uid and len(mentioned) < MAX_MENTIONS and may_mention(channel, uid, private=private):
+            mentioned.append(uid)
+            continue
         named.append(safe_name(name))
     shown = [f"<@{u}>" for u in mentioned] + [n for n in named[:MAX_MENTIONS] if n]
     if not shown:
