@@ -394,5 +394,15 @@
   "routes.cli_not_checked": "(not checked yet: the channel names are verified once the bot has reported its channels)",
   "routes.cli_added": "Rule added: {rule}",
   "routes.cli_removed": "Rule removed: {rule}",
-  "routes.cli_moved": "Rule moved to position {position}."
+  "routes.cli_moved": "Rule moved to position {position}.",
+  "routes.setup_ask": "Add rules so some meetings go to their own channel, stay private or go only by direct message? [y/N]: ",
+  "routes.setup_spaces": "This installation has several spaces: add rules per space with `hermes meeting-scribe route add --space <id> ...` or in Desktop → Settings → Delivery.",
+  "routes.setup_modes": "Which meetings? 1) a voice channel  2) a category  3) a Google Meet (by code or title). Empty: done.",
+  "routes.setup_kind": "Origin [1/2/3]: ",
+  "routes.setup_origin_voice": "Voice channel (name or id): ",
+  "routes.setup_origin_category": "Category (name or id): ",
+  "routes.setup_origin_meet": "Google Meet code or title (* as wildcard): ",
+  "routes.setup_mode": "Mode: 1) normal  2) private (everything stays in one channel)  3) direct messages only (no channel) [1]: ",
+  "routes.setup_target": "Text channel or forum (name or id): ",
+  "routes.setup_more": "Another rule? [y/N]: "
 }

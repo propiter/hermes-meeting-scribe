@@ -231,3 +231,27 @@ def test_doctor_route_rows_without_catalog_say_not_checked(tmp_path):
     rows = doctor.route_rows(settings_from_mapping({"meeting_routes": ["Leadership = orion"]}), r)
     assert rows[0]["status"] == "not_checked"
     r.close()
+
+
+def test_setup_rules_step_adds_rules_until_done(rt, capsys):
+    from meeting_scribe import cli_routes
+    answers = iter(["s", "1", "Leadership", "2", "board-notes", "s", "3", "retro-*", "3", "n"])
+    assert cli_routes.setup_step(rt, "es", lambda prompt="": next(answers)) == 2
+    assert rt.cfg["meeting_routes"] == ["300=700:private", "meet:retro-*=:dm"]
+    assert "Regla añadida: meet:retro-*=:dm" in capsys.readouterr().out
+
+
+def test_setup_rules_step_is_optional_and_reports_bad_rules(rt, capsys):
+    from meeting_scribe import cli_routes
+    assert cli_routes.setup_step(rt, "en", lambda prompt="": "") == 0
+    answers = iter(["y", "1", "Nowhere", "1", "orion", "n"])
+    assert cli_routes.setup_step(rt, "en", lambda prompt="": next(answers)) == 0
+    assert "no voice channel named 'Nowhere'" in capsys.readouterr().out
+    assert "meeting_routes" not in rt.cfg
+
+
+def test_setup_rules_step_with_several_spaces_points_to_the_space_commands(rt, capsys):
+    from meeting_scribe import cli_routes
+    rt.spaces().create("Second team", "second")
+    assert cli_routes.setup_step(rt, "en", lambda prompt="": "y") == 0
+    assert "route add --space" in capsys.readouterr().out

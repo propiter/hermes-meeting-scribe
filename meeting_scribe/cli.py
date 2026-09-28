@@ -192,6 +192,8 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
         rt.set_config(key, value)
     _print(t("cli.setup_saved", rt.settings().ui_language, count=len(validated)))
     _warn_meet_channel(rt)
+    if not args.non_interactive:  # optional: which meetings go where (DESIGN §19.3)
+        cli_routes.setup_step(rt, rt.settings().ui_language)
     return 0
 
 

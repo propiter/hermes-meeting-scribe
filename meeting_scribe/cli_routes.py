@@ -123,6 +123,47 @@ def _move(args: argparse.Namespace, rt: Any) -> int:
     return 0
 
 
+_YES = ("y", "yes", "s", "si", "sí")
+
+
+def setup_step(rt: Any, lang: str, ask: Any = None) -> int:
+    """The optional rules step of ``setup``: add rules one question at a time; returns how many."""
+    ask = ask or input
+    if ask(t("routes.setup_ask", lang)).strip().lower() not in _YES:
+        return 0
+    spaces = rt.spaces().all()
+    if len(spaces) > 1:  # which space a rule belongs to is a per-space decision: say how
+        _print(t("routes.setup_spaces", lang))
+        return 0
+    space = spaces[0].slug if spaces else ""
+    scope = route_editor.scope_for(rt.spaces(), space) if spaces else "global"
+    catalog = _catalog(rt, space)
+    if not catalog.known:
+        _print(t("routes.cli_not_checked", lang))
+    added = 0
+    while True:
+        _print(t("routes.setup_modes", lang))
+        kind = {"1": "voice", "2": "category", "3": "meet"}.get(ask(t("routes.setup_kind", lang)).strip())
+        if kind is None:
+            return added
+        origin = ask(t(f"routes.setup_origin_{kind}", lang)).strip()
+        mode = {"1": "normal", "2": "private", "3": "dm"}.get(ask(t("routes.setup_mode", lang)).strip() or "1", "")
+        target = "" if mode == "dm" else ask(t("routes.setup_target", lang)).strip()
+        try:
+            built = route_editor.build_entry(kind, origin, target, mode, catalog)
+            entries = route_editor.add(list(rt.settings(space or None).meeting_routes), built.entry)
+        except RuleError as exc:
+            _print(f"! {exc}")
+        else:
+            _write(rt, space, scope, entries)
+            added += 1
+            _print(t("routes.cli_added", lang, rule=built.entry))
+            if built.warning:
+                _print(f"! {built.warning}")
+        if ask(t("routes.setup_more", lang)).strip().lower() not in _YES:
+            return added
+
+
 def dispatch(args: argparse.Namespace, rt: Any) -> int:
     cmd = getattr(args, "route_command", None)
     if cmd is None:
