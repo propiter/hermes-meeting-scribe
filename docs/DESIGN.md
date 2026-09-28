@@ -900,3 +900,63 @@ A worker can no longer claim the job between the "is it running?" check and the 
 **Desktop commands.** `desktop.control.execute_one` already moves a command `queued → running` with a
 conditional `UPDATE`, so only one worker executes it. Its `_reconcile` of dead executors is unchanged.
 
+## 23. Spaces (unreleased)
+
+One installation and one bot serve several teams or clients. A **space** is one of them: its own
+settings (overrides on top of the global ones), Discord servers, meetings, jobs views, owners, person
+links, learned channel/project maps and Google connection. Nothing crosses from one space to another.
+
+**Storage baseline.** Schema `user_version` 100 is the baseline of record. A database written before
+spaces (any version 1–99) is not migrated: under a cross-process file lock it is copied with SQLite's
+backup API into `backup-<UTC>/` together with its `meetings/` folders, and a fresh baseline is
+created. Meetings recorded before spaces were disposable; configuration (Hermes settings) and the
+Google OAuth files are kept. The same lock covers creating a new database, because processes that
+open a new file at once otherwise race on `PRAGMA journal_mode=WAL` (`database is locked`: SQLite's
+busy handler does not cover that pragma). Opening a current WAL database takes no lock.
+
+**Bootstrap.** Every open runs `spaces.bootstrap`. It is idempotent. The first time, it creates `main`
+(named in `ui_language`, marked `adopt_guilds`) and moves the loose files of `<data>/google/` into
+`google/main/` through a staging folder, so the move completes even after a crash. On its first
+Discord connect, `main` adopts the bot's servers once, and only while it is the only space.
+
+**Resolution.**
+- Server → space: `space_guilds.guild_id` is a primary key, so a server belongs to at most one space.
+  With one space, an unowned server joins it automatically (`claim_guild`), which is the behaviour
+  before spaces. With several spaces, an unowned server is never recorded, never shown and never
+  published to.
+- Chat commands take the space of `HERMES_SESSION_SCOPE_ID` (the guild id on Discord). In a DM or on
+  another platform they use the only space; with several spaces they explain that a choice is needed.
+  The space is held in a `ContextVar`, so concurrent commands never see each other's space.
+- Agent tools (`meeting_search`, `meeting_get`) follow the same rule.
+- Capture resolves the space after marking the server as starting (review W7). Auto-join reads the
+  channel's space settings, and the meeting carries its space from creation.
+- Button clicks look up the space of the clicked meeting. Its language and owners apply.
+- Publishing: `resolve(..., allowed_guilds=)` never picks a server or channel id outside the meeting
+  space's servers. The restriction applies only with several spaces; with one space every server of
+  the bot is allowed, as before. With several spaces, a channel id that is not cached cannot be
+  checked, so it is refused.
+- Per-space settings reach the sinks, the transcriber (`transcribe_language`), the analyzer, render
+  options, the channel catalog (ignored prefixes) and the Meet pollers. Machine-wide keys
+  (`pipeline_*`, `audio_bitrate_kbps`, `audio_ffmpeg_path`…) cannot be overridden per space.
+- The job queue is shared. `status`, `list_jobs` and `pending_job_count` filter by space.
+  `space=None` is reserved for machine-wide operator views.
+- Google Meet: one importer and one poller per space, with keyed status, per-record memory and lease
+  (`google-meet-poll:<space>`). The worker pulse reconciles pollers at most every
+  `POLLER_RECONCILE_SECONDS` (60 s), so a space created elsewhere gets its poller without a restart
+  and without a database read on every tick.
+
+**Not yet available (next phase — CLI/UI/REST).** With a single space everything works unchanged.
+With several spaces, these surfaces refuse instead of guessing:
+- CLI: there is no `--space` selector. `google connect|status|sync|disconnect` stop with
+  `space.choose_cli`. `hermes meeting-scribe status/list/show/export/reprocess` still read every space,
+  as operator views on the machine. There are no commands to create, rename or delete a space, or to add or remove a
+  server or override. `Spaces.create/rename/delete/add_guild/remove_guild/set_override` exist, but
+  only in code.
+- Chat: there is no way to choose a space from a DM, and no admin command to assign an unowned server.
+- Desktop REST/UI: `/v1/meetings*`, `/v1/status` and commands answer 409 when there are several
+  spaces. The API has no space parameter or space listing, and the page has no selector. Settings
+  edited from the Desktop are always global. `google_status` reports `space_required`.
+- Doctor: the Google check warns instead of checking each space's connection. There is no per-space
+  delivery report (`discord.destination.<source>` is still keyed per source only). Backups made by
+  the baseline are not listed yet.
+
