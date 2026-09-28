@@ -187,17 +187,17 @@ def test_gateway_register_starts_the_pipeline_and_meet_poller(ctx, monkeypatch):
     for mod in [m for m in sys.modules if m.startswith("meeting_scribe.discord_ui")]:
         monkeypatch.delitem(sys.modules, mod)
     rt = plugin.register(ctx, ROOT)
-    assert rt.pipeline_running() and rt.meet_poller_running
-    poller = rt._meet_poller
+    assert rt.pipeline_running() and rt.meet_poller_running("main")  # one poller per space (DESIGN §23)
+    poller = rt._meet_pollers["main"]
     rt.ensure_pipeline()
-    rt.start_meet_poller()
-    assert rt._meet_poller is poller  # no duplicate thread
+    rt.start_meet_pollers()
+    assert rt._meet_pollers["main"] is poller  # no duplicate thread
 
 
 def test_cli_register_starts_nothing(ctx, monkeypatch):
     monkeypatch.setattr(plugin.hermes_adapters, "is_gateway_process", lambda: False)
     rt = plugin.register(ctx, ROOT)
-    assert not rt.pipeline_running() and not rt.meet_poller_running
+    assert not rt.pipeline_running() and not rt.meet_poller_running()
 
 
 def test_aux_task_defaults_do_not_impose_a_provider(ctx):

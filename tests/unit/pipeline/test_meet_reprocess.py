@@ -21,7 +21,7 @@ def _imported(world):
 def test_reprocess_from_transcribe_on_a_meet_meeting_analyzes_instead(world, clock):
     service, runner, analyzer, _s, _m, _i = world
     mid = _imported(world)
-    runner.stages.transcriber = SubprocessTranscriber(lambda: service.settings(), lambda: None)  # would fail
+    runner.stages.transcriber = SubprocessTranscriber(lambda space=None: service.settings(), lambda: None)  # would fail
     assert service.effective_stage(service.require(mid), Stage.TRANSCRIBE) is Stage.ANALYZE
     service.reprocess(mid, Stage.TRANSCRIBE)
     assert service.repo.get_job(mid).stage is Stage.ANALYZE
@@ -55,7 +55,7 @@ def test_command_and_cli_explain_the_mapping(world):
     from meeting_scribe.commands import Caller
     service, runner, _a, _s, _m, _i = world
     mid = _imported(world)
-    cmds = MeetingCommands(lambda: service, lambda: settings_from_mapping({}), capture=lambda: None)
+    cmds = MeetingCommands(lambda: service, lambda space=None: settings_from_mapping({}), capture=lambda: None)
     out = cmds.handle(f"reprocess {mid}", Caller("discord", "1", "1"), "meeting")
     assert "regenerating the notes" in out and "without audio" in out.lower()
 

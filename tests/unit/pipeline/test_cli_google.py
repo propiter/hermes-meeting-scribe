@@ -39,20 +39,23 @@ class GoogleRuntime(FakeRuntime):
                 return jresp(200)
             return self.meet(method, url, headers, body)
         self.google_transport = FakeTransport(handler)
-        self._files = GoogleFiles(lambda: data_dir)
+        self._files = GoogleFiles(lambda: data_dir, "main")
 
-    def google_files(self):
+    def default_space(self):
+        return "main"
+
+    def google_files(self, space=None):
         return self._files
 
-    def google_credentials(self):
+    def google_credentials(self, space=None):
         return GoogleCredentials(self._files, transport=self.google_transport)
 
-    def google_connected_at(self):
+    def google_connected_at(self, space=None):
         v = (self._files.read_token() or {}).get("connected_at")
         return float(v) if v else None
 
-    def meet_importer(self):
-        return MeetImporter(service=self.service, client=lambda: MeetClient(self.google_credentials()),
+    def meet_importer(self, space=None):
+        return MeetImporter(space="main", service=self.service, client=lambda: MeetClient(self.google_credentials()),
                             clock=lambda: NOW)
 
 

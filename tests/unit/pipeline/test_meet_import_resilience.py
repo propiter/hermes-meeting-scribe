@@ -73,7 +73,7 @@ def test_429_aborts_the_pass_and_is_honoured(world):
 
 # -- finding 2: nothing escapes sync, status always recorded -------------------------------------------
 def _creds_with(tmp_path, meet, fail):
-    files = oauth.GoogleFiles(lambda: tmp_path / "d")
+    files = oauth.GoogleFiles(lambda: tmp_path / "d", "main")
     oauth.write_private_json(files.client_path, CLIENT_JSON)
     files.write_token({"access_token": "a", "refresh_token": "r", "expires_at": 0})
 
@@ -91,7 +91,7 @@ def test_transport_error_on_refresh_is_reported_not_raised(world, tmp_path):
     def boom():
         raise TransportError("URLError: timed out")
     creds = _creds_with(tmp_path, meet, boom)
-    imp = MeetImporter(service=lambda: service, client=lambda: MeetClient(creds), clock=lambda: NOW)
+    imp = MeetImporter(space="main", service=lambda: service, client=lambda: MeetClient(creds), clock=lambda: NOW)
     meet.add("r1")
     rep = imp.sync(ended_after=since())
     assert rep.errors and "unreachable" in rep.errors[0]
@@ -124,7 +124,7 @@ def test_unexpected_errors_are_caught_and_status_is_written(world, exc):
 
     def broken_client():
         raise exc
-    imp = MeetImporter(service=lambda: service, client=broken_client, clock=lambda: NOW)
+    imp = MeetImporter(space="main", service=lambda: service, client=broken_client, clock=lambda: NOW)
     rep = imp.sync(ended_after=since())
     assert rep.errors and type(exc).__name__ in rep.errors[0]
     assert imp.status()["last_poll_ok"] == "0"
@@ -159,7 +159,7 @@ def test_poller_skips_while_google_asked_to_wait(world, prepo):
     meet.add("r1")
     meet.status["conferenceRecords"] = 429
     meet.retry_after = "600"
-    p = MeetPoller(importer=lambda: importer, repo=lambda: prepo,
+    p = MeetPoller(space="main", importer=lambda: importer, repo=lambda: prepo,
                    settings=lambda: settings_from_mapping({"google_meet_enabled": True}),
                    connected_at=lambda: (NOW - timedelta(days=1)).timestamp(), owner="x")
     importer.sync(ended_after=since())  # the listing itself got 429: aborts, remembers Retry-After

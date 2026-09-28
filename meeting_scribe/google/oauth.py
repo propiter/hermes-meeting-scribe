@@ -29,11 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Optional
 
-try:  # POSIX: cross-process token lock
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None  # type: ignore[assignment]
-
+from ..filelock import file_lock as _file_lock
 from .http import Response, Transport, TransportError, UrllibTransport
 
 SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly"
@@ -73,59 +69,27 @@ def write_private_json(path: Path, data: Mapping[str, Any]) -> None:
         raise
 
 
-_HELD = threading.local()  # token lock paths this thread already holds (the lock is re-entrant)
-_THREAD_LOCKS: dict[str, threading.Lock] = {}
-_THREAD_LOCKS_GUARD = threading.Lock()
-
-
-@contextlib.contextmanager
-def _file_lock(path: Path) -> Iterator[None]:
-    """Exclusive, re-entrant lock shared by threads AND processes (``fcntl.flock`` on ``path``).
-
-    Where ``fcntl`` is unavailable (Windows) only the in-process lock applies.
-    """
-    key = str(path)
-    held: set[str] = getattr(_HELD, "paths", None) or set()
-    _HELD.paths = held
-    if key in held:
-        yield
-        return
-    with _THREAD_LOCKS_GUARD:
-        tlock = _THREAD_LOCKS.setdefault(key, threading.Lock())
-    with tlock:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(key, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            held.add(key)
-            try:
-                yield
-            finally:
-                held.discard(key)
-                if fcntl is not None:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-
-
 class GoogleFiles:
-    """Paths of the per-profile Google credentials; the root is resolved on every call.
+    """Paths of ONE space's Google credentials; the root is resolved on every call.
 
     Every token write/delete and the credentials' read-refresh-write cycle run under
     :meth:`token_lock` (``token.json.lock``), so a refresh in one process can never undo a
     ``disconnect`` or a new ``connect`` made by another.
     """
 
-    def __init__(self, data_dir: Callable[[], Path]) -> None:
+    def __init__(self, data_dir: Callable[[], Path], space: str) -> None:
+        if not space:
+            raise ValueError("Google credentials belong to a space")
         self._data_dir = data_dir
+        self.space = space
 
     def token_lock(self) -> "contextlib.AbstractContextManager[None]":
         return _file_lock(self.dir / "token.json.lock")
 
     @property
     def dir(self) -> Path:
-        return Path(self._data_dir()) / "google"
+        """``<data>/google/<space>/``: each space has its own OAuth client and token (DESIGN §23)."""
+        return Path(self._data_dir()) / "google" / self.space
 
     @property
     def client_path(self) -> Path:

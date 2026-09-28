@@ -45,7 +45,7 @@ def world():
 
     def make(**over):
         s = settings_from_mapping({**cfg, **over})
-        return AutoJoiner(launcher, lambda: s, clock=clock, poll=0.001)
+        return AutoJoiner(launcher, lambda space=None: s, clock=clock, poll=0.001)
     return SimpleNamespace(guild=guild, ch=ch, ignored=ignored, launcher=launcher, clock=clock, make=make)
 
 

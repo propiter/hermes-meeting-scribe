@@ -205,9 +205,18 @@ class DashboardDoctorEnv:
     def llm_store(self) -> Any:
         return self.aux_store
 
+    def _space(self) -> str:
+        from ..spaces import SpaceAmbiguous
+        from .queries import only_space
+
+        space = only_space(self.repo)
+        if space is None:
+            raise SpaceAmbiguous("several spaces: the Desktop cannot choose one yet")
+        return space
+
     def google_files(self) -> Any:
         from ..google.oauth import GoogleFiles
-        return GoogleFiles(lambda: self.root)
+        return GoogleFiles(lambda: self.root, self._space())
 
     def google_credentials(self) -> Any:
         from ..google.oauth import GoogleCredentials
@@ -223,8 +232,9 @@ class DashboardDoctorEnv:
             dm_notes=lambda: {k[len(KV_DM_NOTES):]: v for k, v in repo.kv_prefix(KV_DM_NOTES).items()})
 
     def meet_importer(self) -> Any:
-        from ..google.importer import KV
+        from ..google.importer import status_kv
 
+        KV = status_kv(self._space())
         return SimpleNamespace(status=lambda: {k[len(KV):]: v for k, v in self.repo.kv_prefix(KV).items()})
 
 

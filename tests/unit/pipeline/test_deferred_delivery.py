@@ -14,7 +14,7 @@ class NotConnectedSink:
         self.connected = False
         self.calls = 0
 
-    def enabled(self):
+    def enabled(self, meeting):
         return True
 
     def deliver(self, meeting, notes, folder):
@@ -47,7 +47,7 @@ def test_a_real_error_next_to_a_deferred_one_still_counts(prepo, layout, setting
     class Broken:
         name = "kanban"
 
-        def enabled(self):
+        def enabled(self, meeting):
             return True
 
         def deliver(self, meeting, notes, folder):
@@ -136,7 +136,7 @@ class CountingSink:
         self.name = name
         self.calls = 0
 
-    def enabled(self):
+    def enabled(self, meeting):
         return True
 
     def deliver(self, meeting, notes, folder):

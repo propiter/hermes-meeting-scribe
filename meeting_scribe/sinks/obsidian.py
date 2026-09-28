@@ -14,14 +14,14 @@ from ..storage.artifacts import atomic_write_text
 class ObsidianSink:
     name = "obsidian"
 
-    def __init__(self, settings: Callable[[], Settings]) -> None:
+    def __init__(self, settings: Callable[[str], Settings]) -> None:
         self._settings = settings
 
-    def enabled(self) -> bool:
-        return bool(self._settings().obsidian_vault_path.strip())
+    def enabled(self, meeting: Meeting) -> bool:
+        return bool(self._settings(meeting.space).obsidian_vault_path.strip())
 
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
-        s = self._settings()
+        s = self._settings(meeting.space)
         vault = Path(s.obsidian_vault_path).expanduser()
         if not vault.is_dir():
             return SinkResult(self.name, False, errors=(f"obsidian vault not found: {vault}",))

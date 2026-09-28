@@ -25,7 +25,7 @@ def apply_move(repo: Any, folder: Path, meeting: Meeting, item_id: str, channel_
     if learn:
         for learned in {item.project, item.project_hint, name}:
             if learned and fold(learned):
-                repo.learn_project_channel(learned, channel_id)
+                repo.learn_project_channel(meeting.space, learned, channel_id)
     moved = replace(item, project=name, project_key=f"discord:{channel_id}", project_confidence=1.0)
     repo.set_item_override(meeting.id, item_id, project=name, project_key=moved.project_key)
     repo.update_action_item(meeting.id, moved)

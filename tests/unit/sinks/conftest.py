@@ -14,4 +14,4 @@ def repo(tmp_path, meeting):
 
 @pytest.fixture
 def settings_of():
-    return lambda **kw: (lambda: settings_from_mapping({k.replace("__", "."): v for k, v in kw.items()}))
+    return lambda **kw: (lambda space=None: settings_from_mapping({k.replace("__", "."): v for k, v in kw.items()}))

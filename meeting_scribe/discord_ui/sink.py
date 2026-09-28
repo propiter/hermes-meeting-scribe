@@ -42,10 +42,15 @@ class DestinationPending(LookupError):
 class DiscordNotesSink:
     name = SINK
 
-    def __init__(self, *, settings: Callable[[], Settings], service: Callable[[], Any], adapter: Callable[[], Any],
+    def __init__(self, *, settings: Callable[..., Settings], service: Callable[[], Any], adapter: Callable[[], Any],
                  loop: Callable[[], Optional[asyncio.AbstractEventLoop]], options: Callable[[Meeting], RenderOptions],
-                 views: ViewFactory, timeout: float = 120.0) -> None:
-        self._settings = settings
+                 views: ViewFactory, timeout: float = 120.0,
+                 space_guilds: Optional[Callable[[str], Optional[frozenset[str]]]] = None) -> None:
+        """``settings(space)``: the meeting space's settings. ``space_guilds(space)``: the servers a
+        meeting of ``space`` may be published to (``None``: no restriction — an install with one
+        space); a server of another team is never a destination (DESIGN §23)."""
+        self._space_settings = settings
+        self._space_guilds = space_guilds
         self._service = service
         self._adapter = adapter
         self._loop = loop
@@ -54,8 +59,17 @@ class DiscordNotesSink:
         self._timeout = timeout
         self._locks: dict[str, asyncio.Lock] = {}
 
-    def enabled(self) -> bool:
-        return self._settings().delivery_discord_enabled
+    def _settings(self, meeting: Optional[Meeting] = None) -> Settings:
+        space = getattr(meeting, "space", "") if meeting is not None else ""
+        return self._space_settings(space) if space else self._space_settings()
+
+    def enabled(self, meeting: Meeting) -> bool:
+        return self._settings(meeting).delivery_discord_enabled
+
+    def allowed_guilds(self, meeting: Meeting) -> Optional[frozenset[str]]:
+        if self._space_guilds is None or not meeting.space:
+            return None
+        return self._space_guilds(meeting.space)
 
     # -- pipeline thread -----------------------------------------------------------------------
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
@@ -78,7 +92,7 @@ class DiscordNotesSink:
         adapter = self._adapter()
         if adapter is None:
             raise ConnectionError("discord not connected")
-        return TaskPublisher(adapter=adapter, views=self._views, settings=self._settings(),
+        return TaskPublisher(adapter=adapter, views=self._views, settings=self._settings(meeting),
                              repo=self._service().repo, options=self._options(meeting), destination=self.destination,
                              transcript_text=self._transcript_text)
 
@@ -88,12 +102,12 @@ class DiscordNotesSink:
         utterances = read_transcript(folder)
         if not utterances:
             return None
-        return render_transcript_md(meeting, utterances, meeting.language or self._settings().ui_language)
+        return render_transcript_md(meeting, utterances, meeting.language or self._settings(meeting).ui_language)
 
     def destination(self, meeting: Meeting) -> Destination:
         """Loop-side: notes channel candidates, the server, and the channel for tasks without project."""
         client = getattr(self._adapter(), "_client", None)
-        return resolve(client, meeting, self._settings())
+        return resolve(client, meeting, self._settings(meeting), allowed_guilds=self.allowed_guilds(meeting))
 
     def guild_for(self, meeting: Meeting) -> object:
         """Loop-side: the server whose channels are the meeting's project candidates."""
@@ -188,7 +202,7 @@ class DiscordNotesSink:
         got = await self.board(meeting_id)
         if got is None:
             raise LookupError(meeting_id)
-        return move_options(got[1], item_id, self._settings().channel_name_ignore_prefixes)
+        return move_options(got[1], item_id, self._settings(got[1].meeting).channel_name_ignore_prefixes)
 
     async def move_item(self, meeting_id: str, item_id: str, channel_id: str, *, learn: bool = True) -> str:
         """📁: pin the task to ``channel_id`` (``learn``: owners teach routing), re-post it there, drop the old one."""
@@ -203,7 +217,7 @@ class DiscordNotesSink:
         chan = next((c for c in board.channels if c.id == str(channel_id) and c.kind != "category"), None)
         if chan is None or not chan.can_post:
             raise ChannelUnavailable(f"channel {channel_id} is not available")
-        name = clean_channel_name(chan.name, self._settings().channel_name_ignore_prefixes) or chan.name
+        name = clean_channel_name(chan.name, self._settings(board.meeting).channel_name_ignore_prefixes) or chan.name
         await asyncio.to_thread(lambda: self._service().move_item(meeting_id, item_id, chan.id, name, learn=learn))
         await self._refresh(meeting_id)
         return f"<#{chan.id}>"

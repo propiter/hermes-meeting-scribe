@@ -10,8 +10,8 @@ def test_files_sink_writes_notes(tmp_path, meeting, notes, settings_of):
     assert res.ok and (folder / "notes.md").exists() and (folder / "tasks.json").exists()
 
 
-def test_obsidian_disabled_without_vault(settings_of):
-    assert ObsidianSink(settings_of()).enabled() is False
+def test_obsidian_disabled_without_vault(meeting, settings_of):
+    assert ObsidianSink(settings_of()).enabled(meeting) is False
 
 
 def test_obsidian_copies_notes_idempotently(tmp_path, meeting, notes, settings_of):
@@ -21,7 +21,7 @@ def test_obsidian_copies_notes_idempotently(tmp_path, meeting, notes, settings_o
     folder.mkdir()
     (folder / "notes.md").write_text("# hi\n")
     sink = ObsidianSink(settings_of(obsidian__vault_path=str(vault), obsidian__folder="Reuniones"))
-    assert sink.enabled()
+    assert sink.enabled(meeting)
     stored = replace(meeting, folder="meetings/2026/09/2026-09-26_1504_daily-sync_k3v7q2ab")
     res = sink.deliver(stored, notes, folder)
     target = vault / "Reuniones" / "2026-09-26_1504_daily-sync_k3v7q2ab.md"

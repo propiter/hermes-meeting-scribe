@@ -62,7 +62,7 @@ class DiscordNotesSink(Protocol):
 
     name: str
 
-    def enabled(self) -> bool: ...
+    def enabled(self, meeting: Meeting) -> bool: ...
 
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult: ...
 
@@ -70,22 +70,23 @@ class DiscordNotesSink(Protocol):
 class ItemSink(ABC):
     name: str = ""
 
-    def __init__(self, settings: Callable[[], Settings], store: DeliveryStore, project_for: ProjectFor) -> None:
+    def __init__(self, settings: Callable[[str], Settings], store: DeliveryStore, project_for: ProjectFor) -> None:
         self._settings = settings
         self._store = store
         self._project_for = project_for
 
     @abstractmethod
-    def mode(self) -> str: ...
+    def mode(self, meeting: Meeting) -> str:
+        """The sink's mode for the meeting's space (``approve`` | ``auto`` | ``off``)."""
 
     def active(self) -> bool:
         """Backend connected (independent of mode)."""
         return True
 
-    def enabled(self) -> bool:
-        return self.mode() != "off" and self.active()
+    def enabled(self, meeting: Meeting) -> bool:
+        return self.mode(meeting) != "off" and self.active()
 
-    def eligible(self, item: ActionItem) -> bool:
+    def eligible(self, meeting: Meeting, item: ActionItem) -> bool:
         return True
 
     @abstractmethod
@@ -130,7 +131,7 @@ class ItemSink(ABC):
                 if st in ("approved", "delivered")}
 
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
-        mode = self.mode()
+        mode = self.mode(meeting)
         stored = {a.id: a for a in self._store.list_action_items(meeting.id)}
         mine = self.approved_for_me(meeting.id) if mode == "approve" else set()
         delivered: list[str] = []
@@ -139,7 +140,7 @@ class ItemSink(ABC):
         for item in notes.action_items:
             current = stored.get(item.id, item)
             wanted = current.status is not ActionStatus.DISMISSED and (mode != "approve" or current.id in mine)
-            if not wanted or not self.eligible(current):
+            if not wanted or not self.eligible(meeting, current):
                 skipped.append(item.id)
                 continue
             try:

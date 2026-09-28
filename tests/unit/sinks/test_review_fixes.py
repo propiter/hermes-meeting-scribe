@@ -64,14 +64,14 @@ def _setup(repo, meeting, **cfg):
     notes = Notes("t", "t", "s", action_items=(item,))
     repo.sync_action_items(m.id, notes.action_items)
     s = settings_from_mapping({"linear_default_team": "ENG", "owners": ["11"], **cfg})
-    return m, notes, (lambda: s)
+    return m, notes, (lambda space=None: s)
 
 
 def test_kanban_auto_does_not_make_linear_approve_auto(tmp_path, repo, meeting):
     """Finding 1: Kanban delivering an item used to count as 'approved' for Linear."""
     m, notes, s = _setup(repo, meeting, **{"kanban_mode": "auto", "linear_mode": "approve"})
     lb = FakeLinear()
-    kanban = KanbanSink(s, repo, FakeKanban(), owners=lambda: ("11",), project_for=lambda *a: None)
+    kanban = KanbanSink(s, repo, FakeKanban(), owners=lambda space=None: ("11",), project_for=lambda *a: None)
     linear = LinearSink(s, repo, lambda: lb, project_for=lambda *a: None)
     for sink in (kanban, linear):  # Runtime.sinks() order
         sink.deliver(m, notes, tmp_path)
@@ -81,7 +81,7 @@ def test_kanban_auto_does_not_make_linear_approve_auto(tmp_path, repo, meeting):
 def test_approving_for_kanban_is_not_approving_for_linear(tmp_path, repo, meeting):
     m, notes, s = _setup(repo, meeting, **{"kanban_mode": "approve", "linear_mode": "approve"})
     lb = FakeLinear()
-    kanban = KanbanSink(s, repo, FakeKanban(), owners=lambda: ("11",), project_for=lambda *a: None)
+    kanban = KanbanSink(s, repo, FakeKanban(), owners=lambda space=None: ("11",), project_for=lambda *a: None)
     linear = LinearSink(s, repo, lambda: lb, project_for=lambda *a: None)
     repo.set_item_sink_status(m.id, "a1", "kanban", "approved")
     kanban.deliver_item(m, notes, notes.action_items[0], tmp_path)

@@ -153,7 +153,7 @@ class LlmAnalyzer:
         return data
 
     def analyze(self, meeting: Meeting, utterances: Sequence[Utterance], candidates: Sequence[Candidate]) -> Notes:
-        settings = self._settings()
+        settings = self._settings(meeting.space)
         lang_setting = settings.analysis_language
         if not utterances:
             return Notes(meeting_title=meeting.title or meeting.channel_name, tldr="", summary="",

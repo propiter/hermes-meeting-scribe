@@ -51,11 +51,11 @@ class StageDeferred(StageError):
         self.waiting = waiting
 
 
-def make_archiver(settings: Callable[[], Settings], ffmpeg: Callable[[], Ffmpeg]) -> Archiver:
-    """Production archiver: package ``tracks/`` per ``audio.retention`` (DESIGN §5)."""
+def make_archiver(settings: Callable[..., Settings], ffmpeg: Callable[[], Ffmpeg]) -> Archiver:
+    """Production archiver: package ``tracks/`` per the meeting space's ``audio.retention`` (DESIGN §5)."""
 
     def archive(meeting: Meeting, folder: Path) -> Optional[Path]:
-        s = settings()
+        s = settings(meeting.space)
         tracks = {p.stem: p for p in sorted(Layout.tracks_dir(folder).glob("*.ogg"))}
         shutil.rmtree(Layout.work_dir(folder), ignore_errors=True)
         existing = Layout.archive_path(folder, s.audio_retention)
@@ -77,7 +77,7 @@ def make_archiver(settings: Callable[[], Settings], ffmpeg: Callable[[], Ffmpeg]
 class Stages:
     repo: Repository
     layout: Layout
-    settings: Callable[[], Settings]
+    settings: Callable[..., Settings]  # settings(space) -> that space's settings (DESIGN §23)
     transcriber: Transcriber
     analyzer: Analyzer
     catalogs: Callable[[], Iterable[ProjectCatalog]]
@@ -127,7 +127,7 @@ class Stages:
         if not utterances:
             raise EmptyRecording("the transcription found no speech")
         write_transcript(folder, utterances)
-        write_transcript_md(folder, meeting, utterances, self.settings().ui_language)
+        write_transcript_md(folder, meeting, utterances, self.settings(meeting.space).ui_language)
         self.repo.replace_utterances(meeting.id, utterances)
         return meeting
 
@@ -141,14 +141,14 @@ class Stages:
         # Rephrased titles must keep their ids, or a reprocess duplicates Kanban/Linear items.
         notes = replace(notes, action_items=tuple(reconcile_ids(self.repo.list_action_items(meeting.id),
                                                                 notes.action_items)))
-        resolver = ProjectResolver(self.settings().projects_min_confidence, self.repo)
+        resolver = ProjectResolver(self.settings(meeting.space).projects_min_confidence, self.repo)
         res = resolver.resolve(meeting, candidates, notes.project, notes.project_confidence)
         project = res.candidate.name if res.candidate else None
         notes = replace(notes, project=project, project_confidence=res.confidence if project else 0.0)
         meeting = replace(meeting, title=notes.meeting_title or meeting.title, project=project,
                           project_key=res.candidate.key if res.candidate else None,
                           language=notes.language or meeting.language)
-        write_notes(folder, meeting, notes, notes.language or self.settings().ui_language)
+        write_notes(folder, meeting, notes, notes.language or self.settings(meeting.space).ui_language)
         self.repo.sync_action_items(meeting.id, notes.action_items)
         return meeting
 
@@ -163,7 +163,7 @@ class Stages:
         for sink in self.sinks():
             name = getattr(sink, "name", type(sink).__name__)
             try:
-                if not sink.enabled():
+                if not sink.enabled(meeting):
                     continue
                 if name in done:  # delivered this same content in an earlier try of this job
                     continue

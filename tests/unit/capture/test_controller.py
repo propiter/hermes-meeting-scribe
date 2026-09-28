@@ -62,7 +62,7 @@ def world(tmp_path):
     adapter = adapter_cls(FakeBot([guild]))
     svc = Svc(tmp_path)
     s = settings_from_mapping({"consent_nickname_prefix": ""})
-    mgr = CaptureManager(service=lambda: svc, settings=lambda: s, ffmpeg=lambda: None,
+    mgr = CaptureManager(service=lambda: svc, settings=lambda space=None: s, ffmpeg=lambda: None,
                          writer_factory=lambda ff, path, t0, kbps: NullWriter(),
                          compat=lambda adapter: CompatResult(True, (), ("x",)), tick=0.001)
     yield dict(guild=guild, text=text, daily=daily, other=other, adapter=adapter, mgr=mgr, svc=svc)
@@ -236,3 +236,24 @@ async def test_stop_reply_says_no_audio_when_nobody_was_heard(world):
     await in_thread(mgr.start, caller(), None)
     stop = await in_thread(mgr.stop, caller())
     assert "No audio was captured" in stop and "preparing the notes" not in stop
+
+
+async def test_a_server_of_no_space_is_never_recorded(world):
+    """DESIGN §23: with several spaces an unassigned server gets an explanation, not a recording."""
+    mgr = world["mgr"]
+    mgr._space_of = lambda guild: None
+    mgr.attach(world["adapter"]._client, world["adapter"])
+    reply = await in_thread(mgr.start, caller(), None)
+    assert "belongs to no space" in reply
+    assert world["daily"].connects == 0 and mgr.live_meeting_ids() == set()
+    assert not mgr.busy(world["guild"])  # the refused start left no stale "starting" mark
+
+
+async def test_the_meeting_carries_the_server_space(world):
+    mgr = world["mgr"]
+    mgr._space_of = lambda guild: "team"
+    mgr.attach(world["adapter"]._client, world["adapter"])
+    await in_thread(mgr.start, caller(), None)
+    session = mgr.session_for(world["guild"].id)
+    assert session is not None and session.meeting.space == "team"
+    await in_thread(mgr.stop, caller())

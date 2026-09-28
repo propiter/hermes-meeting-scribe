@@ -15,7 +15,7 @@ class ItemSinkFake:
     def __init__(self):
         self.items = []
 
-    def enabled(self):
+    def enabled(self, meeting):
         return True
 
     def deliver_item(self, meeting, notes, item, folder):
@@ -85,7 +85,7 @@ def test_set_project_learns_channel_map(prepo, layout, settings, clock, meeting)
     m = _processed(service, runner, prepo, layout, meeting)
     cand = service.set_project(m.id, "website")
     assert cand.key == "hermes:p1"
-    assert prepo.channel_project(m.channel_id) == {"project_key": "hermes:p1", "project_name": "Website"}
+    assert prepo.channel_project("main", m.channel_id) == {"project_key": "hermes:p1", "project_name": "Website"}
     assert prepo.get_meeting(m.id).project == "Website"
     assert read_notes(layout.meeting_folder(m)).project == "Website"
     with pytest.raises(LookupError):
@@ -94,10 +94,10 @@ def test_set_project_learns_channel_map(prepo, layout, settings, clock, meeting)
 
 def test_link_person(prepo, layout, settings, clock):
     service, *_ = svc(prepo, layout, settings, clock)
-    service.link("10", "ana@x.io")
-    service.link("11", "Luis Pérez")
-    assert prepo.get_link("10")["email"] == "ana@x.io"
-    assert prepo.get_link("11")["name"] == "Luis Pérez"
+    service.link("main", "10", "ana@x.io")
+    service.link("main", "11", "Luis Pérez")
+    assert prepo.get_link("main", "10")["email"] == "ana@x.io"
+    assert prepo.get_link("main", "11")["name"] == "Luis Pérez"
 
 
 def test_status_and_search(prepo, layout, settings, clock, meeting):
@@ -105,7 +105,7 @@ def test_status_and_search(prepo, layout, settings, clock, meeting):
     m = _processed(service, runner, prepo, layout, meeting)
     st = service.status()
     assert st["queued"] == 0 and st["recent"][0]["id"] == m.id
-    assert service.search("informe")[0]["meeting_id"] == m.id
+    assert service.search("informe", "main")[0]["meeting_id"] == m.id
     assert service.find(m.id[:4]).id == m.id
 
 
@@ -115,7 +115,7 @@ def test_move_item_files_the_task_under_a_channel_and_learns(prepo, layout, sett
     moved = service.move_item(m.id, "a1", "502", "nebula")
     assert moved.project == "nebula" and moved.project_key == "discord:502"
     assert prepo.get_action_item(m.id, "a1").project_key == "discord:502"
-    assert prepo.project_channel("nebula") == "502"
+    assert prepo.project_channel("main", "nebula") == "502"
     notes = read_notes(layout.meeting_folder(m))
     assert next(a for a in notes.action_items if a.id == "a1").project == "nebula"
     with pytest.raises(KeyError):

@@ -312,5 +312,9 @@
   "ui.source.kanban": "Kanban board",
   "ui.source.learned": "Used before in this channel",
   "ui.source.linear": "Linear project",
-  "space.first_name": "Main"
+  "space.first_name": "Main",
+  "space.choose": "This installation has several spaces: run the command inside a Discord server of the space you want.",
+  "space.choose_cli": "This installation has several spaces and this command cannot choose one yet: use it from a Discord server of the space.",
+  "space.unassigned": "This Discord server belongs to no space, so nothing is recorded or shown here. An administrator can add it to a space.",
+  "capture.unassigned": "This Discord server belongs to no space, so it is not recorded. An administrator can add it to a space."
 }

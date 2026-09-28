@@ -27,7 +27,7 @@ def full(**over):
 
 
 def analyzer(llm, **settings):
-    return LlmAnalyzer(llm, lambda: settings_from_mapping(settings))
+    return LlmAnalyzer(llm, lambda space=None: settings_from_mapping(settings))
 
 
 def test_single_call_for_short_meeting(meeting, utterances):

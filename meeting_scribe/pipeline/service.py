@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 
 class MeetingService:
-    def __init__(self, repo: Repository, layout: Layout, runner: PipelineRunner, settings: Callable[[], Settings], *,
+    def __init__(self, repo: Repository, layout: Layout, runner: PipelineRunner, settings: Callable[..., Settings], *,
                  clock: Clock, item_sinks: Callable[[], Mapping[str, Any]],
                  catalogs: Callable[[], Iterable[ProjectCatalog]]) -> None:
         self.repo = repo
@@ -46,11 +46,13 @@ class MeetingService:
         self._catalogs = catalogs
 
     # -- lookup -------------------------------------------------------------------------------
-    def find(self, id_or_prefix: str) -> Optional[Meeting]:
-        return self.repo.find_meeting(id_or_prefix)
+    # ``settings(space)`` returns that space's settings (DESIGN §23); ``space=None`` on a lookup means
+    # "any space" and is only used where the caller already holds a meeting id it was given by us.
+    def find(self, id_or_prefix: str, space: Optional[str] = None) -> Optional[Meeting]:
+        return self.repo.find_meeting(id_or_prefix, space)
 
-    def require(self, id_or_prefix: str) -> Meeting:
-        meeting = self.find(id_or_prefix)
+    def require(self, id_or_prefix: str, space: Optional[str] = None) -> Meeting:
+        meeting = self.find(id_or_prefix, space)
         if meeting is None:
             raise KeyError(id_or_prefix)
         return meeting
@@ -58,8 +60,22 @@ class MeetingService:
     def folder(self, meeting: Meeting) -> Path:
         return self.layout.meeting_folder(meeting)
 
-    def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        return self.repo.search(query, limit)
+    def space_for(self, guild_id: Optional[str] = None) -> str:
+        """The space a request acts in (DESIGN §23). From a Discord server: the space that owns it
+        (with one space an unowned server joins it). Without a server (DM, CLI, agent outside a
+        server): the only space; with several a :class:`~meeting_scribe.spaces.SpaceError` asks for
+        an explicit choice, so nothing of another team is ever shown by default."""
+        from ..spaces import SpaceError, Spaces
+
+        if guild_id not in (None, ""):
+            owner = self.repo.claim_guild(str(guild_id), "") if str(guild_id).isdigit() else None
+            if owner is None:
+                raise SpaceError(f"Discord server {guild_id} belongs to no space")
+            return owner
+        return Spaces(lambda: self.repo, lambda key, default=None: default).resolve(None).slug
+
+    def search(self, query: str, space: str, limit: int = 10) -> list[dict[str, Any]]:
+        return self.repo.search(query, space, limit)
 
     def prepare_audio(self, id_or_prefix: str) -> Path:
         """Write the listening copy (``playback.ogg``) of a meeting archived before copies existed."""
@@ -67,24 +83,36 @@ class MeetingService:
         from ..audio.playback import build_playback
 
         meeting = self.require(id_or_prefix)
-        return build_playback(resolve_ffmpeg(self.settings().audio_ffmpeg_path), self.folder(meeting))
+        return build_playback(resolve_ffmpeg(self.settings(meeting.space).audio_ffmpeg_path), self.folder(meeting))
 
-    def status(self, recent: int = 5) -> dict[str, Any]:
-        jobs = {j.meeting_id: j for j in self.repo.list_jobs(("queued", "running", "failed"))}
+    def status(self, space: Optional[str] = None, recent: int = 5) -> dict[str, Any]:
+        """Queue size, recent meetings and pending deliveries of ``space`` (``None``: every space — only
+        for the machine-wide views of an operator; chat surfaces always pass their space)."""
+        jobs = {j.meeting_id: j for j in self.repo.list_jobs(("queued", "running", "failed"), space=space)}
         rows = []
-        for m in self.repo.list_meetings(limit=recent):
+        for m in self.repo.list_meetings(limit=recent, space=space):
             job = jobs.get(m.id)
-            rows.append({"id": m.id, "title": m.title or m.channel_name, "state": m.state.value,
+            rows.append({"id": m.id, "space": m.space, "title": m.title or m.channel_name, "state": m.state.value,
                          "started_at": m.started_at.isoformat(), "job": None if job is None else {
                              "state": job.state, "stage": job.stage.value, "attempts": job.attempts,
                              "failed_stage": job.failed_stage.value if job.failed_stage else None,
                              "error": job.error}})
-        waiting = self.waiting_destination()
+        waiting = self._in_space(self.waiting_destination(), space)
         for row in rows:
             if row["id"] in waiting:
                 row["delivery"] = {"state": "waiting_destination", "reason": waiting[row["id"]]}
-        return {"queued": self.repo.pending_job_count(), "worker_running": self.runner.running, "recent": rows,
-                "waiting_destination": waiting, "dm_notes": self.dm_notes()}
+        return {"queued": self.repo.pending_job_count(space), "worker_running": self.runner.running, "recent": rows,
+                "waiting_destination": waiting, "dm_notes": self._in_space(self.dm_notes(), space)}
+
+    def _in_space(self, by_meeting: dict[str, str], space: Optional[str]) -> dict[str, str]:
+        if space is None:
+            return by_meeting
+        out = {}
+        for mid, value in by_meeting.items():
+            m = self.repo.get_meeting(mid)
+            if m is not None and m.space == space:
+                out[mid] = value
+        return out
 
     def retry_waiting(self) -> int:
         """Re-queue now every delivery waiting for a destination (a channel setting changed)."""
@@ -148,19 +176,19 @@ class MeetingService:
 
         Transcript files are written first (the folder name carries a fresh id, so nothing can
         collide); then the row + utterances are inserted in ONE transaction guarded by the
-        ``(source, external_id)`` unique index. ``None`` = somebody already imported it (the
+        ``(space, source, external_id)`` unique index. ``None`` = somebody already imported it (the
         files just written are removed). A crash before the enqueue is healed by ``recover``.
         """
         if meeting.state is not MeetingState.TRANSCRIBED or not meeting.external_id:
             raise ValueError("import_transcript expects a 'transcribed' meeting with an external_id")
-        if self.repo.find_by_external(meeting.source, meeting.external_id) is not None:
+        if self.repo.find_by_external(meeting.space, meeting.source, meeting.external_id) is not None:
             return None
         folder = self.layout.meeting_folder(meeting)
         folder.mkdir(parents=True, exist_ok=True)
         meeting = replace(meeting, folder=self.layout.relative(folder))
         write_meta(folder, meeting)  # FIRST: a crash leftover is recognisable (clean_import_leftovers)
         write_transcript(folder, utterances)
-        write_transcript_md(folder, meeting, utterances, meeting.language or self.settings().ui_language)
+        write_transcript_md(folder, meeting, utterances, meeting.language or self.settings(meeting.space).ui_language)
         # all files exist before the row: a committed row always has its transcript
         if not self.repo.create_imported_meeting(meeting, utterances):
             shutil.rmtree(folder, ignore_errors=True)
@@ -180,7 +208,7 @@ class MeetingService:
             return 0
         cutoff = time.time() - older_than
         removed = 0
-        for meta_path in root.glob("*/*/*/meta.json"):
+        for meta_path in root.glob("*/*/*/*/meta.json"):  # meetings/<space>/YYYY/MM/<folder>/
             folder = meta_path.parent
             try:
                 if folder.stat().st_mtime > cutoff:
@@ -206,9 +234,9 @@ class MeetingService:
         return self.repo.get_meeting(meeting.id) or meeting
 
     # -- action items -------------------------------------------------------------------------
-    def _sink(self, name: str) -> Any:
+    def _sink(self, name: str, meeting: Meeting) -> Any:
         sink = self._item_sinks().get(name)
-        if sink is None or not sink.enabled():
+        if sink is None or not sink.enabled(meeting):
             raise SinkUnavailable(name)
         return sink
 
@@ -219,7 +247,7 @@ class MeetingService:
             raise KeyError(item_id)
         if item.status is ActionStatus.DISMISSED:
             raise ItemDismissed(f"action item {item_id} was dismissed")
-        sink = self._sink(sink_name)
+        sink = self._sink(sink_name, meeting)
         notes = read_notes(self.folder(meeting))
         if notes is None:
             raise NotesNotReady("meeting has no notes yet")
@@ -236,8 +264,8 @@ class MeetingService:
         for item in self.repo.list_action_items(meeting.id):
             if item.status is ActionStatus.DISMISSED:
                 continue
-            eligible = getattr(self._sink(sink_name), "eligible", lambda _i: True)
-            if not eligible(item):
+            eligible = getattr(self._sink(sink_name, meeting), "eligible", lambda _m, _i: True)
+            if not eligible(meeting, item):
                 continue
             try:
                 delivered.append(self.approve_item(meeting.id, item.id, sink_name))
@@ -267,19 +295,20 @@ class MeetingService:
         chosen = find_candidate(project, cands)
         if chosen is None:
             raise LookupError(project)
-        self.repo.learn_channel_project(meeting.channel_id, chosen.key, chosen.name)
+        self.repo.learn_channel_project(meeting.space, meeting.channel_id, chosen.key, chosen.name)
         meeting = replace(meeting, project=chosen.name, project_key=chosen.key)
         self.repo.save_meeting(meeting)
         folder = self.folder(meeting)
         notes = read_notes(folder)
         if notes is not None:
             notes = replace(notes, project=chosen.name, project_confidence=1.0)
-            write_notes(folder, meeting, notes, notes.language or self.settings().ui_language)
+            write_notes(folder, meeting, notes, notes.language or self.settings(meeting.space).ui_language)
         return chosen
 
-    def link(self, discord_user_id: str, target: str) -> None:
+    def link(self, space: str, discord_user_id: str, target: str) -> None:
+        """Link a Discord member to a Linear user WITHIN ``space`` (the same person may differ per team)."""
         target = target.strip()
         if "@" in target:
-            self.repo.set_link(discord_user_id, email=target)
+            self.repo.set_link(space, discord_user_id, email=target)
         else:
-            self.repo.set_link(discord_user_id, name=target)
+            self.repo.set_link(space, discord_user_id, name=target)

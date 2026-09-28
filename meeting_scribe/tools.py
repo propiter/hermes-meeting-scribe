@@ -38,10 +38,28 @@ def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
 
 
+def _session_guild() -> str:
+    """The Discord server of the agent's chat ("" in a DM, outside a gateway or on other platforms)."""
+    try:
+        from .commands import caller_from_session
+
+        return caller_from_session().guild_id
+    except Exception:  # no Hermes gateway session (CLI, tests)
+        return ""
+
+
 class MeetingTools:
-    def __init__(self, service: Callable[[], MeetingService], max_utterances: int = 400) -> None:
+    """Both tools act in ONE space (DESIGN §23): the one owning the chat's server, else the only
+    space; with several spaces and no server they answer an error instead of another team's data."""
+
+    def __init__(self, service: Callable[[], MeetingService], max_utterances: int = 400,
+                 guild: Callable[[], str] = _session_guild) -> None:
         self._service = service
         self._max = max_utterances
+        self._guild = guild
+
+    def _space(self, service: MeetingService) -> str:
+        return service.space_for(self._guild() or None)
 
     def search(self, args: Mapping[str, Any], **_: Any) -> str:
         query = str(args.get("query") or "").strip()
@@ -49,7 +67,8 @@ class MeetingTools:
             return _json({"error": "query is required"})
         try:
             limit = max(1, min(int(args.get("limit") or 10), 50))
-            hits = self._service().search(query, limit)
+            service = self._service()
+            hits = service.search(query, self._space(service), limit)
         except Exception as exc:  # tool contract: JSON error, never an exception
             return _json({"error": f"{type(exc).__name__}: {exc}"})
         return _json({"results": [{**h, "ts": fmt_ts(h["t0"])} for h in hits]})
@@ -60,7 +79,7 @@ class MeetingTools:
             return _json({"error": f"part must be one of {', '.join(PARTS)}"})
         try:
             service = self._service()
-            meeting = service.find(str(args.get("meeting_id") or ""))
+            meeting = service.find(str(args.get("meeting_id") or ""), self._space(service))
             if meeting is None:
                 return _json({"error": f"no meeting {args.get('meeting_id')!r}; use meeting_search"})
             folder = service.folder(meeting)

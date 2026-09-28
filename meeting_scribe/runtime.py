@@ -5,10 +5,15 @@ Multi-profile safety (DESIGN §1.4, §15): settings are read on every call; repo
 service built on them) are kept PER database path. When ``plugin_data_dir`` resolves elsewhere the
 runtime switches to (or opens) that path's repository — it never closes one another caller may
 still hold (review finding 7). All of them are closed by :meth:`close`.
+
+Spaces (DESIGN §23): ``settings(space)`` layers a space's overrides over the global settings; every
+meeting-scoped adapter asks for its meeting's space. Opening a database with no space yet creates
+the first one from the existing setup (see :func:`meeting_scribe.spaces.bootstrap`).
 """
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +30,7 @@ from .hermes_adapters import HermesStructuredLLM, linear_projects
 from .pipeline.runner import PipelineRunner
 from .pipeline.service import MeetingService
 from .pipeline.stages import Stages, make_archiver
+from .spaces import Spaces, bootstrap
 from .sinks.files import FilesSink
 from .sinks.kanban import KanbanGateway, KanbanSink
 from .sinks.linear import LinearBackend, LinearSink, select_backend
@@ -73,15 +79,47 @@ class Runtime:
         self._repos: dict[Path, Repository] = {}
         self._services: dict[Path, MeetingService] = {}
         self._repo_path: Optional[Path] = None
-        self._meet_poller: Optional["MeetPoller"] = None
+        self._meet_pollers: dict[str, "MeetPoller"] = {}
+        self._pollers_checked = 0.0  # monotonic time of the last reconciliation of the Meet pollers
         self.google_transport: Any = None  # tests inject a fake HTTP transport here (never the network)
 
     # -- settings & simple adapters -------------------------------------------------------------
-    def settings(self) -> Settings:
-        return Settings.load(self.host.get_config)
+    def spaces(self) -> Spaces:
+        return Spaces(self.repo, self.host.get_config)
 
-    def owners(self) -> tuple[str, ...]:
-        return effective_owners(self.settings(), self.host.secret)
+    def settings(self, space: Optional[str] = None) -> Settings:
+        """The global settings; with ``space``, that space's overrides on top."""
+        if not space:
+            return Settings.load(self.host.get_config)
+        return self.spaces().settings(space)
+
+    def owners(self, space: Optional[str] = None) -> tuple[str, ...]:
+        return effective_owners(self.settings(space), self.host.secret)
+
+    def space_of_guild(self, guild: Any) -> Optional[str]:
+        """The space that owns a Discord server (``guild`` object or id); ``None``: not recorded.
+
+        One space: an unowned server joins it (the single-team behaviour before spaces). Several
+        spaces: only servers assigned to a space are recorded or published to."""
+        gid = getattr(guild, "id", guild)
+        return self.spaces().claim_guild(gid, str(getattr(guild, "name", "") or ""))
+
+    def adopt_guilds(self, guilds: Iterable[Any]) -> list[str]:
+        """First connect after bootstrap: the ``main`` space takes the servers the bot is in."""
+        pairs = [(str(getattr(g, "id", g)), str(getattr(g, "name", "") or "")) for g in guilds]
+        return self.repo().adopt_guilds("main", [p for p in pairs if p[0].isdigit()])
+
+    def space_guilds(self, space: str) -> Optional[frozenset[str]]:
+        """The Discord servers a meeting of ``space`` may be published to. ``None`` with a single
+        space (any server of the bot, as before spaces); with several, only the space's own."""
+        spaces = self.spaces().all()
+        if len(spaces) <= 1:
+            return None
+        return next((frozenset(s.guild_ids) for s in spaces if s.slug == space), frozenset())
+
+    def default_space(self) -> str:
+        """The only space of the install; ``SpaceError`` when there are several (choose one)."""
+        return self.spaces().resolve(None).slug
 
     def ffmpeg(self) -> Ffmpeg:
         return resolve_ffmpeg(self.settings().audio_ffmpeg_path)
@@ -100,6 +138,7 @@ class Runtime:
             repo = self._repos.get(path)
             if repo is None:
                 repo = self._repos[path] = Repository(path)
+                bootstrap(repo, Settings.load(self.host.get_config), path.parent)
             self._repo_path = path
             return repo
 
@@ -179,65 +218,103 @@ class Runtime:
                 self._wire_desktop(self._services[path])
             return self._services[path]
 
-    @staticmethod
-    def _wire_desktop(service: MeetingService) -> None:
-        """The gateway's worker is the only executor of Desktop commands (see ``desktop.control``)."""
+    def _wire_desktop(self, service: MeetingService) -> None:
+        """The gateway's worker is the only executor of Desktop commands (see ``desktop.control``);
+        its pulse also keeps one Meet poller per space."""
         from .desktop import control
 
         service.runner.control = lambda: control.execute_one(service)
-        service.runner.pulse = lambda: control.pulse(service.repo)
+        service.runner.pulse = lambda: self._pulse(service)
+
+    POLLER_RECONCILE_SECONDS = 60.0  # the worker pulses every few seconds; spaces change rarely
+
+    def _pulse(self, service: MeetingService) -> None:
+        from .desktop import control
+
+        control.pulse(service.repo)
+        self.reconcile_meet_pollers()
+
+    def reconcile_meet_pollers(self, *, force: bool = False) -> bool:
+        """Start/stop pollers for spaces created/deleted elsewhere, at most once per
+        ``POLLER_RECONCILE_SECONDS`` (it lists the spaces: a DB read the worker must not do on every
+        tick). True when it ran."""
+        now = time.monotonic()
+        with self._lock:
+            if not force and now - self._pollers_checked < self.POLLER_RECONCILE_SECONDS:
+                return False
+            self._pollers_checked = now
+        self.start_meet_pollers()
+        return True
 
     def start_pipeline(self, live_meeting_ids: Iterable[str] = (), *, owns_capture: bool = False) -> None:
         self.service().runner.start(live_meeting_ids, owns_capture=owns_capture)
-        self.start_meet_poller()
+        self.reconcile_meet_pollers(force=True)
 
     def stop_pipeline(self) -> None:
         with self._lock:
-            poller, self._meet_poller = self._meet_poller, None
+            pollers, self._meet_pollers = list(self._meet_pollers.values()), {}
             runners = [svc.runner for svc in self._services.values()]
-        if poller is not None:
+        for poller in pollers:
             poller.stop()
         for runner in runners:  # joined outside the lock (see close())
             runner.stop()
 
-    # -- Google Meet import (DESIGN §17) ----------------------------------------------------------
-    def google_files(self) -> "GoogleFiles":
+    # -- Google Meet import (DESIGN §17, §23: one connection per space) ---------------------------
+    # ``space=None`` (the CLI / doctor, which have no space selector yet): the install's only space;
+    # with several, ``SpaceError`` — never another team's connection by accident.
+    def google_files(self, space: Optional[str] = None) -> "GoogleFiles":
         from .google.oauth import GoogleFiles
 
-        return GoogleFiles(self.host.data_dir)
+        return GoogleFiles(self.host.data_dir, space or self.default_space())
 
-    def google_credentials(self) -> "GoogleCredentials":
+    def google_credentials(self, space: Optional[str] = None) -> "GoogleCredentials":
         from .google.oauth import GoogleCredentials
 
-        return GoogleCredentials(self.google_files(), transport=self.google_transport)
+        return GoogleCredentials(self.google_files(space), transport=self.google_transport)
 
-    def google_connected_at(self) -> Optional[float]:
-        token = self.google_files().read_token() or {}
+    def google_connected_at(self, space: Optional[str] = None) -> Optional[float]:
+        token = self.google_files(space).read_token() or {}
         value = token.get("connected_at")
         return float(value) if isinstance(value, (int, float)) else None
 
-    def meet_importer(self) -> "MeetImporter":
+    def meet_importer(self, space: Optional[str] = None) -> "MeetImporter":
         from .google.importer import MeetImporter
         from .google.meet_api import MeetClient
 
-        return MeetImporter(service=self.service, client=lambda: MeetClient(self.google_credentials()),
-                            clock=self.clock.now)
+        space = space or self.default_space()
+        return MeetImporter(space=space, service=self.service,
+                            client=lambda: MeetClient(self.google_credentials(space)), clock=self.clock.now)
 
-    def start_meet_poller(self) -> None:
-        """Gateway only (callers already are): one polling thread; it syncs only with the lease."""
+    def start_meet_pollers(self) -> None:
+        """Gateway only (callers already are): one polling thread PER SPACE, each syncing only with
+        its space's lease. Idempotent — called again on every worker pulse, so a space created or
+        deleted from the CLI or the Desktop gets (or loses) its poller without a restart."""
         from .google.importer import MeetPoller
 
+        slugs = {s.slug for s in self.spaces().all()}
         with self._lock:
-            if self._meet_poller is not None and self._meet_poller.running:
-                return
-            self._meet_poller = MeetPoller(importer=self.meet_importer, repo=self.repo, settings=self.settings,
-                                           connected_at=self.google_connected_at,
-                                           owner=self.service().runner.owner, spawner=self.host.spawner)
-            self._meet_poller.start()
+            gone = [p for slug, p in self._meet_pollers.items() if slug not in slugs]
+            self._meet_pollers = {slug: p for slug, p in self._meet_pollers.items() if slug in slugs}
+            owner = self.service().runner.owner
+            for slug in sorted(slugs):
+                current = self._meet_pollers.get(slug)
+                if current is not None and current.running:
+                    continue
+                poller = MeetPoller(space=slug, importer=lambda s=slug: self.meet_importer(s), repo=self.repo,
+                                    settings=lambda s=slug: self.settings(s),
+                                    connected_at=lambda s=slug: self.google_connected_at(s),
+                                    owner=owner, spawner=self.host.spawner)
+                self._meet_pollers[slug] = poller
+                poller.start()
+        for poller in gone:
+            poller.stop()
 
-    @property
-    def meet_poller_running(self) -> bool:
-        return self._meet_poller is not None and self._meet_poller.running
+    def meet_poller_running(self, space: Optional[str] = None) -> bool:
+        """``space=None``: whether any space's poller runs."""
+        if space is None:
+            return any(p.running for p in list(self._meet_pollers.values()))
+        poller = self._meet_pollers.get(space)
+        return poller is not None and poller.running
 
     def pipeline_running(self) -> bool:
         svc = self._service

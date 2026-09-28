@@ -12,12 +12,12 @@ from ..storage.artifacts import write_notes
 class FilesSink:
     name = "files"
 
-    def __init__(self, settings: Callable[[], Settings]) -> None:
+    def __init__(self, settings: Callable[[str], Settings]) -> None:
         self._settings = settings
 
-    def enabled(self) -> bool:
+    def enabled(self, meeting: Meeting) -> bool:
         return True
 
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
-        write_notes(folder, meeting, notes, notes.language or self._settings().ui_language)
+        write_notes(folder, meeting, notes, notes.language or self._settings(meeting.space).ui_language)
         return SinkResult(self.name, True, ("notes.md",))

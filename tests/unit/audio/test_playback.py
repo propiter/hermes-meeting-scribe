@@ -47,7 +47,7 @@ def test_archiver_writes_the_listening_copy_after_a_multitrack_archive(ff, make_
 
     make_track("10", 1.0)
     make_track("11", 1.5, 660)
-    arch = make_archiver(lambda: settings_from_mapping({"audio_retention": "multitrack"}), lambda: ff)
+    arch = make_archiver(lambda space=None: settings_from_mapping({"audio_retention": "multitrack"}), lambda: ff)
     assert arch(meeting, tmp_path) == tmp_path / "recording.mka"
     assert (tmp_path / "playback.ogg").is_file()
 
@@ -61,6 +61,6 @@ def test_archiver_survives_a_playback_failure(ff, make_track, tmp_path, meeting,
     def boom(*a, **k):
         raise RuntimeError("encoder exploded")
     monkeypatch.setattr(stages, "build_playback", boom)
-    arch = stages.make_archiver(lambda: settings_from_mapping({"audio_retention": "multitrack"}), lambda: ff)
+    arch = stages.make_archiver(lambda space=None: settings_from_mapping({"audio_retention": "multitrack"}), lambda: ff)
     assert arch(meeting, tmp_path) == tmp_path / "recording.mka"  # the meeting is not failed for it
     assert not (tmp_path / "playback.ogg").exists()

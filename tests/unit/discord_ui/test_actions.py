@@ -84,7 +84,7 @@ class Sink:
 @pytest.fixture
 def env():
     svc, sink = Svc(), Sink()
-    acts = ButtonActions(service=lambda: svc, settings=lambda: settings_from_mapping({}), owners=lambda: ("11",),
+    acts = ButtonActions(service=lambda: svc, settings=lambda space=None: settings_from_mapping({}), owners=lambda space=None: ("11",),
                          check_auth=lambda i: str(i.user.id) == str(ALLOWED), sink=lambda: sink,
                          project_view=lambda mid, cands: ("select", mid, tuple(c.key for c in cands)),
                          move_view=lambda mid, iid, opts: ("move", mid, iid, tuple(o[0] for o in opts)))

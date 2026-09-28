@@ -44,6 +44,13 @@ def dispatch(args: argparse.Namespace, rt: Any) -> int:
         if parser is not None:
             _print(parser.format_help())
         return 0
+    from .spaces import SpaceError
+
+    try:
+        rt.default_space() if hasattr(rt, "default_space") else None
+    except SpaceError:  # several spaces: each has its own connection; a --space selector is pending
+        _print(t("space.choose_cli", rt.settings().ui_language))
+        return 2
     return {"connect": _connect, "status": _status, "sync": _sync, "disconnect": _disconnect}[cmd](args, rt)
 
 

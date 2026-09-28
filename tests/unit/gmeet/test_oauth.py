@@ -22,7 +22,7 @@ from .fakes import CLIENT_JSON, FakeTransport, jresp
 
 @pytest.fixture
 def files(tmp_path):
-    return GoogleFiles(lambda: tmp_path / "data")
+    return GoogleFiles(lambda: tmp_path / "data", "main")
 
 
 @pytest.fixture
@@ -362,9 +362,9 @@ def test_token_lock_is_shared_across_processes(files, client_file):
     root = Path(__file__).resolve().parents[3]
     files.write_token({"refresh_token": "r"})
     code = ("import sys, time; sys.path.insert(0, sys.argv[1]); from pathlib import Path;"
-            "from meeting_scribe.google.oauth import GoogleFiles; f = GoogleFiles(lambda: Path(sys.argv[2]));"
+            "from meeting_scribe.google.oauth import GoogleFiles; f = GoogleFiles(lambda: Path(sys.argv[2]), \"main\");"
             "cm = f.token_lock(); cm.__enter__(); print('locked', flush=True); time.sleep(1.0); cm.__exit__(None, None, None)")
-    p = subprocess.Popen([sys.executable, "-c", code, str(root), str(files.dir.parent)], stdout=subprocess.PIPE, text=True)
+    p = subprocess.Popen([sys.executable, "-c", code, str(root), str(files.dir.parent.parent)], stdout=subprocess.PIPE, text=True)
     assert p.stdout.readline().strip() == "locked"
     t0 = time.monotonic()
     files.delete_token()  # waits for the other process

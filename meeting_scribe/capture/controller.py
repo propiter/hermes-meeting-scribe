@@ -21,6 +21,7 @@ from ..commands import Caller
 from ..config import Settings
 from ..domain.text import is_ascii_digits
 from ..i18n import t
+from ..spaces import GuildUnassigned
 from .compat import CompatResult, probe
 from .receiver import scribe_receiver_class
 from .session import Busy, RecordingSession, SessionDeps, Writer
@@ -67,12 +68,16 @@ class CaptureManager:
     START_TIMEOUT = 60.0
     STOP_TIMEOUT = 90.0
 
-    def __init__(self, *, service: Callable[[], Any], settings: Callable[[], Settings],
+    def __init__(self, *, service: Callable[[], Any], settings: Callable[..., Settings],
                  ffmpeg: Callable[[], Optional[Ffmpeg]], writer_factory: WriterFactory = default_writer,
                  compat: Optional[Callable[[Any], CompatResult]] = None, tick: float = 0.5,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 space_of: Optional[Callable[[Any], Optional[str]]] = None) -> None:
+        """``space_of(guild)``: the space owning a server, ``None`` when it belongs to none (never
+        recorded). Without it (unit tests of the capture alone) meetings carry no space."""
         self._service = service
         self._settings = settings
+        self._space_of = space_of
         self._ffmpeg = ffmpeg
         self._writer_factory = writer_factory
         self._compat = compat or (lambda adapter: compat_for_adapter(adapter))  # late-bound for probes
@@ -117,6 +122,13 @@ class CaptureManager:
     @property
     def lang(self) -> str:
         return self._settings().ui_language
+
+    def space_of(self, guild: Any) -> Optional[str]:
+        """The space of ``guild`` ("" without space resolution); ``None``: the server is not recorded."""
+        return "" if self._space_of is None else self._space_of(guild)
+
+    def settings_for(self, space: str) -> Settings:
+        return self._settings(space) if space else self._settings()
 
     def status(self) -> tuple[bool, str]:
         if self.adapter is None:
@@ -216,6 +228,8 @@ class CaptureManager:
             return err
         try:
             session = await self.start_in(channel, started_by=caller.user_id)
+        except GuildUnassigned:
+            return t("capture.unassigned", self.lang)
         except AlreadyRecording as exc:
             s = exc.session
             return t("capture.already", self.lang, channel=s.channel.name, id=s.meeting.id if s.meeting else "-")
@@ -237,12 +251,16 @@ class CaptureManager:
         ff = self._ffmpeg()
         if ff is None and getattr(self._writer_factory, "requires_ffmpeg", False):
             raise FfmpegNotFound("ffmpeg is required for live capture")  # before joining the channel
-        self._starting.add(gid)
+        self._starting.add(gid)  # before the first await: a concurrent start sees it (review W7)
         try:
-            kbps = self._settings().audio_bitrate_kbps
-            deps = SessionDeps(service=self._service(), settings=self._settings, receiver_cls=self._receiver_cls,
+            space = await asyncio.to_thread(self.space_of, channel.guild)
+            if space is None:
+                raise GuildUnassigned(f"Discord server {gid} belongs to no space")
+            kbps = self._settings().audio_bitrate_kbps  # machine-wide
+            deps = SessionDeps(service=self._service(), settings=lambda: self.settings_for(space),
+                               receiver_cls=self._receiver_cls,
                                writer_factory=lambda path, t0: self._writer_factory(ff, path, t0, kbps),
-                               clock=self._clock, tick=self._tick)
+                               clock=self._clock, tick=self._tick, space=space)
             session = RecordingSession(self.adapter, channel, deps, started_by=started_by)
             # Registered BEFORE start (review W7): /meeting stop and live_meeting_ids() see it at once.
             self._sessions[gid] = session

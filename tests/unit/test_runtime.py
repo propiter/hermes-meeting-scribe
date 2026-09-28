@@ -47,12 +47,12 @@ def test_settings_are_read_per_call(tmp_path):
     assert rt.settings().kanban_mode == "auto"
 
 
-def test_sinks_composition(tmp_path):
+def test_sinks_composition(tmp_path, meeting):
     h, cfg = host(tmp_path)
     rt = Runtime(h)
     names = [s.name for s in rt.sinks()]
     assert names == ["files", "obsidian", "kanban", "linear"]
-    assert [s.name for s in rt.sinks() if s.enabled()] == ["files", "kanban"]
+    assert [s.name for s in rt.sinks() if s.enabled(meeting)] == ["files", "kanban"]
 
 
 def test_extra_sinks_for_phase_b(tmp_path):
@@ -62,7 +62,7 @@ def test_extra_sinks_for_phase_b(tmp_path):
     class DiscordSink:
         name = "discord"
 
-        def enabled(self):
+        def enabled(self, meeting):
             return True
 
         def deliver(self, meeting, notes, folder):
@@ -200,7 +200,7 @@ def test_learned_candidate_enriched_by_the_real_catalog(tmp_path, meeting):
     rt.catalogs = lambda: [__import__("meeting_scribe.analyze.projects", fromlist=["x"]).LearnedCatalog(rt.repo()),
                            __import__("meeting_scribe.analyze.projects", fromlist=["x"]).CallableCatalog(
                                "linear", lambda m: [linear])]
-    rt.repo().learn_channel_project(meeting.channel_id, "linear:L", "Website")
+    rt.repo().learn_channel_project("main", meeting.channel_id, "linear:L", "Website")
     m = dc_replace(meeting, project="Website", project_key="linear:L")
     got = rt.item_sinks()["linear"]._project_for(m, Notes("t", "t", "s"), ActionItem(id="a1", title="x"))
     assert got == linear and got.ref["team_ids"] == ["t"]  # not the ref-less learned stub
@@ -235,21 +235,23 @@ def test_meet_poller_follows_the_pipeline_lifecycle(tmp_path):
     rt = Runtime(h)
     rt.start_pipeline()
     try:
-        assert rt.meet_poller_running
+        assert rt.meet_poller_running("main")  # one poller per space (DESIGN §23)
+        poller = rt._meet_pollers["main"]
         rt.start_pipeline()  # idempotent: still one poller
-        assert rt.meet_poller_running
+        assert rt._meet_pollers["main"] is poller and rt.meet_poller_running("main")
     finally:
         rt.stop_pipeline()
-    assert not rt.meet_poller_running
+    assert not rt.meet_poller_running()
     rt.close()
 
 
 def test_google_paths_live_under_the_profile_data_dir(tmp_path):
     h, _ = host(tmp_path)
     rt = Runtime(h)
-    files = rt.google_files()
-    assert files.client_path == tmp_path / "data" / "google" / "client.json"
-    assert files.token_path == tmp_path / "data" / "google" / "token.json"
+    files = rt.google_files()  # the only space's connection (DESIGN §23)
+    assert files.client_path == tmp_path / "data" / "google" / "main" / "client.json"
+    assert files.token_path == tmp_path / "data" / "google" / "main" / "token.json"
+    assert rt.google_files("team").client_path == tmp_path / "data" / "google" / "team" / "client.json"
     assert rt.google_connected_at() is None and not rt.google_credentials().connected()
 
 
@@ -271,7 +273,7 @@ def test_close_does_not_deadlock_with_a_poller_waiting_for_the_runtime_lock(tmp_
     h, _cfg = host(tmp_path, config={"google_meet_enabled": True})
     rt = Runtime(h)
     rt.start_pipeline()
-    poller = rt._meet_poller
+    poller = rt._meet_pollers["main"]
     assert entered.wait(5)
     caplog.set_level(logging.ERROR)
     t0 = time.monotonic()

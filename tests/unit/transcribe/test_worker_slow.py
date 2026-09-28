@@ -29,7 +29,7 @@ def test_real_worker_on_speech_free_audio(tiny_model_available, ff, make_track, 
     settings = settings_from_mapping({"transcribe_model": "tiny", "transcribe_language": "en",
                                       "transcribe_cpu_threads": 2})
     seen: list[float] = []
-    utts = SubprocessTranscriber(lambda: settings, lambda: ff, poll_interval=0.2).transcribe(
+    utts = SubprocessTranscriber(lambda space=None: settings, lambda: ff, poll_interval=0.2).transcribe(
         meeting, tmp_path, progress=lambda _sid, frac: seen.append(frac))
     assert utts == []
     assert seen and seen[-1] == 1.0

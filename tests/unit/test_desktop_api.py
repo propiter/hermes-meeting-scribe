@@ -206,3 +206,17 @@ def test_dashboard_loader_exposes_the_router():
     manifest = json.loads((path.parent / "manifest.json").read_text())
     assert manifest["name"] == "meeting-scribe" and manifest["api"] == "plugin_api.py"
     assert (path.parent / manifest["entry"]).is_file()
+
+
+def test_several_spaces_are_refused_until_the_desktop_can_choose_one(env):
+    """DESIGN §23: no space selector yet — never a library mixing two teams."""
+    c, mid = env["client"], env["meeting"].id
+    assert [m["id"] for m in c.get(f"{PREFIX}/v1/meetings").json()["items"]] == [mid]  # bootstraps ``main``
+    repo = Repository(env["root"] / "index.sqlite")
+    repo.insert_space("team", "Team")
+    repo.close()
+    for path in ("/v1/meetings", f"/v1/meetings/{mid}", f"/v1/meetings/{mid}/transcript", "/v1/status"):
+        assert c.get(f"{PREFIX}{path}").status_code == 409, path
+    assert c.post(f"{PREFIX}/v1/meetings/{mid}/commands",
+                  json={"request_id": "r" * 16, "action": "reprocess", "stage": "analyze", "confirm": True}
+                  ).status_code == 409

@@ -15,11 +15,11 @@ class FakeKanban:
 
 
 def _sink(repo, settings, gw, owners=("11",), resolve=lambda m, n, i: None):
-    return KanbanSink(settings, repo, gw, owners=lambda: owners, project_for=resolve)
+    return KanbanSink(settings, repo, gw, owners=lambda space=None: owners, project_for=resolve)
 
 
-def test_off_mode_disabled(repo, settings_of):
-    assert _sink(repo, settings_of(kanban__mode="off"), FakeKanban()).enabled() is False
+def test_off_mode_disabled(repo, meeting, settings_of):
+    assert _sink(repo, settings_of(kanban__mode="off"), FakeKanban()).enabled(meeting) is False
 
 
 def test_approve_mode_delivers_only_approved_owner_items(tmp_path, repo, meeting, notes, settings_of):

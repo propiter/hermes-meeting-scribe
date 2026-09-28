@@ -42,19 +42,32 @@ def _matches(channel: Any, entries: tuple[str, ...]) -> bool:
 
 
 class AutoJoiner:
-    def __init__(self, launcher: Launcher, settings: Callable[[], Settings], *, clock: Callable[[], float] = time.monotonic,
-                 poll: float = 1.0) -> None:
+    def __init__(self, launcher: Launcher, settings: Callable[..., Settings], *, clock: Callable[[], float] = time.monotonic,
+                 poll: float = 1.0, space_of: Optional[Callable[[Any], Optional[str]]] = None) -> None:
+        """``space_of(guild)``: the server's space (its settings decide), ``None`` = never recorded."""
         self._launcher = launcher
         self._settings = settings
+        self._space_of = space_of
         self._clock = clock
         self._poll = poll
         self._watchers: dict[int, asyncio.Task] = {}
         self._cooldown: set[int] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
+    def _settings_for(self, channel: Any) -> Optional[Settings]:
+        """The settings of the channel's space; ``None`` when its server belongs to no space."""
+        if self._space_of is None:
+            return self._settings()
+        space = self._space_of(getattr(channel, "guild", None))
+        if space is None:
+            return None
+        return self._settings(space) if space else self._settings()
+
     def eligible(self, channel: Any) -> bool:
-        s = self._settings()
-        if not s.autojoin_enabled or channel is None or getattr(channel, "guild", None) is None:
+        if channel is None or getattr(channel, "guild", None) is None:
+            return False
+        s = self._settings_for(channel)
+        if s is None or not s.autojoin_enabled:
             return False
         if s.autojoin_channels and not _matches(channel, s.autojoin_channels):
             return False
@@ -82,7 +95,8 @@ class AutoJoiner:
             self._consider(channel)
 
     def _clear_cooldown_if_quiet(self, channel: Any) -> None:
-        if channel.id in self._cooldown and humans_in(channel) < self._settings().autojoin_min_humans:
+        s = self._settings_for(channel) if channel.id in self._cooldown else None
+        if s is not None and humans_in(channel) < s.autojoin_min_humans:
             self._cooldown.discard(channel.id)
 
     def _consider(self, channel: Any) -> None:
@@ -98,7 +112,8 @@ class AutoJoiner:
             while True:
                 if not self.eligible(channel):
                     return
-                if self._clock() - since >= self._settings().autojoin_grace_seconds:
+                s = self._settings_for(channel)
+                if s is not None and self._clock() - since >= s.autojoin_grace_seconds:
                     break
                 await asyncio.sleep(self._poll)
             log.info("meeting-scribe: auto-joining %s (%d humans)", channel.name, humans_in(channel))

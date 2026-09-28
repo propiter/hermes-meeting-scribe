@@ -72,8 +72,9 @@ def _check_auth(state: UiState) -> Callable[[Any], bool]:
 
 def _render_options(runtime: Any) -> Callable[[Meeting], RenderOptions]:
     def options(meeting: Meeting) -> RenderOptions:
-        s = runtime.settings()
-        owners = set(runtime.owners())
+        space = getattr(meeting, "space", "") or None  # the meeting's team decides (DESIGN §23)
+        s = runtime.settings(space)
+        owners = set(runtime.owners(space))
         try:
             linear_on = s.linear_mode != "off" and runtime.linear_backend() is not None
         except Exception:  # Linear misconfigured: no Linear buttons rather than no notes
@@ -108,6 +109,12 @@ def _factory(state: UiState) -> Callable[[Any, Any], None]:
             if state.listener is not None:
                 bot.add_listener(state.listener, "on_voice_state_update")
             state.kit.register(bot)
+        adopt = getattr(runtime, "adopt_guilds", None)
+        if callable(adopt):
+            try:  # first connect after the spaces baseline: ``main`` takes the bot's servers
+                adopt(list(getattr(bot, "guilds", None) or ()))
+            except Exception:  # storage problems: commands and doctor report them
+                log.exception("meeting-scribe: adopting the bot's servers failed")
         capture = runtime.capture
         if capture is not None and hasattr(capture, "attach"):
             capture.attach(bot, adapter)
@@ -174,14 +181,15 @@ def install(ctx: Any, runtime: Any) -> UiState:
                             move_view=lambda mid, iid, opts: holder["s"].kit.move_view(mid, iid, opts))
     kit = ViewKit(actions)
     sink = DiscordNotesSink(settings=runtime.settings, service=runtime.service, adapter=lambda: holder["s"].adapter,
-                            loop=lambda: holder["s"].loop, options=_render_options(runtime), views=kit)
+                            loop=lambda: holder["s"].loop, options=_render_options(runtime), views=kit,
+                            space_guilds=getattr(runtime, "space_guilds", None))
     state = UiState(runtime=runtime, actions=actions, kit=kit, sink=sink)
     holder["s"] = state
     capture = runtime.capture
     if capture is not None and hasattr(capture, "start_in"):
         from ..capture.autojoin import AutoJoiner
 
-        state.autojoin = AutoJoiner(capture, runtime.settings)
+        state.autojoin = AutoJoiner(capture, runtime.settings, space_of=getattr(capture, "space_of", None))
 
         async def on_voice_state_update(member: Any, before: Any, after: Any) -> None:
             try:
@@ -202,6 +210,8 @@ def install(ctx: Any, runtime: Any) -> UiState:
     if callable(add_catalog):  # the guild's channels become project candidates (§16)
         add_catalog(DiscordChannelCatalog(adapter=lambda: state.adapter, loop=lambda: state.loop,
                                           ignore_prefixes=lambda: runtime.settings().channel_name_ignore_prefixes,
-                                          guild_for=sink.guild_for))
+                                          guild_for=sink.guild_for,
+                                          ignore_for=lambda m: runtime.settings(
+                                              getattr(m, "space", "") or None).channel_name_ignore_prefixes))
     ctx.register_platform_handler("discord", _factory(state))
     return state

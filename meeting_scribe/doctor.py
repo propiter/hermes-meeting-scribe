@@ -255,8 +255,12 @@ def check_google_meet(env: Any) -> Check:
     if not callable(files):
         return Check.warn("Google Meet import not available in this runtime")
     from .google.oauth import GoogleAuthError, GoogleDisconnected
+    from .spaces import SpaceError
 
-    f = files()
+    try:
+        f = files()
+    except SpaceError:  # several spaces, each with its own connection: a per-space doctor is pending
+        return Check.warn("several spaces: the Google connection is checked per space (not available here yet)")
     if not f.client_path.exists():
         return Check.fail("no OAuth client; run `hermes meeting-scribe google connect --client-secret <file.json>`")
     try:

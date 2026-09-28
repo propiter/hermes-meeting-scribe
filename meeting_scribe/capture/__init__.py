@@ -31,7 +31,8 @@ def install(ctx: Any, runtime: Any) -> CaptureManager:
             log.warning("meeting-scribe: %s", exc)
             return None
 
-    manager = CaptureManager(service=runtime.service, settings=runtime.settings, ffmpeg=ffmpeg)
+    manager = CaptureManager(service=runtime.service, settings=runtime.settings, ffmpeg=ffmpeg,
+                             space_of=getattr(runtime, "space_of_guild", None))
     runtime.capture = manager
     checks.register(doctor.register_check)
     on_unload = getattr(ctx, "on_unload", None)

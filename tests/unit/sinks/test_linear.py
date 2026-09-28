@@ -105,10 +105,10 @@ def _sink(repo, settings, backend, resolve=lambda m, n, i: None):
     return LinearSink(settings, repo, lambda: backend, project_for=resolve)
 
 
-def test_sink_inactive_without_backend(repo, settings_of):
+def test_sink_inactive_without_backend(repo, meeting, settings_of):
     sink = LinearSink(settings_of(linear__mode="auto"), repo, lambda: None, project_for=lambda m, n, i: None)
-    assert sink.enabled() is False
-    assert _sink(repo, settings_of(linear__mode="off"), gql()).enabled() is False
+    assert sink.enabled(meeting) is False
+    assert _sink(repo, settings_of(linear__mode="off"), gql()).enabled(meeting) is False
 
 
 def test_sink_auto_creates_issue_with_team_project_assignee(tmp_path, repo, meeting, notes, settings_of):
@@ -148,7 +148,7 @@ def test_sink_without_team_reports_error(tmp_path, repo, meeting, notes, setting
 
 def test_learned_link_wins(tmp_path, repo, meeting, notes, settings_of):
     t = FakeTransport()
-    repo.set_link("11", linear_user_id="u_ana")
+    repo.set_link("main", "11", linear_user_id="u_ana")
     _sink(repo, settings_of(linear__mode="auto", linear__default_team="ENG"), gql(t)).deliver_item(
         meeting, notes, notes.action_items[0], tmp_path)
     create = [r[2]["variables"]["input"] for r in t.requests if "issueCreate" in r[2]["query"]][0]

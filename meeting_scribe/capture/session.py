@@ -60,6 +60,7 @@ class SessionDeps:
     clock: Callable[[], float] = time.monotonic  # timeline clock; display times come from ``now``
     now: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
     tick: float = 0.5
+    space: str = ""  # the space owning the guild (DESIGN §23); the meeting belongs to it from the start
 
 
 def mute_playback(vc: Any) -> None:
@@ -167,7 +168,8 @@ class RecordingSession:
                        channel_name=self.channel.name, started_at=self.deps.now(), state=MeetingState.RECORDING,
                        title=self.channel.name, speakers=tuple(self._speakers.values()),
                        guild_name=getattr(self.guild, "name", "") or "", category_name=category,
-                       text_channel_id=str(text_id) if text_id is not None else None, started_by=self.started_by)
+                       text_channel_id=str(text_id) if text_id is not None else None, started_by=self.started_by,
+                       space=self.deps.space)
 
     # -- speakers -------------------------------------------------------------------------------
     def humans(self) -> list[Any]:

@@ -8,9 +8,9 @@ from datetime import timedelta
 
 from meeting_scribe.config import settings_from_mapping
 from meeting_scribe.domain.models import MeetingState
-from meeting_scribe.google.importer import LEASE, MeetPoller
+from meeting_scribe.google.importer import MeetPoller
 
-from .test_meet_import import NOW, since, world  # noqa: F401 - fixture reuse
+from .test_meet_import import LEASE, NOW, since, world  # noqa: F401 - fixture reuse
 
 
 # -- finding 13 ------------------------------------------------------------------------------------
@@ -96,7 +96,7 @@ def test_sync_stops_between_pages_without_importing_half_a_transcript(world):
     rep = importer.sync(ended_after=since(), should_stop=stop.is_set)
     assert rep.imported == [] and rep.errors == []
     assert sum("/entries" in r for r in meet.requests) == 1
-    assert service.repo.known_external_ids("google_meet") == set()
+    assert service.repo.known_external_ids("main", "google_meet") == set()
 
 
 def test_stop_does_not_wait_for_the_rest_of_the_pass_and_the_thread_releases_the_lease(world, prepo):
@@ -112,7 +112,7 @@ def test_stop_does_not_wait_for_the_rest_of_the_pass_and_the_thread_releases_the
             release.wait(5)
         return real(method, url, headers, body)
     importer._client().transport.handler = handler
-    p = MeetPoller(importer=lambda: importer, repo=lambda: prepo,
+    p = MeetPoller(space="main", importer=lambda: importer, repo=lambda: prepo,
                    settings=lambda: settings_from_mapping({"google_meet_enabled": True}),
                    connected_at=lambda: (NOW - timedelta(days=1)).timestamp(), owner="me")
     p.FIRST_DELAY = 0.01
@@ -138,7 +138,7 @@ def test_stop_while_the_caller_holds_the_runtime_lock_does_not_deadlock(world, p
     def repo():
         with runtime_lock:
             return prepo
-    p = MeetPoller(importer=lambda: importer, repo=repo,
+    p = MeetPoller(space="main", importer=lambda: importer, repo=repo,
                    settings=lambda: settings_from_mapping({"google_meet_enabled": True}),
                    connected_at=lambda: (NOW - timedelta(days=1)).timestamp(), owner="me")
     p.FIRST_DELAY = 0.01

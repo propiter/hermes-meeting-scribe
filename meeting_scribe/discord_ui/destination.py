@@ -130,19 +130,26 @@ class Destination:
                 "warnings": list(self.warnings)}
 
 
-def _guilds(client: Any) -> list[Any]:
-    return [g for g in (getattr(client, "guilds", None) or ()) if g is not None]
+def _guilds(client: Any, allowed: Optional[frozenset[str]] = None) -> list[Any]:
+    """The bot's servers; with ``allowed``, only those (the servers of the meeting's space)."""
+    return [g for g in (getattr(client, "guilds", None) or ()) if g is not None and _allowed(g, allowed)]
 
 
-def pick_guild(client: Any, setting: str) -> tuple[Any, str, str]:
-    """``(guild, source, problem)`` for meetings without a guild of their own."""
-    guilds = _guilds(client)
+def _allowed(guild: Any, allowed: Optional[frozenset[str]]) -> bool:
+    return allowed is None or str(getattr(guild, "id", "")) in allowed
+
+
+def pick_guild(client: Any, setting: str, allowed: Optional[frozenset[str]] = None) -> tuple[Any, str, str]:
+    """``(guild, source, problem)`` for meetings without a guild of their own, among ``allowed``."""
+    guilds = _guilds(client, allowed)
     value = (setting or "").strip()
     if value:
         if is_ascii_digits(value):
             getter = getattr(client, "get_guild", None)
             g = getter(int(value)) if callable(getter) else None
             g = g or next((x for x in guilds if str(getattr(x, "id", "")) == value), None)
+            if g is not None and not _allowed(g, allowed):
+                return None, "none", f"delivery_discord_guild={value}: that server belongs to another space"
             return (g, "setting", "") if g is not None else (
                 None, "none", f"delivery_discord_guild={value}: the bot is not in that server")
         hits = [g for g in guilds if norm_name(getattr(g, "name", "")) == norm_name(value)]
@@ -153,7 +160,8 @@ def pick_guild(client: Any, setting: str) -> tuple[Any, str, str]:
     if len(guilds) == 1:
         return guilds[0], "only", ""
     if not guilds:
-        return None, "none", "the bot is not in any Discord server"
+        return None, "none", ("the bot is not in any Discord server of this space" if allowed is not None
+                              else "the bot is not in any Discord server")
     return None, "none", (f"the bot is in {len(guilds)} servers; set delivery_discord_guild "
                           "(`hermes meeting-scribe config set delivery_discord_guild \"<server name or id>\"`)")
 
@@ -170,15 +178,16 @@ def find_channel_by_name(guilds: Iterable[Any], name: str) -> tuple[list[Any], l
     return text, other
 
 
-def resolve_setting(client: Any, key: str, value: str, guild: Any) -> Resolved:
+def resolve_setting(client: Any, key: str, value: str, guild: Any,
+                    allowed: Optional[frozenset[str]] = None) -> Resolved:
     """A channel setting (id or name) → a text channel id; names are resolved in ``guild`` (or, when no
-    server is chosen, across every server — accepted only when exactly one channel matches)."""
+    server is chosen, across every server of the space — accepted only when exactly one matches)."""
     kind, ref = channel_ref(value)
     if not kind:
         return Resolved(key, "", "unset")
     if kind == "id":
         return Resolved(key, ref, "ok", ref)
-    scope = [guild] if guild is not None else _guilds(client)
+    scope = [guild] if guild is not None else _guilds(client, allowed)
     text, other = find_channel_by_name(scope, ref)
     if len(text) == 1:
         ch = text[0]
@@ -250,17 +259,25 @@ def same_guild(a: Any, b: Any) -> bool:
     return a is not None and b is not None and str(getattr(a, "id", "")) == str(getattr(b, "id", ""))
 
 
-def _check_id(client: Any, step: Resolved, guild: Any) -> Resolved:
-    """A configured channel ID must be a server channel of ``guild`` (never a DM, never another server)."""
+def _check_id(client: Any, step: Resolved, guild: Any, allowed: Optional[frozenset[str]] = None) -> Resolved:
+    """A configured channel ID must be a server channel of ``guild`` (never a DM, never another server)
+    and of a server of the meeting's space (``allowed``). A channel that is not cached cannot be
+    checked: with several spaces it is refused rather than risk another team's server."""
     if step.status != "ok" or not step.channel_id:
         return step
     ch = _cached_channel(client, step.channel_id)
     if ch is None:
+        if allowed is not None and guild is None:
+            return Resolved(step.key, step.value, "not_loaded",
+                            detail=f"{step.key}={step.value} is not loaded yet; its server cannot be checked")
         return step  # not cached: the publisher checks it again when it opens the channel
     ch_guild = getattr(ch, "guild", None)
     if ch_guild is None:
         return Resolved(step.key, step.value, "not_in_server",
                         detail=f"{step.key}={step.value} is a direct message, not a server channel; ignored")
+    if not _allowed(ch_guild, allowed):
+        return Resolved(step.key, step.value, "other_guild",
+                        detail=f"{step.key}={step.value} is in a server of another space; ignored")
     if guild is not None and not same_guild(ch_guild, guild):
         return Resolved(step.key, step.value, "other_guild",
                         detail=f"{step.key}={step.value} is in server {_guild_label(ch_guild)}, not in "
@@ -280,8 +297,10 @@ def _explicit_warnings(client: Any, step: Resolved) -> list[str]:
     return out
 
 
-def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
-    """Pure over the discord.py cache (runs on the gateway loop)."""
+def resolve(client: Any, meeting: Meeting, s: Settings, *, allowed_guilds: Optional[frozenset[str]] = None) -> Destination:
+    """Pure over the discord.py cache (runs on the gateway loop). ``allowed_guilds``: the servers of the
+    meeting's space (``None``: unrestricted, one space); nothing outside them is ever a target."""
+    allowed = allowed_guilds
     d = Destination()
     imported = meeting.source == SOURCE_GOOGLE_MEET or not meeting.guild_id
     keys = (("google_meet_discord_channel", s.google_meet_discord_channel),) if meeting.source == SOURCE_GOOGLE_MEET else ()
@@ -294,6 +313,8 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
             guild = getter(int(meeting.guild_id)) if callable(getter) and is_ascii_digits(meeting.guild_id) else None
         except (TypeError, ValueError):
             guild = None
+        if guild is not None and not _allowed(guild, allowed):
+            guild = None  # the server moved to another space: never publish there
         if guild is None:  # never look in other servers for a meeting of this one (review I3)
             d.guild_source = "none"
             d.steps.append(Resolved("guild", meeting.guild_id, "no_guild",
@@ -307,11 +328,13 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
             kind, ref = channel_ref(value)
             if kind == "id":
                 guild = _guild_of_channel(client, ref)
+                if guild is not None and not _allowed(guild, allowed):
+                    guild = None
                 if guild is not None:
                     d.guild_source = "channel"
                     break
         if guild is None:
-            guild, d.guild_source, problem = pick_guild(client, s.delivery_discord_guild)
+            guild, d.guild_source, problem = pick_guild(client, s.delivery_discord_guild, allowed)
             if problem:
                 d.steps.append(Resolved("delivery_discord_guild", s.delivery_discord_guild, "no_guild", detail=problem))
                 if (s.delivery_discord_guild or "").strip():  # configured but wrong: never search globally
@@ -320,8 +343,8 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
                 search_everywhere = True
     d.guild = guild
     for key, value in keys:
-        step = resolve_setting(client, key, value, guild if not search_everywhere else None)
-        step = _check_id(client, step, guild)
+        step = resolve_setting(client, key, value, guild if not search_everywhere else None, allowed)
+        step = _check_id(client, step, guild, allowed)
         if step.status != "unset":
             d.steps.append(step)
         if step.channel_id and step.channel_id not in d.targets:
@@ -338,8 +361,8 @@ def resolve(client: Any, meeting: Meeting, s: Settings) -> Destination:
     d.steps.append(auto)
     if auto.channel_id and auto.channel_id not in d.targets:
         d.targets.append(auto.channel_id)
-    fb = _check_id(client, resolve_setting(client, "delivery_fallback_channel", s.delivery_fallback_channel, guild),
-                   guild)
+    fb = _check_id(client, resolve_setting(client, "delivery_fallback_channel", s.delivery_fallback_channel, guild,
+                                           allowed), guild, allowed)
     if fb.status != "unset":
         d.steps.append(fb)
     d.fallback_channel = fb.channel_id

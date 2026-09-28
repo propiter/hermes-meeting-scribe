@@ -7,6 +7,7 @@ recording is unavailable instead of pretending.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import shlex
@@ -18,9 +19,14 @@ from .domain.models import MeetingState, Stage
 from .domain.text import is_ascii_digits
 from .i18n import t
 from .pipeline.service import MeetingService
+from .spaces import SpaceAmbiguous, SpaceError
 from .storage.artifacts import fmt_ts, read_notes, render_notes_md
 
 log = logging.getLogger(__name__)
+# Commands that do not read or write any space's data (capture resolves the space of the voice
+# channel's server itself).
+_NO_SPACE = frozenset({"start", "stop", "help"})
+_SPACE: contextvars.ContextVar[str] = contextvars.ContextVar("meeting_scribe_command_space")
 _MENTION_RE = re.compile(r"^<@!?([0-9]+)>$")
 
 
@@ -45,13 +51,21 @@ class Caller:
     chat_id: str
     user_id: str
     thread_id: str = ""
+    # The chat's server (Discord guild id) — Hermes' platform-neutral ``scope_id``; "" in a DM. It
+    # decides the space the command acts in (DESIGN §23).
+    scope_id: str = ""
+
+    @property
+    def guild_id(self) -> str:
+        return self.scope_id if (self.platform or "").lower() == "discord" and is_ascii_digits(self.scope_id) else ""
 
 
 def caller_from_session() -> Caller:
     from gateway.session_context import get_session_env
 
     return Caller(platform=get_session_env("HERMES_SESSION_PLATFORM"), chat_id=get_session_env("HERMES_SESSION_CHAT_ID"),
-                  user_id=get_session_env("HERMES_SESSION_USER_ID"), thread_id=get_session_env("HERMES_SESSION_THREAD_ID"))
+                  user_id=get_session_env("HERMES_SESSION_USER_ID"), thread_id=get_session_env("HERMES_SESSION_THREAD_ID"),
+                  scope_id=get_session_env("HERMES_SESSION_SCOPE_ID", "") or "")
 
 
 class CaptureController(Protocol):
@@ -65,7 +79,10 @@ class CaptureController(Protocol):
 
 
 class MeetingCommands:
-    def __init__(self, service: Union[MeetingService, Callable[[], MeetingService]], settings: Callable[[], Settings],
+    """Every read/write command acts in ONE space: the one owning the caller's server, else (DM) the
+    only space. With several spaces a DM gets an explanation instead of another team's meetings."""
+
+    def __init__(self, service: Union[MeetingService, Callable[[], MeetingService]], settings: Callable[..., Settings],
                  capture: Callable[[], Optional[CaptureController]]) -> None:
         # A callable is resolved per command (review finding 7): the runtime may switch to another
         # profile's database, and a captured instance would keep answering from the old one.
@@ -87,12 +104,30 @@ class MeetingCommands:
         handler = getattr(self, f"_cmd_{sub}", None)
         if handler is None:
             return t("cmd.unknown", lang, sub=sub)
+        token = None
         try:
+            if sub not in _NO_SPACE:
+                try:
+                    space = self.service.space_for(caller.guild_id or None)
+                except SpaceAmbiguous:
+                    return t("space.choose", lang)
+                except SpaceError:  # a server of no space (a DM always has the only space)
+                    return t("space.unassigned" if caller.guild_id else "space.choose", lang)
+                token = _SPACE.set(space)
+                lang = self.settings(space).ui_language
             return handler(args, caller, lang, invoked_as)
         except Exception:  # a slash command must always answer
             # The details are for the administrator (log / ``hermes meeting-scribe status``), not the chat.
             log.exception("meeting-scribe /%s %s failed", invoked_as, sub)
             return t("cmd.error", lang)
+        finally:
+            if token is not None:
+                _SPACE.reset(token)
+
+    @property
+    def _space(self) -> str:
+        """The space of the command being handled (set per call: handlers may run concurrently)."""
+        return _SPACE.get()
 
     # -- capture ------------------------------------------------------------------------------
     def _cmd_start(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
@@ -108,7 +143,7 @@ class MeetingCommands:
         return t("cmd.help", lang, cmd=cmd)
 
     def _cmd_status(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
-        st = self.service.status()
+        st = self.service.status(self._space)
         lines = [t("cmd.status_idle", lang, queued=st["queued"])]
         for row in st["recent"]:
             job = row["job"] or {}
@@ -124,7 +159,7 @@ class MeetingCommands:
 
     def _cmd_list(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         n = int(args[0]) if args and is_ascii_digits(args[0]) else 10
-        meetings = self.service.repo.list_meetings(limit=max(1, min(n, 50)))
+        meetings = self.service.repo.list_meetings(limit=max(1, min(n, 50)), space=self._space)
         if not meetings:
             return t("cmd.list_empty", lang)
         return "\n".join(t("cmd.list_line", lang, id=m.id, date=f"{m.started_at:%Y-%m-%d %H:%M}",
@@ -133,7 +168,7 @@ class MeetingCommands:
     def _cmd_show(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         if not args:
             return t("cmd.usage", lang, usage=f"/{cmd} show <id>")
-        meeting = self.service.find(args[0])
+        meeting = self.service.find(args[0], self._space)
         if meeting is None:
             return t("cmd.not_found", lang, id=args[0])
         notes = read_notes(self.service.folder(meeting))
@@ -147,7 +182,7 @@ class MeetingCommands:
         query = " ".join(args)
         if not query:
             return t("cmd.usage", lang, usage=f"/{cmd} search <text>")
-        hits = self.service.search(query, limit=8)
+        hits = self.service.search(query, self._space, limit=8)
         if not hits:
             return t("cmd.search_empty", lang, query=query)
         return "\n".join(t("cmd.search_line", lang, id=h["meeting_id"], ts=fmt_ts(h["t0"]), speaker=h["speaker"],
@@ -163,7 +198,7 @@ class MeetingCommands:
                 return ", ".join(map(str, v)) or "-"
             return str(v) if v not in (None, "") else "-"
         return "\n".join(t("cmd.config_line", lang, label=SPEC[k].label(k, lang) if k in SPEC else k, value=shown(v))
-                         for k, v in self.settings().as_dict().items())
+                         for k, v in self.settings(self._space).as_dict().items())
 
     # -- write --------------------------------------------------------------------------------
     def _cmd_reprocess(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
@@ -176,7 +211,7 @@ class MeetingCommands:
             return t("cmd.reprocess_bad_stage", lang, stage=raw)
         if stage is Stage.ARCHIVE:
             return t("cmd.reprocess_bad_stage", lang, stage=raw)
-        meeting = self.service.find(args[0])
+        meeting = self.service.find(args[0], self._space)
         if meeting is None:
             return t("cmd.not_found", lang, id=args[0])
         if meeting.state is MeetingState.EMPTY:
@@ -194,7 +229,7 @@ class MeetingCommands:
     def _cmd_project(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         if len(args) < 2:
             return t("cmd.usage", lang, usage=f"/{cmd} project <id> <project>")
-        meeting = self.service.find(args[0])
+        meeting = self.service.find(args[0], self._space)
         if meeting is None:
             return t("cmd.not_found", lang, id=args[0])
         name = " ".join(args[1:])
@@ -211,5 +246,5 @@ class MeetingCommands:
         if user_id is None or len(args) < 2:
             return t("cmd.usage", lang, usage=f"/{cmd} link @user <linear-email-or-name>")
         target = " ".join(args[1:])
-        self.service.link(user_id, target)
+        self.service.link(self._space, user_id, target)
         return t("cmd.link_saved", lang, discord_id=user_id, linear=target)

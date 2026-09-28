@@ -54,7 +54,7 @@ def env(tmp_path, meeting, notes):
     def make():
         s = settings_from_mapping(cfg)
         return DiscordNotesSink(
-            settings=lambda: s, service=lambda: svc, adapter=lambda: state["adapter"], loop=lambda: state["loop"],
+            settings=lambda space=None: s, service=lambda: svc, adapter=lambda: state["adapter"], loop=lambda: state["loop"],
             options=lambda meeting: RenderOptions(lang="en", kanban_on=True, linear_on=False,
                                                   is_owner_item=lambda i: i.owner_speaker_id == "11"),
             views=Views(), timeout=5)
@@ -169,7 +169,7 @@ async def test_refresh_rerenders_statuses_on_loop(env):
     assert "✅" in body.content and body.view is None
 
 
-def test_enabled_follows_setting(env):
-    assert env["make"]().enabled()
+def test_enabled_follows_setting(env, meeting):
+    assert env["make"]().enabled(meeting)
     env["cfg"]["delivery_discord_enabled"] = False
-    assert not env["make"]().enabled()
+    assert not env["make"]().enabled(meeting)

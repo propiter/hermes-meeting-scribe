@@ -80,14 +80,14 @@ def test_reprocess_and_project_and_link(prepo, layout, settings, clock, meeting)
     assert "Website" in cmds.handle(f"project {mid} Website", CALLER, "meeting")
     assert "Available" in cmds.handle(f"project {mid} Nope", CALLER, "meeting")
     assert "Linked" in cmds.handle("link <@11> luis@x.io", CALLER, "meeting")
-    assert prepo.get_link("11")["email"] == "luis@x.io"
+    assert prepo.get_link("main", "11")["email"] == "luis@x.io"
     assert "Usage" in cmds.handle("link", CALLER, "meeting")
 
 
 def test_config_and_spanish(prepo, layout, settings, clock):
     from meeting_scribe.config import settings_from_mapping
     s = settings_from_mapping({"ui_language": "es"})
-    cmds, *_ = make(prepo, layout, lambda: s, clock)
+    cmds, *_ = make(prepo, layout, lambda space=None: s, clock)
     out = cmds.handle("config", CALLER, "meeting")
     assert "**Kanban**: approve" in out and "kanban_mode" not in out
     assert "Ninguna reunión" in cmds.handle("list", CALLER, "meeting") or "Aún no" in cmds.handle(
@@ -160,7 +160,7 @@ def test_states_and_stages_are_shown_in_plain_words(prepo, layout, settings, clo
 def test_states_and_stages_in_spanish(prepo, layout, clock, meeting):
     from meeting_scribe.config import settings_from_mapping
     s = settings_from_mapping({"ui_language": "es"})
-    cmds, service, runner = make(prepo, layout, lambda: s, clock)
+    cmds, service, runner = make(prepo, layout, lambda space=None: s, clock)
     mid = processed(service, runner, meeting)
     assert "Lista" in cmds.handle("list", CALLER, "meeting")
     assert "volviendo a publicar las notas" in cmds.handle(f"reprocess {mid} from=deliver", CALLER, "meeting")

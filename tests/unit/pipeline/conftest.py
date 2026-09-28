@@ -57,7 +57,7 @@ class RecordingSink:
     calls: list = field(default_factory=list)
     on: bool = True
 
-    def enabled(self):
+    def enabled(self, meeting):
         return self.on
 
     def deliver(self, meeting, notes, folder):
@@ -97,7 +97,11 @@ def layout(tmp_path):
 
 @pytest.fixture
 def prepo(layout):
+    from meeting_scribe.config import Settings
+    from meeting_scribe.spaces import bootstrap
+
     r = Repository(layout.db_path())
+    bootstrap(r, Settings.defaults(), layout.db_path().parent)  # as Runtime.repo(): the ``main`` space
     yield r
     r.close()
 
@@ -105,4 +109,4 @@ def prepo(layout):
 @pytest.fixture
 def settings():
     s = settings_from_mapping({"audio_retention": "none"})
-    return lambda: s
+    return lambda space=None: s  # settings(space): one space here, same settings (DESIGN §23)

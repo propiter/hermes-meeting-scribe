@@ -16,7 +16,11 @@ from meeting_scribe.storage.repo import Repository
 
 @pytest.fixture
 def repo(tmp_path):
+    from meeting_scribe.config import Settings
+    from meeting_scribe.spaces import bootstrap
+
     r = Repository(tmp_path / "index.sqlite")
+    bootstrap(r, Settings.defaults(), tmp_path)  # the ``main`` space (DESIGN §23)
     yield r
     r.close()
 
@@ -206,16 +210,16 @@ def test_status_worker_jobs_waiting_and_commands(repo, tmp_path, meeting):
 
 
 def test_google_status_never_exposes_tokens(repo, tmp_path):
-    gdir = tmp_path / "google"
-    gdir.mkdir()
+    gdir = tmp_path / "google" / "main"  # the only space's connection (DESIGN §23)
+    gdir.mkdir(parents=True)
     st = google_status(tmp_path, repo, enabled=False)
     assert st["connected"] is False and st["client_stored"] is False
     assert "google connect" in st["commands"]["connect"]
     (gdir / "client.json").write_text(json.dumps({"installed": {"client_id": "cid", "client_secret": "CSECRET"}}))
     (gdir / "token.json").write_text(json.dumps({"refresh_token": "RTOKEN", "access_token": "ATOKEN",
                                                  "connected_at": 1700000000.0}))
-    repo.kv_set("google.last_poll_at", "2026-09-26T10:00:00+00:00")
-    repo.kv_set("google.last_error", "HTTP 401 Bearer ya29.secretsecret")
+    repo.kv_set("google.main.last_poll_at", "2026-09-26T10:00:00+00:00")
+    repo.kv_set("google.main.last_error", "HTTP 401 Bearer ya29.secretsecret")
     st = google_status(tmp_path, repo, enabled=True)
     assert st["connected"] and st["enabled"] and st["connected_at"] == 1700000000.0
     assert st["last_poll_at"].startswith("2026-09-26")
@@ -282,3 +286,23 @@ def test_history_is_a_readable_timeline(repo, tmp_path, meeting):
     cmd = next(e for e in d["history"] if e["kind"] == "command")
     assert cmd["action"] == "prepare_audio" and cmd["state"] == "queued"
     assert d["meeting"]["people"] == 2 and d["projects"] == []
+
+
+def test_google_status_with_several_spaces_names_no_connection(repo, tmp_path):
+    """No space selector yet: with two teams the page must not show either team's Google state."""
+    repo.insert_space("team", "Team")
+    st = google_status(tmp_path, repo, enabled=True)
+    assert st == {"enabled": True, "space_required": True}
+
+
+def test_library_of_one_space_never_shows_another_space(repo, tmp_path, meeting, utterances):
+    repo.insert_space("team", "Team")
+    repo.save_meeting(replace(meeting, id="mine1", state=MeetingState.DONE))
+    repo.save_meeting(replace(meeting, id="other1", space="team", state=MeetingState.DONE))
+    repo.replace_utterances("other1", utterances)
+    lib = Library(repo, tmp_path, "main")
+    assert [m["id"] for m in lib.meetings()["items"]] == ["mine1"]
+    assert lib.meetings(q="credenciales")["items"] == []
+    assert lib.facets()["total"] == 1
+    with pytest.raises(KeyError):
+        lib.detail("other1")

@@ -36,7 +36,7 @@ def _world(tmp_path, ff, *, pad: bool):
 
     s = settings_from_mapping({"transcribe_model": "tiny", "transcribe_language": "en",
                                "transcribe_cpu_threads": min(4, os.cpu_count() or 1), "audio_retention": "multitrack"})
-    settings = lambda: s  # noqa: E731
+    settings = lambda space=None: s  # noqa: E731
     layout = Layout(lambda: tmp_path / "data")
     repo = Repository(layout.db_path())
     stages = Stages(repo=repo, layout=layout, settings=settings,

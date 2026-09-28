@@ -82,7 +82,7 @@ async def test_retry_after_partial_post_does_not_duplicate_messages(sink_env, mo
     env = sink_env
     loop = asyncio.get_running_loop()
     s = settings_from_mapping({})
-    sink = DiscordNotesSink(settings=lambda: s, service=lambda: env.svc, adapter=lambda: env.adapter,
+    sink = DiscordNotesSink(settings=lambda space=None: s, service=lambda: env.svc, adapter=lambda: env.adapter,
                             loop=lambda: loop, views=Views(), timeout=5,
                             options=lambda mm: RenderOptions("en", True, False, lambda i: True))
     orig = type(env.ch).send
@@ -125,7 +125,7 @@ def actions(svc: ActSvc) -> ButtonActions:
     async def refresh(mid: str) -> None:
         return None
     sink = SimpleNamespace(refresh=refresh, refresh_item=lambda mid, iid: refresh(mid))
-    return ButtonActions(service=lambda: svc, settings=lambda: settings_from_mapping({}), owners=lambda: ("11",),
+    return ButtonActions(service=lambda: svc, settings=lambda space=None: settings_from_mapping({}), owners=lambda space=None: ("11",),
                          check_auth=lambda i: True, sink=lambda: sink,
                          project_view=lambda mid, cands: ("select", mid), move_view=lambda *a: ("move",))
 

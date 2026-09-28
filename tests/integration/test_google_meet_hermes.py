@@ -80,8 +80,9 @@ def test_meet_conference_is_imported_processed_and_delivered_with_transcript(man
     rt = next(iter(plugin.RUNTIMES.values()))
     assert rt.settings().google_meet_enabled
 
-    # Google side: stored client + token (as `google connect` leaves them) and a fake API.
-    gdir = home / "plugin-data" / "meeting-scribe" / "google"
+    # Google side: stored client + token (as `google connect` leaves them for the only space, DESIGN §23)
+    # and a fake API.
+    gdir = home / "plugin-data" / "meeting-scribe" / "google" / "main"
     write_private_json(gdir / "client.json", CLIENT_JSON)
     write_private_json(gdir / "token.json", {"access_token": "at", "refresh_token": "rt", "expires_at": 0,
                                              "connected_at": time.time() - 86400})

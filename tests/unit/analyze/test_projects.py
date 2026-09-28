@@ -8,7 +8,8 @@ class FakeRepo:
     def __init__(self, mapping):
         self.mapping = mapping
 
-    def channel_project(self, channel_id):
+    def channel_project(self, space, channel_id):
+        assert space == "main"  # learned per space (DESIGN §23)
         return self.mapping.get(channel_id)
 
 

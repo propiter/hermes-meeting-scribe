@@ -50,7 +50,7 @@ def test_format_report():
 # -- individual checks --------------------------------------------------------------------------
 def env(tmp_path: Path, **settings):
     s = settings_from_mapping(settings)
-    return SimpleNamespace(settings=lambda: s, data_dir=lambda: tmp_path / "data", kanban_boards=lambda: [],
+    return SimpleNamespace(settings=lambda space=None: s, data_dir=lambda: tmp_path / "data", kanban_boards=lambda: [],
                            linear_backend=lambda: None, capture_status=lambda: (False, "Phase B not installed"),
                            llm_status=lambda: (True, "task meeting_scribe registered"))
 

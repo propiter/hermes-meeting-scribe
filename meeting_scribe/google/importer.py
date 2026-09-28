@@ -12,9 +12,15 @@ can still be incomplete, so the record is retried on the next poll instead (Goog
 there within minutes). ``STARTED`` / no transcript at all → retried while the record is inside the
 window; a record without any transcript is never an error (transcription was simply off).
 
+Spaces (DESIGN §23): every space has its own Google connection, so there is one importer and one
+poller PER SPACE. Its status, its ``Retry-After`` pause, its per-record memory and its lease are all
+keyed by the space, so one team's expired token or quota never delays another team's imports, and
+imported meetings carry their space from the start.
+
 ``MeetPoller`` runs ``sync`` on its OWN daemon thread (never on the Discord asyncio loop) every
-``google_meet_poll_minutes``, only while holding the ``google-meet-poll`` lease in SQLite, so in a
-multi-process install exactly one process polls. ``stop()`` wakes and joins it (reload-safe).
+``google_meet_poll_minutes``, only while holding the space's ``google-meet-poll:<space>`` lease in
+SQLite, so in a multi-process install exactly one process polls each space. ``stop()`` wakes and
+joins it (reload-safe).
 """
 from __future__ import annotations
 
@@ -33,11 +39,22 @@ from .meet_api import MeetApiError, MeetAuthError, MeetClient, MeetForbidden, Me
 from .oauth import GoogleAuthError, GoogleDisconnected
 
 log = logging.getLogger(__name__)
-LEASE = "google-meet-poll"
-KV = "google."
 READY_STATES = frozenset({"FILE_GENERATED"})
 RETENTION_DAYS = 30  # Meet deletes conference records and transcript entries 30 days after the end
-RECORD_KV = "gmeet.record."  # per-record memory: failures / settled without transcript
+
+
+def lease_name(space: str) -> str:
+    return f"google-meet-poll:{space}"
+
+
+def status_kv(space: str) -> str:
+    """KV prefix of a space's poll status (``last_poll_at``, ``last_error``, ``retry_after_until``...)."""
+    return f"google.{space}."
+
+
+def record_kv(space: str) -> str:
+    """KV prefix of a space's per-record memory: failures / settled without transcript."""
+    return f"gmeet.record.{space}."
 MAX_RECORD_FAILURES = 5  # permanent errors (403/404/malformed) on one record before it is given up
 # A record still without any transcript this long after it ended never gets one (transcription was
 # off: Meet creates the transcript resource while the meeting runs). It is settled and not re-read.
@@ -83,21 +100,26 @@ def _transient(exc: BaseException) -> bool:
 
 
 class MeetImporter:
-    def __init__(self, *, service: Callable[[], Any], client: Callable[[], MeetClient],
+    """Imports ONE space's Google Meet transcripts (its own connection, status and memory)."""
+
+    def __init__(self, *, space: str, service: Callable[[], Any], client: Callable[[], MeetClient],
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
+        self.space = space
         self._service = service
         self._client = client
         self._clock = clock
+        self._kv = status_kv(space)
+        self._record_kv = record_kv(space)
 
     # -- status (kv) ------------------------------------------------------------------------------
     def set_status(self, **values: Any) -> None:
         repo = self._service().repo
         for k, v in values.items():
-            repo.kv_set(KV + k, None if v is None else str(v))
+            repo.kv_set(self._kv + k, None if v is None else str(v))
 
     def status(self) -> dict[str, str]:
-        start = len(KV)
-        return {k[start:]: v for k, v in self._service().repo.kv_prefix(KV).items()}
+        start = len(self._kv)
+        return {k[start:]: v for k, v in self._service().repo.kv_prefix(self._kv).items()}
 
     def now(self) -> datetime:
         return self._clock()
@@ -108,23 +130,23 @@ class MeetImporter:
 
     def backoff_until(self) -> Optional[datetime]:
         """End of a ``Retry-After`` pause requested by Google (429), if one is pending."""
-        raw = self._service().repo.kv_get(KV + "retry_after_until")
+        raw = self._service().repo.kv_get(self._kv + "retry_after_until")
         return convert.parse_time(raw) if raw else None
 
     # -- per-record memory (kv, outside the status prefix) ------------------------------------------
     def _record_state(self, repo: Any) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
-        for key, raw in repo.kv_prefix(RECORD_KV).items():
+        for key, raw in repo.kv_prefix(self._record_kv).items():
             try:
                 data = json.loads(raw)
             except ValueError:
                 continue
             if isinstance(data, dict):
-                out[key[len(RECORD_KV):]] = data
+                out[key[len(self._record_kv):]] = data
         return out
 
     def _remember(self, repo: Any, name: str, data: Optional[dict[str, Any]]) -> None:
-        repo.kv_set(RECORD_KV + name, None if data is None else json.dumps(data, ensure_ascii=False))
+        repo.kv_set(self._record_kv + name, None if data is None else json.dumps(data, ensure_ascii=False))
 
     def _prune(self, repo: Any, memory: dict[str, dict[str, Any]]) -> None:
         """Forget records Meet itself has deleted (30 days after they ended)."""
@@ -194,11 +216,11 @@ class MeetImporter:
             self._pause(repo, exc, dry_run)
             raise
         report.listed = len(records)
-        known = repo.known_external_ids(SOURCE_GOOGLE_MEET)
+        known = repo.known_external_ids(self.space, SOURCE_GOOGLE_MEET)
         memory = self._record_state(repo)
         if not dry_run:
             self._prune(repo, memory)
-            repo.kv_set(KV + "retry_after_until", None)
+            repo.kv_set(self._kv + "retry_after_until", None)
         for rec in sorted(records, key=lambda r: str(r.get("endTime") or "")):
             if should_stop():
                 report.stopped = True
@@ -235,7 +257,7 @@ class MeetImporter:
         """Honour ``Retry-After`` (capped at 6 h): the poller skips its passes until then."""
         if exc.retry_after and not dry_run:
             until = self._clock() + timedelta(seconds=min(max(float(exc.retry_after), 0.0), 6 * 3600.0))
-            repo.kv_set(KV + "retry_after_until", convert.rfc3339(until))
+            repo.kv_set(self._kv + "retry_after_until", convert.rfc3339(until))
 
     def _failed(self, repo: Any, name: str, rec: dict, seen: dict, exc: BaseException, report: SyncReport,
                 dry_run: bool) -> None:
@@ -295,7 +317,8 @@ class MeetImporter:
             id=short_id(), guild_id="", channel_id=f"gmeet:{space.rsplit('/', 1)[-1] or name}",
             channel_name=code or "Google Meet", started_at=start, ended_at=end or start,
             state=MeetingState.TRANSCRIBED, title=convert.default_title(start, code), speakers=tuple(speakers),
-            language=convert.majority_language(entries), source=SOURCE_GOOGLE_MEET, external_id=name)
+            language=convert.majority_language(entries), source=SOURCE_GOOGLE_MEET, external_id=name,
+            space=self.space)
         created = self._service().import_transcript(meeting, utterances)
         if created is None:
             report.already += 1
@@ -316,7 +339,7 @@ def _describe(exc: BaseException) -> str:
 
 
 class MeetPoller:
-    """Daemon thread; one per runtime. Only the lease holder syncs.
+    """Daemon thread; one per space. Only the holder of the space's lease syncs.
 
     ``stop()`` sets a flag checked between records and before every page request, so the pass ends
     at the next request boundary; the THREAD releases the lease when it exits (after its last DB
@@ -326,9 +349,11 @@ class MeetPoller:
     FIRST_DELAY = 5.0  # first poll shortly after start, not in the middle of startup
     LEFTOVER_AGE_SECONDS = 3600.0  # import folders without a row older than this are crash leftovers
 
-    def __init__(self, *, importer: Callable[[], Optional[MeetImporter]], repo: Callable[[], Any],
+    def __init__(self, *, space: str, importer: Callable[[], Optional[MeetImporter]], repo: Callable[[], Any],
                  settings: Callable[[], Any], connected_at: Callable[[], Optional[float]], owner: str,
                  spawner: Optional[Callable[..., threading.Thread]] = None) -> None:
+        self.space = space
+        self._lease = lease_name(space)
         self._importer = importer
         self._repo = repo
         self._settings = settings
@@ -354,7 +379,7 @@ class MeetPoller:
             self._stop.clear()
             spawn = self._spawner or (lambda target, *, name, daemon: threading.Thread(target=target, name=name,
                                                                                         daemon=daemon))
-            self._thread = spawn(self._loop, name="meeting-scribe-gmeet", daemon=True)
+            self._thread = spawn(self._loop, name=f"meeting-scribe-gmeet-{self.space}", daemon=True)
             self._thread.start()
 
     def stop(self, timeout: float = 10.0) -> None:
@@ -374,7 +399,7 @@ class MeetPoller:
         if repo is None:
             return
         try:
-            repo.release_lease(LEASE, self.owner)
+            repo.release_lease(self._lease, self.owner)
         except Exception:  # repo already closed on unload
             pass
 
@@ -383,7 +408,7 @@ class MeetPoller:
         if not self._settings().google_meet_enabled:
             return None
         repo = self._repo()
-        if not repo.acquire_lease(LEASE, self.owner, ttl=self.interval() * 3):
+        if not repo.acquire_lease(self._lease, self.owner, ttl=self.interval() * 3):
             return None
         self._leased_repo = repo
         importer = self._importer()
@@ -391,7 +416,8 @@ class MeetPoller:
             return None
         pause = importer.backoff_until()
         if pause is not None and pause > importer.now():
-            log.info("meeting-scribe: Google asked to retry after %s; skipping this poll", pause.isoformat())
+            log.info("meeting-scribe: Google asked space %s to retry after %s; skipping this poll", self.space,
+                     pause.isoformat())
             return None
         try:  # crash leftovers of an earlier import (files written, row never committed)
             importer.clean_leftovers(older_than=self.LEFTOVER_AGE_SECONDS)

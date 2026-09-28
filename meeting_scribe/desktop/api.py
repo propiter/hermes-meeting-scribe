@@ -82,14 +82,18 @@ def _ctx(request: Request) -> Iterator[dict[str, Any]]:
     The ``?profile=`` Desktop adds for its active profile is deliberately not used: the plugin's data
     and settings belong to the profile where it is installed (``meeting_scribe.home``), so every
     profile shows the same library."""
+    from ..spaces import bootstrap
     from ..storage.repo import Repository
+    from .queries import only_space
 
     try:
         with SEAMS["owner_scope"]():
             root = Path(SEAMS["data_dir"]())
             repo = Repository(root / "index.sqlite")
             try:
-                yield {"root": root, "repo": repo}
+                if not repo.list_spaces():  # the gateway normally did it; idempotent under its lock
+                    bootstrap(repo, SEAMS["settings_store"]().settings(), root)
+                yield {"root": root, "repo": repo, "space": only_space(repo)}
             finally:
                 repo.close()
     except HTTPException:
@@ -102,10 +106,25 @@ def _ctx(request: Request) -> Iterator[dict[str, Any]]:
         raise HTTPException(400, redact(str(exc))) from exc
 
 
+def _space(c: dict[str, Any]) -> str:
+    """The Desktop has no space selector yet (DESIGN §23): with several spaces it refuses rather than
+    mix teams' meetings in one library."""
+    if c.get("space") is None:
+        raise HTTPException(409, "this installation has several spaces; the Desktop cannot choose one yet")
+    return c["space"]
+
+
 def _library(c: dict[str, Any]) -> Any:
     from .queries import Library
 
-    return Library(c["repo"], c["root"])
+    return Library(c["repo"], c["root"], _space(c))
+
+
+def _command_in_space(c: dict[str, Any], request_id: str) -> None:
+    """A command is visible only through its meeting's space (unknown ids stay a plain 404)."""
+    row = c["repo"]._x("SELECT meeting_id FROM desktop_commands WHERE id=?", (request_id,)).fetchone()
+    if row is not None:
+        _library(c).require(row["meeting_id"])
 
 
 def _mid(meeting_id: str) -> str:
@@ -189,6 +208,7 @@ def submit_command(request: Request, meeting_id: str, body: dict[str, Any] = Bod
     from .control import Commands
 
     with _ctx(request) as c:
+        _library(c).require(_mid(meeting_id))  # a meeting of this space only (404 otherwise)
         return Commands(c["repo"]).submit(rid, _mid(meeting_id), command)
 
 
@@ -199,6 +219,7 @@ def get_command(request: Request, request_id: str) -> dict[str, Any]:
     from .control import Commands
 
     with _ctx(request) as c:
+        _command_in_space(c, request_id)
         return Commands(c["repo"]).get(request_id)
 
 
@@ -212,6 +233,7 @@ def acknowledge_command(request: Request, request_id: str, body: dict[str, Any] 
     from .control import Commands
 
     with _ctx(request) as c:
+        _command_in_space(c, request_id)
         return Commands(c["repo"]).acknowledge(request_id)
 
 

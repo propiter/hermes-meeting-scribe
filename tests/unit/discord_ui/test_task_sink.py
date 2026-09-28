@@ -76,7 +76,7 @@ def env(tmp_path, meeting, notes):
     def make():
         s = settings_from_mapping(cfg)
         return DiscordNotesSink(
-            settings=lambda: s, service=lambda: svc, adapter=lambda: adapter, loop=lambda: state["loop"],
+            settings=lambda space=None: s, service=lambda: svc, adapter=lambda: adapter, loop=lambda: state["loop"],
             options=lambda mm: RenderOptions(lang="en", kanban_on=True, linear_on=False,
                                              is_owner_item=lambda i: i.owner_speaker_id == "11"),
             views=Views(), timeout=5)
@@ -193,7 +193,7 @@ async def test_move_reposts_in_the_right_thread_deletes_the_old_message_and_lear
     _, neb = thread_of(env, env.nebula)
     assert any("Budget" in m.content for m in neb.ordered())
     assert ptr(env, "task:a3")["target"] == "502"
-    assert env.svc.repo.project_channel("nebula") == "502"
+    assert env.svc.repo.project_channel("main", "nebula") == "502"
     await deliver(env, sink)  # a reprocess keeps it there, no duplicate
     public = [c for c in env.bot.channels.values() if not c.name.startswith("dm-")]
     assert sum("Budget" in m.content for c in public for m in c.ordered()) == 1
@@ -202,7 +202,7 @@ async def test_move_reposts_in_the_right_thread_deletes_the_old_message_and_lear
 async def test_move_learns_the_spoken_name(env):
     sink = await deliver(env)
     await sink.move_item(env.meeting.id, "a2", "501")
-    assert env.svc.repo.project_channel("Nebulla") == "501"
+    assert env.svc.repo.project_channel("main", "Nebulla") == "501"
 
 
 async def test_move_options_rank_the_likely_channels_first(env):
@@ -220,7 +220,7 @@ async def test_task_panel_for_the_clicker(env):
 
 
 async def test_not_connected_is_a_soft_failure(env):
-    sink = DiscordNotesSink(settings=lambda: settings_from_mapping({}), service=lambda: env.svc,
+    sink = DiscordNotesSink(settings=lambda space=None: settings_from_mapping({}), service=lambda: env.svc,
                             adapter=lambda: None, loop=lambda: None, options=lambda m: None, views=Views())
     res = sink.deliver(env.meeting, env.notes, env.svc.folder(env.meeting))
     assert not res.ok and "not connected" in res.errors[0]
@@ -254,7 +254,7 @@ async def test_an_assignee_move_does_not_reroute_other_peoples_tasks(env):
     env.notes = n
     sink = await deliver(env)
     await sink.move_item(env.meeting.id, "a2", "501", learn=False)  # Ana moves HER task
-    assert env.svc.repo.project_channel("Nebulla") is None
+    assert env.svc.repo.project_channel("main", "Nebulla") is None
     assert ptr(env, "task:a2")["target"] == "501" and ptr(env, "task:a4")["target"] == "502"
 
 

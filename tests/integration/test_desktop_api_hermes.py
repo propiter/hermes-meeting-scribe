@@ -67,6 +67,8 @@ def _seed(home: Path) -> str:
 
     from meeting_scribe.domain.models import Meeting, MeetingState, Utterance
     from meeting_scribe.storage.layout import Layout
+    from meeting_scribe.config import Settings
+    from meeting_scribe.spaces import bootstrap
     from meeting_scribe.storage.repo import Repository
 
     root = home / "plugin-data" / "meeting-scribe"
@@ -74,10 +76,11 @@ def _seed(home: Path) -> str:
     layout = Layout(lambda: root)
     m = Meeting(id="int0001a", guild_id="100", channel_id="200", channel_name="Daily Sync",
                 started_at=datetime(2026, 9, 26, 15, 4, tzinfo=timezone.utc), state=MeetingState.DONE,
-                title="Daily Sync")
+                title="Daily Sync", space="main")
     folder = layout.meeting_folder(m)
     folder.mkdir(parents=True)
     repo = Repository(root / "index.sqlite")
+    bootstrap(repo, Settings.defaults(), root)  # what the gateway does on first open (DESIGN §23)
     repo.save_meeting(replace(m, folder=layout.relative(folder), state=MeetingState.DONE))
     repo.replace_utterances(m.id, [Utterance(0.0, 2.0, "10", "Ana", "Hola equipo")])
     repo.close()

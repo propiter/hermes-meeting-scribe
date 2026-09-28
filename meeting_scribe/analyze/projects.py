@@ -16,7 +16,7 @@ from ..domain.models import Candidate, Meeting, ProjectResolution
 
 
 class LearnedMap(Protocol):
-    def channel_project(self, channel_id: str) -> Optional[dict[str, str]]: ...
+    def channel_project(self, space: str, channel_id: str) -> Optional[dict[str, str]]: ...
 
 
 def _norm(text: str) -> str:
@@ -41,7 +41,7 @@ class LearnedCatalog:
         self._repo = repo
 
     def candidates(self, meeting: Meeting) -> list[Candidate]:
-        row = self._repo.channel_project(meeting.channel_id)
+        row = self._repo.channel_project(meeting.space, meeting.channel_id)
         return [Candidate(row["project_key"], row["project_name"], "learned")] if row else []
 
 
@@ -93,7 +93,7 @@ class ProjectResolver:
         self._learned = learned
 
     def learned_first(self, meeting: Meeting, candidates: Sequence[Candidate]) -> Optional[Candidate]:
-        row = self._learned.channel_project(meeting.channel_id)
+        row = self._learned.channel_project(meeting.space, meeting.channel_id)
         if not row:
             return None
         return next((c for c in candidates if c.key == row["project_key"]),

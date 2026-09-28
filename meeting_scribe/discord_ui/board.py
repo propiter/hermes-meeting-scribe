@@ -53,7 +53,7 @@ def items_of(repo: Any, meeting: Meeting, notes: Notes) -> list[ActionItem]:
 def build_board(repo: Any, settings: Settings, meeting: Meeting, notes: Notes,
                 channels: Sequence[ChannelInfo]) -> Board:
     ctx = RouteContext(channel_map=settings.project_channel_map(), min_score=settings.project_match_min_score,
-                       ignore_prefixes=settings.channel_name_ignore_prefixes, learned=repo.project_channel)
+                       ignore_prefixes=settings.channel_name_ignore_prefixes, learned=lambda project: repo.project_channel(meeting.space, project))
     refs = _refs(repo, meeting.id)
     views = tuple(TaskView(item, route_item(item, meeting, channels, ctx), refs.get(item.id, {}))
                   for item in items_of(repo, meeting, notes))

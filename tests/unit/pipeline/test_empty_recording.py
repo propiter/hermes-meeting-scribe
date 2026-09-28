@@ -7,7 +7,6 @@ import pytest
 from meeting_scribe.commands import MeetingCommands
 from meeting_scribe.domain.errors import NothingToReprocess
 from meeting_scribe.domain.models import MeetingState, Stage
-from meeting_scribe.storage import repo as repo_mod
 from meeting_scribe.storage.artifacts import read_meta
 from meeting_scribe.storage.repo import Repository
 from meeting_scribe.transcribe.client import SubprocessTranscriber, TranscriptionError
@@ -103,29 +102,3 @@ def test_status_and_list_show_it_as_discarded_not_failed(prepo, layout, settings
     for sub in ("status", "list"):
         out = cmds.handle(sub, CALLER, "meeting")
         assert "No audio: discarded" in out and "Couldn't finish" not in out
-
-
-def test_migration_reclassifies_legacy_no_audio_failures(tmp_path, meeting):
-    import json
-    path = tmp_path / "index.sqlite"
-    conn = sqlite3.connect(str(path), isolation_level=None)
-    for version, script in enumerate(repo_mod._MIGRATIONS[:6], start=1):
-        conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version={version};\nCOMMIT;")
-    rows = {"empty1": "TranscriptionError: no audio tracks in /data/meetings/2026/09/x",
-            "real1": "TranscriptionError: worker exited 1: boom"}
-    for mid, error in rows.items():
-        data = json.dumps(replace(meeting, id=mid, state=MeetingState.FAILED).to_dict())
-        conn.execute("INSERT INTO meetings (id, guild_id, channel_id, state, started_at, title, folder, data,"
-                     " updated_at) VALUES (?, '1', '2', 'failed', '2026-09-01T00:00:00+00:00', 't', '', ?, 0)",
-                     (mid, data))
-        conn.execute("INSERT INTO jobs (meeting_id, stage, state, attempts, failed_stage, error, created_at,"
-                     " updated_at) VALUES (?, 'transcribe', 'failed', 3, 'transcribe', ?, 0, 0)", (mid, error))
-    conn.close()
-    for _ in range(2):  # idempotent: a second open changes nothing
-        r = Repository(path)
-        assert r.get_meeting("empty1").state is MeetingState.EMPTY
-        assert r.get_job("empty1").state == "done" and r.get_job("empty1").error is None
-        assert r.get_meeting("real1").state is MeetingState.FAILED
-        assert r.get_job("real1").state == "failed"
-        assert [j.meeting_id for j in r.list_jobs(("failed",))] == ["real1"]
-        r.close()

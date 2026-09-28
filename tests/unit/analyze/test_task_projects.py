@@ -17,7 +17,7 @@ CANDS = [Candidate("discord:501", "orion", "discord", {"channel_id": "501"}),
 
 def run(meeting, utterances, items):
     llm = FakeLLM(lambda n, t: full(project=None, project_confidence=0, action_items=items))
-    return LlmAnalyzer(llm, lambda: settings_from_mapping({})).analyze(meeting, utterances, CANDS), llm
+    return LlmAnalyzer(llm, lambda space=None: settings_from_mapping({})).analyze(meeting, utterances, CANDS), llm
 
 
 def test_two_tasks_of_one_meeting_get_different_projects(meeting, utterances):

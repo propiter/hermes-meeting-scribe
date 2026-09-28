@@ -90,7 +90,7 @@ def test_full_pipeline_to_done(prepo, layout, settings, clock, meeting):
     assert done.title == "Informe semanal"
     assert [u.text for u in read_transcript(folder)] == ["Hola equipo", "Yo envío el informe"]
     assert read_notes(folder).action_items[0].id == "a1"
-    assert prepo.search("informe")[0]["meeting_id"] == m.id
+    assert prepo.search("informe", "main")[0]["meeting_id"] == m.id
     assert [a.id for a in prepo.list_action_items(m.id)] == ["a1"]
     assert sinks[0].calls == [m.id] and prepo.get_job(m.id).state == "done"
     assert (m.id, "done") in events

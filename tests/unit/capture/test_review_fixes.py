@@ -73,7 +73,7 @@ def world(tmp_path: Path) -> SimpleNamespace:
     adapter = FakeAdapter(FakeBot([guild]))
     cfg: dict = {"autoleave_grace_seconds": 60, "autojoin_grace_seconds": 0, "autojoin_min_humans": 2}
     return SimpleNamespace(guild=guild, voice=voice, adapter=adapter, cfg=cfg, clock=Clock(), tmp=tmp_path,
-                           settings=lambda: settings_from_mapping(cfg), members=(a, b))
+                           settings=lambda space=None: settings_from_mapping(cfg), members=(a, b))
 
 
 def session(world: SimpleNamespace, svc: Optional[Svc] = None, factory: Any = None) -> RecordingSession:

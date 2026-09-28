@@ -312,5 +312,9 @@
   "ui.source.kanban": "Tablero Kanban",
   "ui.source.learned": "Usado antes en este canal",
   "ui.source.linear": "Proyecto de Linear",
-  "space.first_name": "Principal"
+  "space.first_name": "Principal",
+  "space.choose": "Esta instalación tiene varios espacios: ejecuta el comando dentro de un servidor de Discord del espacio que quieras.",
+  "space.choose_cli": "Esta instalación tiene varios espacios y este comando aún no puede elegir uno: úsalo desde un servidor de Discord del espacio.",
+  "space.unassigned": "Este servidor de Discord no pertenece a ningún espacio, así que aquí no se graba ni se muestra nada. Un administrador puede añadirlo a un espacio.",
+  "capture.unassigned": "Este servidor de Discord no pertenece a ningún espacio, así que no se graba. Un administrador puede añadirlo a un espacio."
 }

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from meeting_scribe.domain.models import SOURCE_GOOGLE_MEET, MeetingState, Stage
-from meeting_scribe.google.importer import LEASE, MeetImporter, MeetPoller
+from meeting_scribe.google.importer import MeetImporter, MeetPoller, lease_name
 from meeting_scribe.google.meet_api import MeetClient
 from meeting_scribe.pipeline.service import MeetingService
 from meeting_scribe.storage.artifacts import read_transcript
@@ -17,6 +17,7 @@ from .test_runner import build, drain
 from tests.unit.gmeet.fake_meet import FakeMeet
 from tests.unit.gmeet.fakes import FakeTransport
 
+LEASE = lease_name("main")  # one poller per space (DESIGN §23)
 NOW = datetime(2026, 9, 26, 16, 0, tzinfo=timezone.utc)
 
 
@@ -34,7 +35,7 @@ def world(prepo, layout, settings, clock):
                              catalogs=lambda: runner.stages.catalogs())
     meet = FakeMeet()
     client = MeetClient(Creds(), transport=FakeTransport(meet))
-    importer = MeetImporter(service=lambda: service, client=lambda: client, clock=lambda: NOW)
+    importer = MeetImporter(space="main", service=lambda: service, client=lambda: client, clock=lambda: NOW)
     return service, runner, analyzer, sinks, meet, importer
 
 
@@ -59,7 +60,7 @@ def test_import_enters_transcribed_and_runs_analyze_deliver(world, layout):
     drain(runner)
     done = service.repo.get_meeting(m.id)
     assert done.state is MeetingState.DONE and analyzer.calls == 1 and sinks[0].calls == [m.id]
-    assert service.search("presentación")  # utterances are indexed for search
+    assert service.search("presentación", "main")  # utterances are indexed for search
 
 
 def test_same_conference_twice_is_imported_once(world):
@@ -157,11 +158,11 @@ def test_poller_tick_needs_setting_and_lease(world, prepo):
     _svc, _r, _a, _s, meet, importer = world
     meet.add("r1")
     cfg = {"google_meet_enabled": False}
-    settings = lambda: settings_from_mapping(cfg)  # noqa: E731
+    settings = lambda space=None: settings_from_mapping(cfg)  # noqa: E731
     connected = (NOW - timedelta(days=1)).timestamp()
-    a = MeetPoller(importer=lambda: importer, repo=lambda: prepo, settings=settings, connected_at=lambda: connected,
+    a = MeetPoller(space="main", importer=lambda: importer, repo=lambda: prepo, settings=settings, connected_at=lambda: connected,
                    owner="host:1")
-    b = MeetPoller(importer=lambda: importer, repo=lambda: prepo, settings=settings, connected_at=lambda: connected,
+    b = MeetPoller(space="main", importer=lambda: importer, repo=lambda: prepo, settings=settings, connected_at=lambda: connected,
                    owner="host:2")
     assert a.tick() is None  # disabled
     cfg["google_meet_enabled"] = True
@@ -176,7 +177,7 @@ def test_poller_tick_needs_setting_and_lease(world, prepo):
 
 def test_poller_thread_starts_and_stops_cleanly(world, prepo):
     _svc, _r, _a, _s, _meet, importer = world
-    p = MeetPoller(importer=lambda: importer, repo=lambda: prepo,
+    p = MeetPoller(space="main", importer=lambda: importer, repo=lambda: prepo,
                    settings=lambda: settings_from_mapping({}), connected_at=lambda: None, owner="x")
     p.start()
     p.start()  # idempotent

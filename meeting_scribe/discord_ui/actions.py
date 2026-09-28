@@ -8,6 +8,7 @@ counts) is re-rendered; a click that came from an ephemeral panel re-renders the
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import re
 from typing import Any, Callable, Optional, Sequence
@@ -22,6 +23,7 @@ log = logging.getLogger(__name__)
 SELECT_LIMIT = 25
 REPLY_LIMIT = 1900  # Discord rejects messages over 2000 characters (review S2)
 _PAGE_RE = re.compile(r"^(?P<scope>[am])(?P<page>\d{1,3})$")
+_SPACE: contextvars.ContextVar[str] = contextvars.ContextVar("meeting_scribe_click_space", default="")
 
 
 def clip_reply(text: str, limit: int = REPLY_LIMIT) -> str:
@@ -60,8 +62,8 @@ def _from_panel(interaction: Any) -> bool:
 
 
 class ButtonActions:
-    def __init__(self, *, service: Callable[[], Any], settings: Callable[[], Settings],
-                 owners: Callable[[], Sequence[str]], check_auth: Callable[[Any], bool], sink: Callable[[], Any],
+    def __init__(self, *, service: Callable[[], Any], settings: Callable[..., Settings],
+                 owners: Callable[..., Sequence[str]], check_auth: Callable[[Any], bool], sink: Callable[[], Any],
                  project_view: Callable[[str, Sequence[Candidate]], Any],
                  move_view: Callable[[str, str, Sequence[tuple[str, str]]], Any]) -> None:
         self._service = service
@@ -72,15 +74,28 @@ class ButtonActions:
         self._project_view = project_view
         self._move_view = move_view
 
+    # Every click acts on ONE meeting: its space's language and owners apply (DESIGN §23). The space
+    # is looked up once per click and kept in a context variable (clicks run concurrently).
+    @property
+    def space(self) -> str:
+        return _SPACE.get()
+
     @property
     def lang(self) -> str:
-        return self._settings().ui_language
+        return (self._settings(self.space) if self.space else self._settings()).ui_language
 
     def _uid(self, interaction: Any) -> str:
         return str(getattr(interaction.user, "id", ""))
 
     def _owner_ids(self) -> frozenset[str]:
-        return frozenset(str(o) for o in self._owners())
+        return frozenset(str(o) for o in (self._owners(self.space) if self.space else self._owners()))
+
+    def _meeting_space(self, meeting_id: str) -> str:
+        try:
+            meeting = self._service().repo.get_meeting(meeting_id)
+        except Exception:  # storage trouble: the action itself reports it
+            return ""
+        return getattr(meeting, "space", "") or "" if meeting is not None else ""
 
     def is_owner(self, interaction: Any) -> bool:
         return self._uid(interaction) in self._owner_ids()
@@ -118,6 +133,14 @@ class ButtonActions:
                      values: Optional[Sequence[str]] = None) -> None:
         if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS:
             return
+        token = _SPACE.set(await asyncio.to_thread(self._meeting_space, meeting_id))
+        try:
+            await self._handle(interaction, action, meeting_id, item_id, values)
+        finally:
+            _SPACE.reset(token)
+
+    async def _handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
+                      values: Optional[Sequence[str]]) -> None:
         if not await self._authorize(interaction, action, meeting_id, item_id):
             return
         if values is None:

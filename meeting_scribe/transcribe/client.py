@@ -55,7 +55,7 @@ def _segments(raw: Sequence[Mapping[str, Any]]) -> list[RawSegment]:
 
 
 class SubprocessTranscriber:
-    def __init__(self, settings: Callable[[], Settings], ffmpeg: Callable[[], Ffmpeg], *,
+    def __init__(self, settings: Callable[[str], Settings], ffmpeg: Callable[[], Ffmpeg], *,
                  command: Optional[Sequence[str]] = None, extra_job: Optional[Mapping[str, Any]] = None,
                  timeout_floor: float = 600.0, poll_interval: float = 1.0) -> None:
         self._settings = settings
@@ -91,7 +91,7 @@ class SubprocessTranscriber:
     # -- port -----------------------------------------------------------------------------------
     def transcribe(self, meeting: Meeting, folder: Path,
                    progress: Optional[Callable[[str, float], None]] = None) -> list[Utterance]:
-        settings, ff = self._settings(), self._ffmpeg()
+        settings, ff = self._settings(meeting.space), self._ffmpeg()  # transcribe_language is per space
         tracks, restored = self._tracks(ff, folder)
         work = folder / ".work"
         work.mkdir(parents=True, exist_ok=True)

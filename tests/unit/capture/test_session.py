@@ -78,7 +78,7 @@ def world(tmp_path):
 
     def deps(**over: Any) -> SessionDeps:
         s = settings_from_mapping({**cfg, **over})
-        return SessionDeps(service=service, settings=lambda: s, receiver_cls=scribe_receiver_class(FakeVoiceReceiver),
+        return SessionDeps(service=service, settings=lambda space=None: s, receiver_cls=scribe_receiver_class(FakeVoiceReceiver),
                            writer_factory=lambda path, t0: FakeWriter(path, t0), clock=clock,
                            now=lambda: datetime(2026, 9, 26, 15, 0, tzinfo=timezone.utc), tick=0.001)
     return dict(guild=guild, voice=voice, adapter=adapter, clock=clock, service=service, deps=deps, ana=ana)

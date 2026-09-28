@@ -89,7 +89,10 @@ class DiscordChannelCatalog:
 
     def __init__(self, *, adapter: Callable[[], Any], loop: Callable[[], Optional[asyncio.AbstractEventLoop]],
                  ignore_prefixes: Callable[[], Sequence[str]],
-                 guild_for: Optional[Callable[[Meeting], Any]] = None) -> None:
+                 guild_for: Optional[Callable[[Meeting], Any]] = None,
+                 ignore_for: Optional[Callable[[Meeting], Sequence[str]]] = None) -> None:
+        """``ignore_for(meeting)``: the meeting space's ignored prefixes (DESIGN §23), when given."""
+        self._ignore_for = ignore_for
         self._adapter = adapter
         self._loop = loop
         self._ignore = ignore_prefixes
@@ -110,4 +113,5 @@ class DiscordChannelCatalog:
         except Exception as exc:  # loop busy/closing: fewer candidates, never a failed analysis
             log.info("meeting-scribe: Discord channel catalog unavailable: %s", exc)
             return []
-        return to_candidates(channels, tuple(self._ignore()))
+        ignore = self._ignore_for(meeting) if self._ignore_for is not None else self._ignore()
+        return to_candidates(channels, tuple(ignore))

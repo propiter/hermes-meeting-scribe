@@ -248,22 +248,22 @@ def match_linear_user(speaker: Speaker, users: Sequence[Mapping[str, Any]],
 class LinearSink(ItemSink):
     name = "linear"
 
-    def __init__(self, settings: Callable[[], Settings], store: DeliveryStore,
+    def __init__(self, settings: Callable[[str], Settings], store: DeliveryStore,
                  backend: Callable[[], Optional[LinearBackend]], *, project_for: ProjectFor) -> None:
         super().__init__(settings, store, project_for)
         self._backend = backend
-        self._link = getattr(store, "get_link", lambda _id: None)
+        self._link = getattr(store, "get_link", lambda _space, _id: None)
 
-    def mode(self) -> str:
-        return self._settings().linear_mode
+    def mode(self, meeting: Meeting) -> str:
+        return self._settings(meeting.space).linear_mode
 
     def active(self) -> bool:
         return self._backend() is not None
 
-    def _team(self, backend: LinearBackend, team_ids: Sequence[str]) -> str:
+    def _team(self, meeting: Meeting, backend: LinearBackend, team_ids: Sequence[str]) -> str:
         if team_ids:
             return str(team_ids[0])
-        wanted = self._settings().linear_default_team.strip()
+        wanted = self._settings(meeting.space).linear_default_team.strip()
         if wanted:
             for team in backend.teams():
                 if wanted.lower() in (str(team.get("id")).lower(), str(team.get("key")).lower(),
@@ -287,10 +287,10 @@ class LinearSink(ItemSink):
             raise LinearError("Linear is not connected")
         cand = self._project_for(meeting, notes, item)
         ref = cand.ref if cand is not None and cand.source == "linear" else {}
-        lang = notes.language or self._settings().ui_language
+        lang = notes.language or self._settings(meeting.space).ui_language
         when = meeting.started_at + timedelta(seconds=item.t0 or 0)
         issue: dict[str, Any] = {
-            "teamId": self._team(backend, list(ref.get("team_ids") or ())), "title": item.title,
+            "teamId": self._team(meeting, backend, list(ref.get("team_ids") or ())), "title": item.title,
             "description": t("sink.linear_issue_body", lang, description=item.description or item.title,
                              quote=item.quote or "-", title=notes.meeting_title or meeting.title,
                              date=when.date().isoformat(), ts=fmt_ts(item.t0 or 0)) + f"\n\n`{key}`"}
@@ -301,7 +301,7 @@ class LinearSink(ItemSink):
         if item.owner_speaker_id:
             speaker = next((s for s in meeting.speakers if s.user_id == item.owner_speaker_id),
                            Speaker(item.owner_speaker_id, item.owner_name or ""))
-            user = match_linear_user(speaker, backend.users(), self._link(item.owner_speaker_id))
+            user = match_linear_user(speaker, backend.users(), self._link(meeting.space, item.owner_speaker_id))
             if user:
                 issue["assigneeId"] = user["id"]
         created = backend.create_issue(issue)

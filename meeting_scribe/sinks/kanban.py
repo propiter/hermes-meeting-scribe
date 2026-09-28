@@ -48,22 +48,22 @@ class HermesKanban:
 class KanbanSink(ItemSink):
     name = "kanban"
 
-    def __init__(self, settings: Callable[[], Settings], store: DeliveryStore, gateway: KanbanGateway, *,
-                 owners: Callable[[], tuple[str, ...]], project_for: ProjectFor) -> None:
+    def __init__(self, settings: Callable[[str], Settings], store: DeliveryStore, gateway: KanbanGateway, *,
+                 owners: Callable[[str], tuple[str, ...]], project_for: ProjectFor) -> None:
         super().__init__(settings, store, project_for)
         self._gw = gateway
         self._owners = owners
 
-    def mode(self) -> str:
-        return self._settings().kanban_mode
+    def mode(self, meeting: Meeting) -> str:
+        return self._settings(meeting.space).kanban_mode
 
-    def eligible(self, item: ActionItem) -> bool:
-        return bool(item.owner_speaker_id) and item.owner_speaker_id in self._owners()
+    def eligible(self, meeting: Meeting, item: ActionItem) -> bool:
+        return bool(item.owner_speaker_id) and item.owner_speaker_id in self._owners(meeting.space)
 
     def _target(self, meeting: Meeting, notes: Notes, item: ActionItem) -> tuple[Optional[str], Optional[str]]:
         """``(board, project_id)``: a Hermes project brings its own board; a kanban candidate is a board."""
         cand = self._project_for(meeting, notes, item)
-        board = self._settings().kanban_board or None
+        board = self._settings(meeting.space).kanban_board or None
         if cand is not None and cand.source == "hermes":
             return (cand.ref.get("board_slug") or board), cand.ref.get("project_id")
         if cand is not None and cand.source == "kanban":
@@ -72,7 +72,7 @@ class KanbanSink(ItemSink):
 
     def _create(self, meeting: Meeting, notes: Notes, item: ActionItem, folder: Path,
                 key: str) -> tuple[str, Optional[str]]:
-        lang = notes.language or self._settings().ui_language
+        lang = notes.language or self._settings(meeting.space).ui_language
         when = meeting.started_at + timedelta(seconds=item.t0 or 0)
         body = t("sink.kanban_task_body", lang, description=item.description or item.title, quote=item.quote or "-",
                  title=notes.meeting_title or meeting.title, date=when.date().isoformat(),
