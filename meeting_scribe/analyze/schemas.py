@@ -3,9 +3,14 @@
 Hermes VALIDATES ``complete_structured`` output against the schema we send (jsonschema) and raises
 on any violation, so a strict schema turns one extra ``priority`` field or a ``"t0": "12:30"`` into
 a failed analyze stage (review finding 8). The schemas therefore describe the shape we *want* but
-only require what we cannot do without (item ``title``); everything else is optional, nullable and
-open to extra properties — :mod:`extract` normalises every variant. ``HermesStructuredLLM`` also
-retries once with plain JSON mode and no schema if validation still fails.
+only require what we cannot do without (item ``title``); everything else is optional and nullable,
+and :mod:`extract` normalises every variant.
+
+Every object is closed (``additionalProperties: false``): providers with strict structured output
+(Anthropic, OpenAI ``strict``) reject any schema whose objects are left open, with HTTP 400 on every
+call, so an open schema breaks analysis as soon as the fallback chain reaches such a provider. A model
+that still adds an extra field fails Hermes' validation instead, and ``HermesStructuredLLM`` then
+retries once in plain JSON mode without a schema.
 """
 from __future__ import annotations
 
@@ -28,11 +33,13 @@ _ACTION_ITEM: dict[str, Any] = {
         "t0": _NULLABLE_NUM,
     },
     "required": ["title"],
+    "additionalProperties": False,
 }
 _TOPIC: dict[str, Any] = {
     "type": "object",
     "properties": {"title": {"type": "string"}, "points": {"type": ["array", "null"], "items": {"type": "string"}}},
     "required": ["title"],
+    "additionalProperties": False,
 }
 _STR_LIST: dict[str, Any] = {"type": ["array", "null"], "items": {"type": "string"}}
 _ITEMS: dict[str, Any] = {"type": ["array", "null"], "items": _ACTION_ITEM}
@@ -42,6 +49,7 @@ CHUNK_SCHEMA: dict[str, Any] = {
     "properties": {"summary": {"type": "string"}, "topics": {"type": ["array", "null"], "items": _TOPIC},
                    "decisions": _STR_LIST, "open_questions": _STR_LIST, "action_items": _ITEMS},
     "required": ["summary", "action_items"],
+    "additionalProperties": False,
 }
 
 NOTES_SCHEMA: dict[str, Any] = {
@@ -53,4 +61,5 @@ NOTES_SCHEMA: dict[str, Any] = {
         "project": _NULLABLE_STR, "project_confidence": _NULLABLE_NUM,
     },
     "required": ["meeting_title", "tldr", "summary", "action_items"],
+    "additionalProperties": False,
 }

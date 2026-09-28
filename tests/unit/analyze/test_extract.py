@@ -152,8 +152,8 @@ def test_normaliser_handles_loose_llm_variants(meeting, utterances, patch, expec
 
 def test_schemas_only_require_what_extract_needs():
     item = NOTES_SCHEMA["properties"]["action_items"]["items"]
-    assert item["required"] == ["title"] and item.get("additionalProperties", True) is not False
-    assert NOTES_SCHEMA.get("additionalProperties", True) is not False
+    assert item["required"] == ["title"]
+    assert NOTES_SCHEMA["required"] == ["meeting_title", "tldr", "summary", "action_items"]
 
 
 @pytest.mark.parametrize("single", [True, False])

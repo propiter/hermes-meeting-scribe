@@ -19,7 +19,6 @@ BASE = {"meeting_title": "x", "tldr": "", "summary": "", "topics": [], "decision
 
 @pytest.mark.parametrize("item", [
     {k: v for k, v in ITEM.items() if k != "quote"},        # model omits one field
-    {**ITEM, "priority": "high"},                          # extra field
     {**ITEM, "project_confidence": None},
     {**ITEM, "t0": "12:30"},                               # string timestamp
     {"title": "only a title"},
@@ -34,6 +33,12 @@ def test_chunk_schema_tolerates_missing_lists():
     parsed, kind = plugin_llm._parse_structured_text(text=json.dumps({"summary": "s", "action_items": []}),
                                                      json_mode=False, json_schema=CHUNK_SCHEMA)
     assert kind == "json"
+
+
+def test_extra_field_fails_validation_so_the_adapter_falls_back_to_plain_json():
+    with pytest.raises(ValueError):
+        plugin_llm._parse_structured_text(text=json.dumps({**BASE, "action_items": [{**ITEM, "priority": "high"}]}),
+                                          json_mode=False, json_schema=NOTES_SCHEMA)
 
 
 def test_item_without_title_is_still_rejected():
