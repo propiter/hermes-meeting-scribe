@@ -246,25 +246,39 @@ def check_capture(env: DoctorEnv) -> Check:
     return Check.ok(detail) if ok else Check.warn(detail)
 
 
+_RANK = {"ok": 0, "warn": 1, "fail": 2}
+
+
+def _space_slugs(env: Any) -> list[str]:
+    """The install's spaces (``[""]`` for a runtime without spaces: the global settings)."""
+    spaces = getattr(env, "spaces", None)
+    return [sp.slug for sp in spaces().all()] if callable(spaces) else [""]
+
+
 def check_google_meet(env: Any) -> Check:
-    """DESIGN §17: client stored, token refreshable, last poll, resolved notes channel."""
-    s = env.settings()
+    """DESIGN §17, §23: per space, client stored, token refreshable, last poll, notes channel."""
+    slugs = _space_slugs(env)
+    if len(slugs) == 1:
+        return _google_of(env, slugs[0] or None)
+    results = [(slug, _google_of(env, slug)) for slug in slugs]
+    worst = max((r.status for _, r in results), key=_RANK.__getitem__)
+    return Check(worst, " | ".join(f"[{slug}] {r.detail}" for slug, r in results))
+
+
+def _google_of(env: Any, space: Optional[str]) -> Check:
+    s = env.settings(space) if space else env.settings()
     if not s.google_meet_enabled:
         return Check.ok("disabled (google_meet_enabled=false)")
     files = getattr(env, "google_files", None)
     if not callable(files):
         return Check.warn("Google Meet import not available in this runtime")
     from .google.oauth import GoogleAuthError, GoogleDisconnected
-    from .spaces import SpaceError
 
+    flag = f" --space {space}" if space and len(_space_slugs(env)) > 1 else ""
+    if not files(space).client_path.exists():
+        return Check.fail(f"no OAuth client; run `hermes meeting-scribe google connect{flag} --client-secret <file.json>`")
     try:
-        f = files()
-    except SpaceError:  # several spaces, each with its own connection: a per-space doctor is pending
-        return Check.warn("several spaces: the Google connection is checked per space (not available here yet)")
-    if not f.client_path.exists():
-        return Check.fail("no OAuth client; run `hermes meeting-scribe google connect --client-secret <file.json>`")
-    try:
-        env.google_credentials().access_token()
+        env.google_credentials(space).access_token()
     except GoogleDisconnected as exc:
         return Check.fail(str(exc))
     except (GoogleAuthError, OSError) as exc:
@@ -273,9 +287,9 @@ def check_google_meet(env: Any) -> Check:
     parts = ["token OK", f"notes channel: {channel or 'automatic (server system channel / #' + ', #'.join(s.delivery_auto_channel_names) + ')'}"]
     no_channel = None if channel else (
         "no notes channel set: Meet notes go to the server's automatic channel, or wait if there is none; "
-        "choose one with `hermes meeting-scribe config set google_meet_discord_channel \"#channel-name\"`")
+        f"choose one with `hermes meeting-scribe config set google_meet_discord_channel \"#channel-name\"{flag}`")
     try:
-        st = env.meet_importer().status()
+        st = env.meet_importer(space).status()
     except Exception:  # storage issues are reported by the storage check
         st = {}
     if st.get("last_poll_at"):
@@ -290,11 +304,43 @@ def check_google_meet(env: Any) -> Check:
     return Check.ok("; ".join(parts))
 
 
+VOICE_LIMIT_NOTE = ("the bot joins one voice channel per server at a time: different servers record in parallel, "
+                    "a second channel of the same server waits until the first recording stops")
+
+
+def check_spaces(env: Any) -> Check:
+    """DESIGN §23: spaces and their servers, the bot's servers no space owns, baseline backups."""
+    spaces_of = getattr(env, "spaces", None)
+    repo_of = getattr(env, "repo", None)
+    if not callable(spaces_of) or not callable(repo_of):
+        return Check.ok("no runtime")
+    from .storage.baseline import backups
+
+    spaces = spaces_of().all()
+    repo = repo_of()
+    parts = [f"{sp.slug} ({sp.name}): " + (", ".join(f"{n or g} ({g})" if n else g for g, n in sp.guilds)
+                                             or "no Discord server") for sp in spaces]
+    guilds, seen = repo.bot_guilds()
+    stray = [(g, n) for g, n in guilds if repo.space_of_guild(g) is None]
+    problems: list[str] = []
+    if len(spaces) > 1 and stray:
+        names = ", ".join(f"{n} ({g})" if n else g for g, n in stray)
+        problems.append(f"the bot is in {len(stray)} server(s) no space owns, nothing is recorded there: {names}; "
+                        "assign one with `hermes meeting-scribe space add-guild <space> <server-id>`")
+    if seen is None:
+        parts.append("the bot's servers are listed after the gateway connects to Discord")
+    old = backups(env.data_dir())
+    if old:
+        parts.append(f"{len(old)} backup(s) of the pre-spaces store kept: " + ", ".join(p.name for p in old))
+    parts.append(VOICE_LIMIT_NOTE)
+    return Check.warn("; ".join(problems + parts)) if problems else Check.ok("; ".join(parts))
+
+
 registry = CheckRegistry()
 for _name, _fn in (("settings", check_settings), ("ffmpeg", check_ffmpeg), ("faster_whisper", check_faster_whisper),
                    ("storage", check_storage), ("disk", check_disk), ("llm", check_llm), ("kanban", check_kanban),
                    ("linear", check_linear), ("obsidian", check_obsidian), ("capture", check_capture),
-                   ("google_meet", check_google_meet), ("delivery", check_delivery)):
+                   ("google_meet", check_google_meet), ("delivery", check_delivery), ("spaces", check_spaces)):
     registry.register_check(_name, _fn)
 
 

@@ -197,3 +197,27 @@ def test_delivery_check_lists_meetings_left_in_a_dm(tmp_path):
     res = check_delivery(e)
     assert res.status == "warn" and "1 meeting(s)" in res.detail and "--from deliver" in res.detail
     repo.close()
+
+
+# -- spaces (DESIGN §23) --------------------------------------------------------------------------
+def test_spaces_check_lists_servers_unassigned_ones_backups_and_the_voice_limit(tmp_path):
+    from meeting_scribe.doctor import check_google_meet, check_spaces
+
+    from .test_spaces_isolation import runtime
+
+    rt = runtime(tmp_path)
+    rt.space_of_guild(SimpleNamespace(id=100, name="Acme"))
+    res = check_spaces(rt)
+    assert res.status == "ok" and "main (" in res.detail and "Acme (100)" in res.detail
+    assert "one voice channel per server" in res.detail and "after the gateway connects" in res.detail
+    rt.spaces().create("Team", "team")
+    rt.repo().set_bot_guilds([("100", "Acme"), ("300", "Stray")])
+    (tmp_path / "data" / "backup-20260101T000000Z").mkdir()
+    res = check_spaces(rt)
+    assert res.status == "warn" and "Stray (300)" in res.detail and "space add-guild" in res.detail
+    assert "team (Team): no Discord server" in res.detail and "backup-20260101T000000Z" in res.detail
+    rt.spaces().set_override("team", "google_meet_enabled", "true")
+    g = check_google_meet(rt)  # each space's own connection
+    assert g.status == "fail" and "[main] disabled" in g.detail
+    assert "[team] no OAuth client" in g.detail and "google connect --space team" in g.detail
+    rt.close()
