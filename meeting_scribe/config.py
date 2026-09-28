@@ -123,6 +123,8 @@ SPEC: dict[str, Opt] = {
     "consent_nickname_prefix": Opt("str", "[REC] ", "privacy"),
     # pipeline
     "pipeline_max_attempts": Opt("int", 3, "pipeline", minimum=1, maximum=20),
+    "pipeline_workers": Opt("int", 2, "pipeline", minimum=1, maximum=8),
+    "pipeline_max_transcriptions": Opt("int", 1, "pipeline", minimum=1, maximum=8),
     # ui
     "ui_language": Opt("str", "en", "ui", choices=("en", "es")),
     "commands_aliases": Opt("list", ("meet", "rec"), "ui"),
@@ -269,6 +271,8 @@ class Settings:
     delivery_fallback_channel: str
     delivery_transcript_max_mb: int
     pipeline_max_attempts: int
+    pipeline_workers: int
+    pipeline_max_transcriptions: int
     delivery_discord_thread: bool
     delivery_project_threads: bool
     delivery_dm_assignees: bool

@@ -171,7 +171,9 @@ class Runtime:
                                 catalogs=self.catalogs, sinks=self.sinks,
                                 archiver=make_archiver(self.settings, self.ffmpeg))
                 runner = PipelineRunner(repo, stages, clock=self.clock, spawner=self.host.spawner,
-                                        max_attempts=lambda: self.settings().pipeline_max_attempts)
+                                        max_attempts=lambda: self.settings().pipeline_max_attempts,
+                                        workers=lambda: self.settings().pipeline_workers,
+                                        max_transcriptions=lambda: self.settings().pipeline_max_transcriptions)
                 self._services[path] = MeetingService(repo, self.layout(), runner, self.settings, clock=self.clock,
                                                       item_sinks=self.item_sinks, catalogs=self.catalogs)
                 self._wire_desktop(self._services[path])

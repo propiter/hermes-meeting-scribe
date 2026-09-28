@@ -11,11 +11,12 @@ Linear. The global ``action_items.status`` stays a display summary (✅ once del
 """
 from __future__ import annotations
 
-import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
+
+from .result import Result
 
 PENDING_STALE_SECONDS = 600.0  # a claim older than this is abandoned (crash mid-create)
 
@@ -37,7 +38,7 @@ class Claim:
 class DeliveriesMixin:
     """Mixed into :class:`~meeting_scribe.storage.repo.Repository` (needs ``_x``)."""
 
-    def _x(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Cursor:  # pragma: no cover - provided
+    def _x(self, sql: str, params: Sequence[Any] = ()) -> Result:  # pragma: no cover - provided
         raise NotImplementedError
 
     # -- ledger ---------------------------------------------------------------------------------

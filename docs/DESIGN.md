@@ -868,3 +868,35 @@ index.
 - The Capabilities toggle.
 - hermes-media playback and seek of `recording.ogg`, locally and on a remote gateway.
 - Reprocess end to end with a running gateway.
+
+## 22. Parallel processing
+
+**Workers.** `pipeline_workers` (default 2, 1–8) threads run jobs; each is spawned through the host
+spawner, so contextvars follow it. The count is read when the worker starts: a change applies after a
+gateway restart.
+
+**One claim statement.** `claim_next_job` selects AND leases the next ready job in one
+`UPDATE … WHERE id=(SELECT …) RETURNING *`. Two workers can never take the same job, whether they
+are threads of this process or other processes on the same database. The lease, heartbeat and
+`requeue_stale`/`owner_dead` recovery are unchanged, so a job abandoned by a dead worker is taken back
+exactly as before. Only one worker at a time runs the periodic reclaim sweep.
+
+**Transcription cap.** Transcription is the CPU/GPU-heavy step. At most `pipeline_max_transcriptions`
+(default 1) jobs of this process are in the transcribe stage at once. While the cap is reached, the
+claim skips jobs queued at `transcribe`, so the other workers keep analysing and delivering. The slot
+is freed as soon as the job leaves the transcribe stage (its analysis does not hold it). The cap is
+per process: a second process on the same database (a CLI `reprocess --now`) has its own.
+
+**Shared connection.** Every worker, heartbeat and command handler of one process shares the
+repository's connection. `Repository._x` therefore reads a statement's rows while it holds the lock
+and returns a `Result` (rows + `rowcount`), never a live cursor. A cursor fetched after the lock was
+released could interleave with another thread's statement.
+
+**Reprocess vs. a running worker.** `reprocess` first `hold_job`s the meeting's job: in one
+transaction it refuses when the job is `running`, or else parks it as `held`, which no claim takes.
+Then it rewinds the meeting and re-enqueues it. A failure in between restores the previous job state.
+A worker can no longer claim the job between the "is it running?" check and the rewind.
+
+**Desktop commands.** `desktop.control.execute_one` already moves a command `queued → running` with a
+conditional `UPDATE`, so only one worker executes it. Its `_reconcile` of dead executors is unchanged.
+

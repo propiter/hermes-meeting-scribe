@@ -20,6 +20,7 @@ from ..domain.text import fold
 from ..domain.models import SOURCE_DISCORD, ActionItem, ActionStatus, Meeting, MeetingState, Speaker, Utterance
 from .deliveries import Claim, DeliveriesMixin
 from .jobs import Job, JobsMixin
+from .result import Result
 
 __all__ = ["Claim", "Job", "Repository", "SCHEMA_VERSION"]
 
@@ -185,9 +186,13 @@ class Repository(JobsMixin, DeliveriesMixin):
                 self._conn.execute("ROLLBACK")
                 raise
 
-    def _x(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Cursor:
+    def _x(self, sql: str, params: Sequence[Any] = ()) -> Result:
+        """Run one statement and read ALL of its rows while holding the lock. Pipeline workers,
+        heartbeats and command handlers share this connection: handing out a live cursor would let
+        another thread's statement interleave with the fetch."""
         with self._lock:
-            return self._conn.execute(sql, params)
+            cur = self._conn.execute(sql, params)
+            return Result(cur.fetchall() if cur.description is not None else [], cur.rowcount)
 
     @contextmanager
     def transaction(self):
@@ -213,10 +218,12 @@ class Repository(JobsMixin, DeliveriesMixin):
                 raise
 
     def user_version(self) -> int:
-        return int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        with self._lock:
+            return int(self._conn.execute("PRAGMA user_version").fetchone()[0])
 
     def journal_mode(self) -> str:
-        return str(self._conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        with self._lock:
+            return str(self._conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
 
     def close(self) -> None:
         with self._lock:

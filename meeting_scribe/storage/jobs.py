@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional, Sequence
 
+from .result import Result
 from ..domain.models import Stage
 
 
@@ -37,7 +38,7 @@ def _ts(value: Optional[datetime]) -> Optional[float]:
 class JobsMixin:
     """Mixed into :class:`~meeting_scribe.storage.repo.Repository` (needs ``_x``)."""
 
-    def _x(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Cursor:  # pragma: no cover - provided
+    def _x(self, sql: str, params: Sequence[Any] = ()) -> Result:  # pragma: no cover - provided
         raise NotImplementedError
 
     @staticmethod
@@ -64,6 +65,38 @@ class JobsMixin:
         row = self._x("SELECT * FROM jobs WHERE state='queued' AND (next_retry_at IS NULL OR next_retry_at <= ?)"
                       " ORDER BY next_retry_at, id LIMIT 1", (_ts(now),)).fetchone()
         return self._job(row) if row else None
+
+    def claim_next_job(self, *, now: datetime, owner: Optional[str],
+                       skip_stages: Sequence[Stage] = ()) -> Optional[Job]:
+        """Pick AND lease the next ready job in ONE statement, so parallel workers (threads of this
+        process or other processes on the same database) can never take the same job. ``skip_stages``
+        leaves jobs at those stages for later (the transcription cap)."""
+        ts = _ts(now)
+        skip = tuple(s.value for s in skip_stages)
+        not_in = f" AND stage NOT IN ({','.join('?' * len(skip))})" if skip else ""
+        row = self._x("UPDATE jobs SET state='running', owner=?, heartbeat=?, updated_at=?"
+                      " WHERE state='queued' AND id=(SELECT id FROM jobs WHERE state='queued'"
+                      f" AND (next_retry_at IS NULL OR next_retry_at <= ?){not_in}"
+                      " ORDER BY next_retry_at, id LIMIT 1) RETURNING *",
+                      (owner, ts, ts, ts, *skip)).fetchone()
+        return self._job(row) if row else None
+
+    def hold_job(self, meeting_id: str) -> Optional[str]:
+        """Park the meeting's job so no worker claims it while an operator rewinds the meeting; the
+        caller re-enqueues it right after, or restores it with :meth:`unhold_job`. Returns the state
+        it had (``"none"`` without a job row), or ``None`` when a worker is running it now."""
+        with self.transaction():
+            row = self._x("SELECT state FROM jobs WHERE meeting_id=?", (meeting_id,)).fetchone()
+            if row is None:
+                return "none"
+            if row["state"] == "running":
+                return None
+            self._x("UPDATE jobs SET state='held', updated_at=? WHERE meeting_id=?", (time.time(), meeting_id))
+            return str(row["state"])
+
+    def unhold_job(self, meeting_id: str, state: str) -> None:
+        self._x("UPDATE jobs SET state=?, updated_at=? WHERE meeting_id=? AND state='held'",
+                (state, time.time(), meeting_id))
 
     def get_job(self, meeting_id: str) -> Optional[Job]:
         row = self._x("SELECT * FROM jobs WHERE meeting_id=?", (meeting_id,)).fetchone()

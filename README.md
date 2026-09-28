@@ -313,6 +313,8 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `pipeline_max_attempts` | int | `3` | Failed attempts before a meeting is marked failed (waiting for a destination never counts). |
+| `pipeline_workers` | int | `2` | How many meetings are processed in parallel (transcription, summary, delivery). Applies after a gateway restart. |
+| `pipeline_max_transcriptions` | int | `1` | Transcription is the heaviest step (CPU or GPU): at most this many run at the same time; the other workers keep summarising and delivering meanwhile. |
 
 #### Interface
 

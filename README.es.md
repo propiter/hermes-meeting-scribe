@@ -320,6 +320,8 @@ advertencia.
 | Clave | Tipo | Por defecto | Descripción |
 |---|---|---|---|
 | `pipeline_max_attempts` | int | `3` | Intentos fallidos antes de marcar la reunión como fallida (esperar destino nunca cuenta). |
+| `pipeline_workers` | int | `2` | Cuántas reuniones se procesan en paralelo (transcripción, resumen y envío). Se aplica al reiniciar el gateway. |
+| `pipeline_max_transcriptions` | int | `1` | La transcripción es el paso más pesado (CPU o GPU): como mucho se hacen estas a la vez; mientras, los demás siguen resumiendo y enviando. |
 
 #### Interfaz
 

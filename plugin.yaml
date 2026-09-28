@@ -376,6 +376,24 @@ config_schema:
     group: pipeline
     minimum: 1
     maximum: 20
+  pipeline_workers:
+    type: int
+    default: 2
+    label: Meetings processed at once
+    description: How many meetings are processed in parallel (transcription, summary, delivery). Applies
+      after a gateway restart.
+    group: pipeline
+    minimum: 1
+    maximum: 8
+  pipeline_max_transcriptions:
+    type: int
+    default: 1
+    label: Transcriptions at once
+    description: 'Transcription is the heaviest step (CPU or GPU): at most this many run at the same time;
+      the other workers keep summarising and delivering meanwhile.'
+    group: pipeline
+    minimum: 1
+    maximum: 8
   ui_language:
     type: str
     default: en

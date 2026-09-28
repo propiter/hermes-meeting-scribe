@@ -1,10 +1,12 @@
-"""Single-worker, resumable job runner (DESIGN §9).
+"""Parallel, resumable job runner (DESIGN §9, §22).
 
-One thread (via ``spawn_context_thread`` in production, so profile contextvars follow it) pulls
-the next ready job from SQLite and runs its remaining stages in order. Failures rewind the meeting
-to the failed stage's input state and requeue with backoff; after ``max_attempts`` the meeting is
-``failed`` and waits for a manual ``reprocess``. Transcription is CPU-heavy, so one meeting at a
-time is intentional.
+``workers`` threads (via ``spawn_context_thread`` in production, so profile contextvars follow them)
+each take the next ready job from SQLite and run its remaining stages in order. A job is picked and
+leased in ONE statement (``claim_next_job``), so two workers — threads here or other processes on the
+same database — never run the same meeting. Failures rewind the meeting to the failed stage's input
+state and requeue with backoff; after ``max_attempts`` the meeting is ``failed`` and waits for a
+manual ``reprocess``. Transcription is CPU/GPU-heavy: at most ``max_transcriptions`` jobs of this
+process are in the transcribe stage at once; the other workers keep analysing and delivering.
 
 Multi-process safety (DESIGN §15, review finding 2): a claimed job carries a LEASE (owner id +
 heartbeat refreshed by a helper thread while it runs). ``recover`` only requeues jobs whose lease
@@ -70,6 +72,7 @@ def _thread_spawner(target: Callable[[], None], *, name: str, daemon: bool = Tru
 
 class PipelineRunner:
     THREAD_NAME = "meeting-scribe-pipeline"
+    MAX_WORKERS = 8
     LEASE_SECONDS = 180.0
     HEARTBEAT_SECONDS = 30.0
     RECLAIM_SECONDS = 60.0  # how often the worker loop re-checks for expired/orphaned leases
@@ -80,13 +83,16 @@ class PipelineRunner:
 
     def __init__(self, repo: Repository, stages: Stages, *, clock: Clock, spawner: Spawner = _thread_spawner,
                  max_attempts: "int | Callable[[], int]" = 3, backoff: Sequence[float] = (60, 300, 900),
-                 owner: Optional[str] = None) -> None:
+                 owner: Optional[str] = None, workers: "int | Callable[[], int]" = 1,
+                 max_transcriptions: "int | Callable[[], int]" = 1) -> None:
         self.repo = repo
         self.owner = owner or process_owner_id()
         self.stages = stages
         self.clock = clock
         self.spawner = spawner
         self._max_attempts = max_attempts
+        self._workers = workers
+        self._max_transcriptions = max_transcriptions
         self.backoff = tuple(backoff)
         # Desktop hooks (set by the runtime in the gateway): ``control`` runs one queued operator
         # command (True when it did work); ``pulse`` records worker liveness for the Desktop page.
@@ -95,10 +101,13 @@ class PipelineRunner:
         self._listeners: list[Listener] = []
         self._wake = threading.Event()
         self._stop = threading.Event()
-        self._busy = threading.Event()
+        self._claim_lock = threading.Lock()  # claim + transcription-slot accounting happen together
+        self._reclaim_lock = threading.Lock()  # one worker at a time judges abandoned leases
+        self._active = 0  # jobs this process is running now
+        self._transcribing = 0  # of which in the transcribe stage
         self._owns_capture = False  # recover() already ran with capture ownership
         self._last_reclaim: Optional[float] = None  # set by recover(); gates periodic lease reclaim
-        self._thread: Optional[threading.Thread] = None
+        self._threads: list[threading.Thread] = []
 
     @property
     def max_attempts(self) -> int:
@@ -109,6 +118,20 @@ class PipelineRunner:
     @max_attempts.setter
     def max_attempts(self, value: "int | Callable[[], int]") -> None:
         self._max_attempts = value
+
+    @staticmethod
+    def _bounded(value: "int | Callable[[], int]", high: int) -> int:
+        return max(1, min(high, int(value() if callable(value) else value)))
+
+    @property
+    def workers(self) -> int:
+        """Worker threads started by :meth:`start` (read at start: a change applies on restart)."""
+        return self._bounded(self._workers, self.MAX_WORKERS)
+
+    @property
+    def max_transcriptions(self) -> int:
+        """Read at every claim, so an edit applies to the next job."""
+        return self._bounded(self._max_transcriptions, self.MAX_WORKERS)
 
     # -- observers ----------------------------------------------------------------------------
     def subscribe(self, listener: Listener) -> None:
@@ -139,14 +162,18 @@ class PipelineRunner:
             raise ValueError("meeting is still recording")
         if meeting.state is MeetingState.EMPTY:
             raise NothingToReprocess("no audio was captured; there is nothing to reprocess")
-        job = self.repo.get_job(meeting_id)
-        if job is not None and job.state == "running":
+        previous = self.repo.hold_job(meeting_id)  # atomic: no worker can claim it while we rewind
+        if previous is None:
             raise ValueError("meeting is being processed right now")
         stage = effective_stage(meeting, stage)
-        # Only an explicit re-delivery may move notes an older version posted in a DM (DESIGN §19).
-        self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, "1" if stage is Stage.DELIVER else None)
-        self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)  # an explicit re-delivery runs every sink
-        self.stages.persist(meeting.with_state(rewind_target(stage), rewind=True))
+        try:
+            # Only an explicit re-delivery may move notes an older version posted in a DM (DESIGN §19).
+            self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, "1" if stage is Stage.DELIVER else None)
+            self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)  # an explicit re-delivery runs every sink
+            self.stages.persist(meeting.with_state(rewind_target(stage), rewind=True))
+        except BaseException:
+            self.repo.unhold_job(meeting_id, previous)
+            raise
         self.enqueue(meeting_id, stage)
         return stage
 
@@ -200,12 +227,9 @@ class PipelineRunner:
         if self._desktop_hook("control"):
             return True
         self._maybe_reclaim()
-        job = self.repo.next_job(now=self.clock.now())
+        job = self._claim()
         if job is None:
             return False
-        if not self.repo.claim_job(job.id, now=self.clock.now(), owner=self.owner):
-            return True  # another process took it; look again
-        self._busy.set()
         beat_stop = threading.Event()
         beat = threading.Thread(target=self._heartbeat, args=(job.id, beat_stop), name=f"{self.THREAD_NAME}-lease",
                                 daemon=True)
@@ -215,8 +239,25 @@ class PipelineRunner:
         finally:
             beat_stop.set()
             beat.join(timeout=5)
-            self._busy.clear()
+            with self._claim_lock:
+                self._active -= 1
         return True
+
+    def _claim(self) -> Optional[Any]:
+        """Lease the next ready job; a transcribe job only while a transcription slot is free."""
+        with self._claim_lock:
+            full = self._transcribing >= self.max_transcriptions
+            job = self.repo.claim_next_job(now=self.clock.now(), owner=self.owner,
+                                           skip_stages=(Stage.TRANSCRIBE,) if full else ())
+            if job is not None:
+                self._active += 1
+                if job.stage is Stage.TRANSCRIBE:
+                    self._transcribing += 1
+            return job
+
+    def _release_transcription(self) -> None:
+        with self._claim_lock:
+            self._transcribing -= 1
 
     def _maybe_reclaim(self) -> None:
         """Periodically take back jobs whose worker died after we started (lease expired or dead pid).
@@ -224,13 +265,21 @@ class PipelineRunner:
         ``recover`` runs once at start-up; without this, a job abandoned later — or one whose lease
         was still fresh at our start-up — would stay 'running' forever.
         """
-        last = self._last_reclaim
-        if last is None:
-            return  # recover() has not run: not our call to judge leases (CLI / tests)
-        now = self.clock.now().timestamp()
-        if now - last < self.RECLAIM_SECONDS:
-            return
-        self._last_reclaim = now
+        if not self._reclaim_lock.acquire(blocking=False):
+            return  # another worker is doing it right now
+        try:
+            last = self._last_reclaim
+            if last is None:
+                return  # recover() has not run: not our call to judge leases (CLI / tests)
+            now = self.clock.now().timestamp()
+            if now - last < self.RECLAIM_SECONDS:
+                return
+            self._last_reclaim = now
+            self._reclaim(now)
+        finally:
+            self._reclaim_lock.release()
+
+    def _reclaim(self, now: float) -> None:
         for meeting_id in self.repo.requeue_stale(stale_before=now - self.LEASE_SECONDS, owner_dead=owner_dead):
             meeting = self.repo.get_meeting(meeting_id)
             if meeting is not None and meeting.state in _IN_PROGRESS:
@@ -270,6 +319,21 @@ class PipelineRunner:
                 log.exception("meeting-scribe: job %s heartbeat failed", job_id)
 
     def _run_job(self, job_id: int, meeting_id: str, first: Stage, attempts: int) -> None:
+        """Run the job's stages; the transcription slot taken at claim is freed as soon as TRANSCRIBE
+        is over (analysis and delivery of the same meeting do not hold it)."""
+        held = [first is Stage.TRANSCRIBE]
+
+        def release() -> None:
+            if held[0]:
+                held[0] = False
+                self._release_transcription()
+        try:
+            self._run_stages(job_id, meeting_id, first, attempts, release)
+        finally:
+            release()
+
+    def _run_stages(self, job_id: int, meeting_id: str, first: Stage, attempts: int,
+                    transcription_over: Callable[[], None]) -> None:
         meeting = self._meeting(meeting_id)
         if effective_stage(meeting, first) is not first:  # imported meeting queued at TRANSCRIBE (older version)
             first = effective_stage(meeting, first)
@@ -278,6 +342,8 @@ class PipelineRunner:
         stage = first
         try:
             for stage in STAGE_ORDER[STAGE_ORDER.index(first):]:
+                if stage is not Stage.TRANSCRIBE:
+                    transcription_over()
                 self.repo.advance_job(job_id, stage)
                 self._emit(meeting_id, "stage", stage.value)
                 if stage is Stage.ARCHIVE and meeting.state is MeetingState.ANALYZED:
@@ -359,9 +425,9 @@ class PipelineRunner:
         self.stages.persist(meeting.with_state(rewind_target(stage), rewind=True))
         self._emit(meeting_id, "retry", {"stage": stage.value, "error": error, "delay": delay})
 
-    # -- background thread --------------------------------------------------------------------
+    # -- background threads -------------------------------------------------------------------
     def start(self, live_meeting_ids: Iterable[str] = (), *, owns_capture: bool = False) -> None:
-        if self._thread is not None and self._thread.is_alive():
+        if self.running:
             if owns_capture and not self._owns_capture:
                 # Started earlier without capture (gateway register); Discord just connected: only now
                 # may orphan recordings of a dead process be closed. recover skips leased meetings.
@@ -371,8 +437,11 @@ class PipelineRunner:
         self._owns_capture = owns_capture
         self.recover(live_meeting_ids, owns_capture=owns_capture)
         self._stop.clear()
-        self._thread = self.spawner(self._loop, name=self.THREAD_NAME, daemon=True)
-        self._thread.start()
+        count = self.workers
+        self._threads = [self.spawner(self._loop, name=self.THREAD_NAME if i == 0 else f"{self.THREAD_NAME}-{i + 1}",
+                                      daemon=True) for i in range(count)]
+        for thread in self._threads:
+            thread.start()
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -385,19 +454,24 @@ class PipelineRunner:
             if not worked:
                 self._wake.wait(timeout=5.0)
                 self._wake.clear()
+            else:
+                self._wake.set()  # more may be ready: let idle siblings look too
 
     def stop(self, timeout: float = 10.0) -> None:
         self._stop.set()
         self._wake.set()
-        if self._thread is not None:
-            self._thread.join(timeout)
-            self._thread = None
+        deadline = time.monotonic() + timeout
+        for thread in self._threads:
+            thread.join(max(0.0, deadline - time.monotonic()))
+        self._threads = []
 
     def wait_idle(self, timeout: float) -> bool:
         """Test/CLI helper: True once no job is ready or running."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if not self._busy.is_set() and self.repo.next_job(now=self.clock.now()) is None and not any(
+            with self._claim_lock:
+                active = self._active
+            if not active and self.repo.next_job(now=self.clock.now()) is None and not any(
                     j.state == "running" for j in self.repo.list_jobs(("running",))):
                 return True
             time.sleep(0.05)
@@ -405,4 +479,4 @@ class PipelineRunner:
 
     @property
     def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        return any(t.is_alive() for t in self._threads)
