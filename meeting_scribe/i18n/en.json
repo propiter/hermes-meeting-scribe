@@ -168,7 +168,7 @@
   "cmd.config_no": "no",
   "cmd.config_yes": "yes",
   "cmd.error": "The command could not be completed. Try again in a moment and, if it keeps failing, tell an administrator.",
-  "cmd.help": "**/{cmd}** — meeting notes\n`start [#voice]` start recording · `stop` stop recording · `status` what's going on · `list [n]` latest meetings · `show <id>` a meeting's notes · `search <text>` search what was said · `reprocess <id> [from=transcribe|analyze|deliver]` redo a meeting (from the audio, only the notes, or only post them again) · `link @user <Linear email or name>` · `project <id> <project>` · `config` settings · `help`",
+  "cmd.help": "**/{cmd}** — meeting notes\n`start [#voice]` start recording · `stop` stop recording · `status` what's going on · `list [n]` latest meetings · `show <id>` a meeting's notes · `search <text>` search what was said · `reprocess <id> [from=transcribe|analyze|deliver]` redo a meeting (from the audio, only the notes, or only post them again) · `link @user <Linear email or name>` · `project <id> <project>` · `config` settings · `help` · in a private message, with several teams: add `space=<id>`",
   "cmd.link_saved": "Linked <@{discord_id}> to Linear user “{linear}”.",
   "cmd.list_empty": "No meetings yet.",
   "cmd.list_line": "`{id}` {date} · {title} · {state}",
@@ -313,9 +313,9 @@
   "ui.source.learned": "Used before in this channel",
   "ui.source.linear": "Linear project",
   "space.first_name": "Main",
-  "space.choose": "This installation has several spaces: run the command inside a Discord server of the space you want.",
-  "space.unassigned": "This Discord server belongs to no space, so nothing is recorded or shown here. An administrator can add it to a space.",
-  "capture.unassigned": "This Discord server belongs to no space, so it is not recorded. An administrator can add it to a space.",
+  "space.choose": "This bot serves several teams, and I can't tell from here which one you mean. Run the command inside your team's Discord server.",
+  "space.unassigned": "This Discord server is not linked to any team yet, so I don't record or show anything here. An administrator can link it on the Hermes machine with: `hermes meeting-scribe space add-guild <space> {guild}`",
+  "capture.unassigned": "This Discord server is not linked to any team yet, so I can't record here. An administrator can link it on the Hermes machine with: `hermes meeting-scribe space add-guild <space> {guild}`",
   "space.choose_none": "This bot serves several teams, and I cannot tell which ones you belong to from a private message. Run the command inside your team's Discord server instead.",
   "space.not_yours": "I don't know the team “{slug}”, or you are not part of it. Teams you can use: {spaces}.",
   "space.here_only": "In this server I only use its own team's meetings; `space=` works in private messages.",
@@ -334,5 +334,6 @@
   "space.cli_guild_removed": "Server {guild} removed from space {slug}; nothing is recorded there until it is assigned again.",
   "space.cli_override_set": "{slug}: {key} = {value}",
   "space.cli_override_unset": "{slug}: {key} now uses the global value.",
-  "space.cli_unassigned_guild": "the bot is in server {guild}, which belongs to no space: nothing is recorded there (hermes meeting-scribe space add-guild <slug> <id>)."
+  "space.cli_unassigned_guild": "the bot is in server {guild}, which belongs to no space: nothing is recorded there (hermes meeting-scribe space add-guild <slug> <id>).",
+  "space.choose_yours": "You are in several teams: {spaces}. Say which one at the end of the command, for example `/{cmd} {sub} space={example}`."
 }

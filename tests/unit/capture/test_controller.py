@@ -244,7 +244,7 @@ async def test_a_server_of_no_space_is_never_recorded(world):
     mgr._space_of = lambda guild: None
     mgr.attach(world["adapter"]._client, world["adapter"])
     reply = await in_thread(mgr.start, caller(), None)
-    assert "belongs to no space" in reply
+    assert "not linked to any team" in reply and "space add-guild <space> 100" in reply
     assert world["daily"].connects == 0 and mgr.live_meeting_ids() == set()
     assert not mgr.busy(world["guild"])  # the refused start left no stale "starting" mark
 

@@ -115,13 +115,55 @@ def test_without_a_server_several_spaces_require_a_choice(two_teams):
     cmds = two_teams.cmds
     for sub in ("list", "status", f"show {two_teams.mine.id}", "search credenciales"):
         reply = cmds.handle(sub, discord(""), "meeting")
-        assert "several spaces" in reply
+        assert "several teams" in reply
         assert two_teams.mine.id not in reply and two_teams.theirs.id not in reply
+
+
+def members(table):
+    """A membership check over ``{user_id: {guild ids}}`` (the bot's member cache)."""
+    return lambda: (lambda user, guilds: {g for g in guilds if g in table.get(user, set())})
+
+
+def test_a_dm_uses_the_callers_only_team(two_teams):
+    cmds = MeetingCommands(two_teams.rt.service, two_teams.rt.settings, capture=lambda: None,
+                           membership=members({"10": {"200"}}))
+    reply = cmds.handle("list", discord(""), "meeting")
+    assert two_teams.theirs.id in reply and two_teams.mine.id not in reply
+    reply = cmds.handle("list space=main", discord(""), "meeting")  # not one of the caller's teams
+    assert "`team` (Team)" in reply and two_teams.mine.id not in reply
+    reply = cmds.handle("list", discord("", user="11"), "meeting")  # in no team's server
+    assert "your team's Discord server" in reply and two_teams.theirs.id not in reply
+
+
+def test_a_dm_with_several_teams_asks_which_one(two_teams):
+    cmds = MeetingCommands(two_teams.rt.service, two_teams.rt.settings, capture=lambda: None,
+                           membership=members({"10": {"100", "200"}}))
+    reply = cmds.handle("search credenciales", discord(""), "meeting")
+    assert "`main`" in reply and "`team`" in reply and "space=main" in reply
+    assert two_teams.mine.id not in reply and two_teams.theirs.id not in reply
+    reply = cmds.handle("search credenciales space=team", discord(""), "meeting")
+    assert two_teams.theirs.id in reply and two_teams.mine.id not in reply
+    assert two_teams.mine.id in cmds.handle("list SPACE=Main", discord(""), "meeting")
+
+
+def test_space_option_inside_a_server_cannot_reach_another_team(two_teams):
+    cmds = MeetingCommands(two_teams.rt.service, two_teams.rt.settings, capture=lambda: None,
+                           membership=members({"10": {"100", "200"}}))
+    reply = cmds.handle("list space=team", discord("100"), "meeting")
+    assert "`space=` works in private messages" in reply and two_teams.theirs.id not in reply
+    assert two_teams.mine.id in cmds.handle("list space=main", discord("100"), "meeting")
+
+
+def test_a_dm_without_discord_connected_explains(two_teams):
+    cmds = MeetingCommands(two_teams.rt.service, two_teams.rt.settings, capture=lambda: None,
+                           membership=lambda: None)
+    assert "several teams" in cmds.handle("list space=team", discord(""), "meeting")
 
 
 def test_an_unassigned_server_sees_nothing(two_teams):
     reply = two_teams.cmds.handle("list", discord("999"), "meeting")
-    assert "belongs to no space" in reply and two_teams.mine.id not in reply
+    assert "not linked to any team" in reply and two_teams.mine.id not in reply
+    assert "hermes meeting-scribe space add-guild <space> 999" in reply  # what the administrator runs
 
 
 def test_agent_tools_follow_the_chat_server(two_teams):

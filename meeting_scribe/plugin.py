@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -92,6 +93,13 @@ def _install_phase_b(ctx: Any, runtime: Runtime) -> None:
             log.exception("meeting-scribe: %s.install failed; live capture disabled", name)
 
 
+def _membership(runtime: Runtime) -> Any:
+    """The Discord membership check of the UI installed for ``runtime`` (``None`` without Discord)."""
+    ui = sys.modules.get(f"{__package__}.discord_ui")
+    fn = getattr(ui, "membership_for", None)
+    return fn(runtime) if callable(fn) else None
+
+
 def _command_handler(commands: MeetingCommands, runtime: Runtime, name: str) -> Callable[[str], str]:
     def handler(raw_args: str) -> str:
         try:
@@ -135,7 +143,8 @@ def register(ctx: Any, plugin_root: Path) -> Runtime:
     ctx.register_tool("meeting_get", TOOLSET, SCHEMAS["meeting_get"], tools.get,
                       description=SCHEMAS["meeting_get"]["description"], emoji="🎙️")
 
-    commands = MeetingCommands(runtime.service, runtime.settings, capture=lambda: runtime.capture)
+    commands = MeetingCommands(runtime.service, runtime.settings, capture=lambda: runtime.capture,
+                               membership=lambda: _membership(runtime))
     for name in (PRIMARY_COMMAND, *runtime.settings().commands_aliases):
         ctx.register_command(name, _command_handler(commands, runtime, name),
                              description="Meeting notes: record a voice call and get its summary and tasks",

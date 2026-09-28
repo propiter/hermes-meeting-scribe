@@ -12,7 +12,7 @@ import logging
 import re
 import shlex
 from dataclasses import dataclass
-from typing import Callable, Optional, Protocol, Union
+from typing import Any, Callable, Optional, Protocol, Sequence, Union
 
 from .config import PRIMARY_COMMAND, Settings
 from .domain.models import MeetingState, Stage
@@ -60,6 +60,10 @@ class Caller:
         return self.scope_id if (self.platform or "").lower() == "discord" and is_ascii_digits(self.scope_id) else ""
 
 
+def _labels(spaces: Sequence[Any]) -> str:
+    return ", ".join(f"`{s.slug}` ({s.name})" for s in spaces)
+
+
 def caller_from_session() -> Caller:
     from gateway.session_context import get_session_env
 
@@ -78,17 +82,26 @@ class CaptureController(Protocol):
     def live_meeting_ids(self) -> set[str]: ...
 
 
+#: ``membership(user_id, guild_ids)``: the ids among ``guild_ids`` of the Discord servers the user is
+#: a member of; ``None`` when that cannot be checked (Discord not connected).
+Membership = Callable[[str, Sequence[str]], Optional[set[str]]]
+
+
 class MeetingCommands:
     """Every read/write command acts in ONE space: the one owning the caller's server, else (DM) the
-    only space. With several spaces a DM gets an explanation instead of another team's meetings."""
+    only space. With several spaces a Discord DM uses the space(s) of the servers the caller is a
+    member of: one is used directly, several need ``space=<id>``. Nothing of a space the caller is
+    not part of is ever shown."""
 
     def __init__(self, service: Union[MeetingService, Callable[[], MeetingService]], settings: Callable[..., Settings],
-                 capture: Callable[[], Optional[CaptureController]]) -> None:
+                 capture: Callable[[], Optional[CaptureController]],
+                 membership: Callable[[], Optional[Membership]] = lambda: None) -> None:
         # A callable is resolved per command (review finding 7): the runtime may switch to another
         # profile's database, and a captured instance would keep answering from the old one.
         self._service = service if callable(service) else (lambda: service)
         self.settings = settings
         self.capture = capture
+        self._membership = membership
 
     @property
     def service(self) -> MeetingService:
@@ -100,6 +113,8 @@ class MeetingCommands:
             parts = shlex.split(raw_args or "")
         except ValueError:
             parts = (raw_args or "").split()
+        wanted = next((p.split("=", 1)[1].strip().lower() for p in parts if p.lower().startswith("space=")), None)
+        parts = [p for p in parts if not p.lower().startswith("space=")]
         sub, args = (parts[0].lower(), parts[1:]) if parts else ("start", [])
         handler = getattr(self, f"_cmd_{sub}", None)
         if handler is None:
@@ -107,12 +122,9 @@ class MeetingCommands:
         token = None
         try:
             if sub not in _NO_SPACE:
-                try:
-                    space = self.service.space_for(caller.guild_id or None)
-                except SpaceAmbiguous:
-                    return t("space.choose", lang)
-                except SpaceError:  # a server of no space (a DM always has the only space)
-                    return t("space.unassigned" if caller.guild_id else "space.choose", lang)
+                space, refusal = self._resolve_space(caller, wanted, lang, invoked_as, sub)
+                if space is None:
+                    return refusal
                 token = _SPACE.set(space)
                 lang = self.settings(space).ui_language
             return handler(args, caller, lang, invoked_as)
@@ -123,6 +135,49 @@ class MeetingCommands:
         finally:
             if token is not None:
                 _SPACE.reset(token)
+
+    def _resolve_space(self, caller: Caller, wanted: Optional[str], lang: str, cmd: str,
+                       sub: str) -> tuple[Optional[str], str]:
+        """``(space, "")``, or ``(None, reply)`` explaining what is missing."""
+        service = self.service
+        if caller.guild_id:
+            try:
+                space = service.space_for(caller.guild_id)
+            except SpaceError:  # several spaces and this server is in none
+                return None, t("space.unassigned", lang, guild=caller.guild_id)
+            if wanted and wanted != space:
+                return None, t("space.here_only", lang)
+            return space, ""
+        try:
+            return service.space_for(None), ""  # one space: DMs and other platforms use it
+        except SpaceAmbiguous:
+            pass
+        mine = self._spaces_of(caller)
+        if mine is None:
+            return None, t("space.choose", lang)
+        if wanted:
+            if any(s.slug == wanted for s in mine):
+                return wanted, ""
+            return None, t("space.not_yours", lang, slug=wanted, spaces=_labels(mine) or "-")
+        if len(mine) == 1:
+            return mine[0].slug, ""
+        if not mine:
+            return None, t("space.choose_none", lang)
+        return None, t("space.choose_yours", lang, spaces=_labels(mine), cmd=cmd, sub=sub, example=mine[0].slug)
+
+    def _spaces_of(self, caller: Caller) -> Optional[list]:
+        """The spaces owning a Discord server the caller is a member of; ``None`` when it cannot be
+        checked (another platform, or Discord not connected)."""
+        from .spaces import Spaces
+
+        check = self._membership() if (caller.platform or "").lower() == "discord" else None
+        if check is None or not is_ascii_digits(str(caller.user_id)):
+            return None
+        spaces = Spaces(lambda: self.service.repo, lambda key, default=None: default).all()
+        found = check(str(caller.user_id), [g for s in spaces for g in s.guild_ids])
+        if found is None:
+            return None
+        return [s for s in spaces if found.intersection(s.guild_ids)]
 
     @property
     def _space(self) -> str:

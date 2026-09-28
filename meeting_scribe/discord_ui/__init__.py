@@ -21,7 +21,7 @@ import logging
 import sys
 import weakref
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from ..domain.models import ActionItem, Meeting
 from .actions import ButtonActions
@@ -57,6 +57,24 @@ class UiState:
 
 def state_for(runtime: Any) -> UiState:
     return _STATES[runtime]
+
+
+def membership_for(runtime: Any) -> Optional[Callable[[str, Sequence[str]], Optional[set[str]]]]:
+    """For ``/meeting`` in a DM with several spaces: which of ``guild_ids`` the user is a member of,
+    read from the connected bot's member cache (``None`` while Discord is not connected)."""
+    state = _STATES.get(runtime)
+    client = getattr(state.adapter, "_client", None) if state is not None else None
+    if client is None:
+        return None
+
+    def check(user_id: str, guild_ids: Sequence[str]) -> Optional[set[str]]:
+        found = set()
+        for gid in guild_ids:
+            guild = client.get_guild(int(gid)) if str(gid).isdigit() else None
+            if guild is not None and guild.get_member(int(user_id)) is not None:
+                found.add(str(gid))
+        return found
+    return check
 
 
 def _check_auth(state: UiState) -> Callable[[Any], bool]:

@@ -229,7 +229,7 @@ class CaptureManager:
         try:
             session = await self.start_in(channel, started_by=caller.user_id)
         except GuildUnassigned:
-            return t("capture.unassigned", self.lang)
+            return t("capture.unassigned", self.lang, guild=guild.id)
         except AlreadyRecording as exc:
             s = exc.session
             return t("capture.already", self.lang, channel=s.channel.name, id=s.meeting.id if s.meeting else "-")

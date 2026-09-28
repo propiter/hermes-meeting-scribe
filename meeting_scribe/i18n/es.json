@@ -168,7 +168,7 @@
   "cmd.config_no": "no",
   "cmd.config_yes": "sí",
   "cmd.error": "No se pudo completar el comando. Inténtalo de nuevo en un momento y, si vuelve a fallar, avisa a un administrador.",
-  "cmd.help": "**/{cmd}** — notas de reuniones\n`start [#voz]` empezar a grabar · `stop` detener la grabación · `status` qué está pasando · `list [n]` últimas reuniones · `show <id>` notas de una reunión · `search <texto>` buscar lo que se dijo · `reprocess <id> [from=transcribe|analyze|deliver]` rehacer una reunión (desde el audio, solo las notas o solo volver a publicarlas) · `link @usuario <email o nombre en Linear>` · `project <id> <proyecto>` · `config` ajustes · `help`",
+  "cmd.help": "**/{cmd}** — notas de reuniones\n`start [#voz]` empezar a grabar · `stop` detener la grabación · `status` qué está pasando · `list [n]` últimas reuniones · `show <id>` notas de una reunión · `search <texto>` buscar lo que se dijo · `reprocess <id> [from=transcribe|analyze|deliver]` rehacer una reunión (desde el audio, solo las notas o solo volver a publicarlas) · `link @usuario <email o nombre en Linear>` · `project <id> <proyecto>` · `config` ajustes · `help` · en un mensaje privado, con varios equipos: añade `space=<id>`",
   "cmd.link_saved": "<@{discord_id}> vinculado al usuario de Linear «{linear}».",
   "cmd.list_empty": "Aún no hay reuniones.",
   "cmd.list_line": "`{id}` {date} · {title} · {state}",
@@ -313,9 +313,9 @@
   "ui.source.learned": "Usado antes en este canal",
   "ui.source.linear": "Proyecto de Linear",
   "space.first_name": "Principal",
-  "space.choose": "Esta instalación tiene varios espacios: ejecuta el comando dentro de un servidor de Discord del espacio que quieras.",
-  "space.unassigned": "Este servidor de Discord no pertenece a ningún espacio, así que aquí no se graba ni se muestra nada. Un administrador puede añadirlo a un espacio.",
-  "capture.unassigned": "Este servidor de Discord no pertenece a ningún espacio, así que no se graba. Un administrador puede añadirlo a un espacio.",
+  "space.choose": "Este bot atiende a varios equipos y desde aquí no sé a cuál te refieres. Ejecuta el comando dentro del servidor de Discord de tu equipo.",
+  "space.unassigned": "Este servidor de Discord todavía no está vinculado a ningún equipo, así que aquí no grabo ni muestro nada. Un administrador puede vincularlo en la máquina de Hermes con: `hermes meeting-scribe space add-guild <espacio> {guild}`",
+  "capture.unassigned": "Este servidor de Discord todavía no está vinculado a ningún equipo, así que aquí no puedo grabar. Un administrador puede vincularlo en la máquina de Hermes con: `hermes meeting-scribe space add-guild <espacio> {guild}`",
   "space.choose_none": "Este bot atiende a varios equipos y desde un mensaje privado no puedo saber a cuáles perteneces. Ejecuta el comando dentro del servidor de Discord de tu equipo.",
   "space.not_yours": "No conozco el equipo «{slug}», o no formas parte de él. Equipos que puedes usar: {spaces}.",
   "space.here_only": "En este servidor solo uso las reuniones de su propio equipo; `space=` sirve en mensajes privados.",
@@ -334,5 +334,6 @@
   "space.cli_guild_removed": "Servidor {guild} quitado del espacio {slug}; no se graba nada allí hasta que se asigne de nuevo.",
   "space.cli_override_set": "{slug}: {key} = {value}",
   "space.cli_override_unset": "{slug}: {key} vuelve a usar el valor global.",
-  "space.cli_unassigned_guild": "el bot está en el servidor {guild}, que no pertenece a ningún espacio: allí no se graba nada (hermes meeting-scribe space add-guild <slug> <id>)."
+  "space.cli_unassigned_guild": "el bot está en el servidor {guild}, que no pertenece a ningún espacio: allí no se graba nada (hermes meeting-scribe space add-guild <slug> <id>).",
+  "space.choose_yours": "Estás en varios equipos: {spaces}. Indica cuál al final del comando, por ejemplo `/{cmd} {sub} space={example}`."
 }
