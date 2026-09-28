@@ -163,11 +163,13 @@ class RecordingSession:
 
     def _new_meeting(self) -> Meeting:
         category = getattr(getattr(self.channel, "category", None), "name", "") or ""
+        category_id = getattr(self.channel, "category_id", None)
         text_id = getattr(self.text_channel, "id", None)
         return Meeting(id=short_id(), guild_id=str(self.guild.id), channel_id=str(self.channel.id),
                        channel_name=self.channel.name, started_at=self.deps.now(), state=MeetingState.RECORDING,
                        title=self.channel.name, speakers=tuple(self._speakers.values()),
                        guild_name=getattr(self.guild, "name", "") or "", category_name=category,
+                       category_id=str(category_id) if category_id is not None else None,
                        text_channel_id=str(text_id) if text_id is not None else None, started_by=self.started_by,
                        space=self.deps.space)
 

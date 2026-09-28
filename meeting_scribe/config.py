@@ -105,6 +105,7 @@ SPEC: dict[str, Opt] = {
     "delivery_transcript_max_mb": Opt("int", 8, "delivery", minimum=1, maximum=500),
     "delivery_forum_tags": Opt("list", (), "delivery"),
     "delivery_forum_default_tag": Opt("list", (), "delivery"),
+    "meeting_routes": Opt("list", (), "delivery", format="meeting_route"),
     # projects
     "projects_min_confidence": Opt("float", 0.6, "projects", minimum=0.0, maximum=1.0),
     "project_channels": Opt("list", (), "projects", format="project_channel"),
@@ -137,7 +138,7 @@ SPEC: dict[str, Opt] = {
 CHANNEL_KEYS = tuple(k for k, o in SPEC.items() if o.format == _CH)
 # Changing one of these may unblock a delivery waiting for a channel (DESIGN §19): re-queue it.
 DESTINATION_KEYS = CHANNEL_KEYS + ("delivery_discord_guild", "delivery_auto_channel_names", "project_channels",
-                                   "delivery_forum_tags", "delivery_forum_default_tag")
+                                   "delivery_forum_tags", "delivery_forum_default_tag", "meeting_routes")
 # Pre-0.2 dotted names. ``ctx.set_config("kanban.mode")`` stored NESTED YAML while Hermes' Desktop
 # settings form reads ``settings[key]`` FLAT, so dotted keys always showed their defaults there
 # (review finding 10). Canonical keys are now flat; the old nested values are still read as a fallback
@@ -292,6 +293,7 @@ class Settings:
     delivery_transcript_max_mb: int
     delivery_forum_tags: tuple[str, ...]
     delivery_forum_default_tag: tuple[str, ...]
+    meeting_routes: tuple[str, ...]
     pipeline_max_attempts: int
     pipeline_workers: int
     pipeline_max_transcriptions: int
@@ -332,6 +334,9 @@ class Settings:
                 warnings.append(f"{where}=invalid; using {opt.yaml_default!r}")
                 values[key] = opt.default
         values["commands_aliases"] = _normalize_aliases(values["commands_aliases"])
+        from .routes import load_routes
+
+        warnings += load_routes(values["meeting_routes"])[1]
         return cls(**values, space=space, warnings=tuple(warnings))
 
     @classmethod
@@ -352,6 +357,13 @@ class Settings:
             if sep and fold(name) and channel.strip():
                 out[fold(name)] = channel.strip()
         return out
+
+    def routes(self) -> list[Any]:
+        """``meeting_routes`` as :class:`~meeting_scribe.routes.MeetingRoute` rules (broken ones kept:
+        they match and fail closed, DESIGN §19.2)."""
+        from .routes import load_routes
+
+        return load_routes(self.meeting_routes)[0]
 
     def as_dict(self) -> dict[str, Any]:
         """Canonical-key view (``config`` subcommand / ``/meeting config``)."""
@@ -442,6 +454,10 @@ def validate_value(key: str, raw: Any) -> Any:
         value = _coerce(opt, raw)
         if opt.format == "project_channel":  # strict on write only: loading stays lenient (bad rows ignored)
             value = tuple(_project_channel(entry) for entry in value)
+        elif opt.format == "meeting_route":
+            from .routes import validate_entries
+
+            value = tuple(validate_entries(value))
     except (ValueError, TypeError) as exc:
         raise ValueError(f"{key}: {exc}") from exc
     return list(value) if isinstance(value, tuple) else value

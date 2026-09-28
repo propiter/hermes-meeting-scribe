@@ -280,6 +280,7 @@ class Meeting:
     guild_name: str = ""
     category_name: str = ""
     text_channel_id: Optional[str] = None
+    category_id: Optional[str] = None  # the voice channel's Discord category (``meeting_routes``, §19.2)
     folder: str = ""
     partial: bool = False
     language: Optional[str] = None

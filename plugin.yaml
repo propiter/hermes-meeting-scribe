@@ -262,6 +262,17 @@ config_schema:
       project or the forum post tags (the first name that exists in that forum). Empty = none; the post
       then waits until a tag is set.'
     group: delivery
+  meeting_routes:
+    type: list
+    default: []
+    label: Notes channel per meeting
+    description: 'Where the notes of some meetings go, one rule per line: ''origin = #channel''. Origin:
+      a voice channel (name or id), ''category:<name>'' for every voice channel of a Discord category,
+      or ''meet:<code>'' for Google Meet (* and ? allowed). Add '':private'' to keep everything in that
+      channel: tasks are shared with people or project channels only when someone there presses a button.
+      Example: ''Leadership = #leadership-notes:private''.'
+    group: delivery
+    format: meeting_route
   projects_min_confidence:
     type: float
     default: 0.6

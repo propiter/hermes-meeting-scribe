@@ -1,6 +1,7 @@
 """Regenerate ``plugin.yaml`` and the README configuration tables from ``meeting_scribe.config.SPEC``.
 
-Run after changing settings: ``.venv/bin/python scripts/gen_manifest.py``. Unit tests fail when
+Run after changing settings: ``.venv/bin/python scripts/gen_manifest.py`` (``--check`` only verifies,
+exit 1 on drift). Unit tests fail when
 the manifest or the README tables (between the ``config-table`` markers) drift from ``SPEC``.
 """
 from __future__ import annotations
@@ -87,11 +88,30 @@ def render_readme(text: str, lang: str) -> str:
     return f"{before}{START}\n{config_tables(lang)}{END}{after}"
 
 
-if __name__ == "__main__":
-    (ROOT / "plugin.yaml").write_text(render(), encoding="utf-8")
+def expected() -> dict[Path, str]:
+    """Every generated file with the content it must have."""
+    out = {ROOT / "plugin.yaml": render()}
     for name, lang in READMES.items():
         path = ROOT / name
         text = path.read_text(encoding="utf-8")
         if START in text:
-            path.write_text(render_readme(text, lang), encoding="utf-8")
+            out[path] = render_readme(text, lang)
+    return out
+
+
+def main(argv: list[str]) -> int:
+    """``--check``: write nothing, exit 1 naming the files that drift from ``SPEC``."""
+    wanted = expected()
+    if "--check" in argv:
+        stale = [p.name for p, text in wanted.items() if not p.exists() or p.read_text(encoding="utf-8") != text]
+        print(f"out of date: {', '.join(stale)} (run scripts/gen_manifest.py)" if stale
+              else "plugin.yaml and README configuration tables are up to date")
+        return 1 if stale else 0
+    for path, text in wanted.items():
+        path.write_text(text, encoding="utf-8")
     print("plugin.yaml and README configuration tables regenerated")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

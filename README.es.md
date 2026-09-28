@@ -322,6 +322,7 @@ advertencia.
 | `delivery_transcript_max_mb` | int | `8` | Tamaño máximo por archivo; si es mayor se divide. Súbelo si tu servidor permite archivos más grandes. |
 | `delivery_forum_tags` | list | `[]` | Cuando las notas o tareas van a un canal foro, aplica también a cada post de reunión las etiquetas del foro con estos nombres (la que coincide con el proyecto de la reunión se aplica siempre). Máximo 5 por post; los nombres que el foro no tiene se ignoran. |
 | `delivery_forum_default_tag` | list | `[]` | Para foros que exigen una etiqueta en cada post: la etiqueta a usar cuando ninguna coincide con el proyecto ni con las etiquetas de los posts (el primer nombre que exista en ese foro). Vacío = ninguna; el post espera hasta que se configure. |
+| `meeting_routes` | list | `[]` | A dónde van las notas de ciertas reuniones, una regla por línea: 'origen = #canal'. Origen: un canal de voz (nombre o id), 'category:<nombre>' para todos los canales de voz de una categoría de Discord, o 'meet:<código>' para Google Meet (admite * y ?). Añade ':private' para dejarlo todo en ese canal: las tareas se comparten con personas o canales de proyecto solo cuando alguien de ahí pulsa un botón. Ejemplo: 'Dirección = #notas-direccion:private'. |
 
 #### Proyectos
 

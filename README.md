@@ -315,6 +315,7 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `delivery_transcript_max_mb` | int | `8` | Largest file uploaded; longer transcripts are split. Raise it if your server allows bigger uploads. |
 | `delivery_forum_tags` | list | `[]` | When notes or tasks go to a forum channel, also apply the forum tags with these names to each meeting post (the tag matching the meeting's project is applied anyway). Max 5 per post; names the forum does not have are ignored. |
 | `delivery_forum_default_tag` | list | `[]` | For forums that require a tag on every post: the tag to use when no tag matches the project or the forum post tags (the first name that exists in that forum). Empty = none; the post then waits until a tag is set. |
+| `meeting_routes` | list | `[]` | Where the notes of some meetings go, one rule per line: 'origin = #channel'. Origin: a voice channel (name or id), 'category:<name>' for every voice channel of a Discord category, or 'meet:<code>' for Google Meet (* and ? allowed). Add ':private' to keep everything in that channel: tasks are shared with people or project channels only when someone there presses a button. Example: 'Leadership = #leadership-notes:private'. |
 
 #### Projects
 
