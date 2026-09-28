@@ -56,10 +56,9 @@ def _write(rt: Any, space: str, scope: str, entries: list[str]) -> None:
         rt.spaces().set_override(space, "meeting_routes", entries)
     else:
         rt.set_config("meeting_routes", entries)
-    try:
-        rt.service().retry_waiting()  # a delivery waiting for its rule goes now
-    except Exception:  # storage trouble is doctor's to report; the rule is saved
-        return
+    from .cli import _nudge_waiting  # cli imports this module: bound at call time
+
+    _nudge_waiting(rt)  # a delivery waiting for its rule goes now
 
 
 def _catalog(rt: Any, space: str) -> Any:
