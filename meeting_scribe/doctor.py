@@ -252,7 +252,8 @@ def route_rows(s: Settings, repo: Optional[Any]) -> list[dict[str, Any]]:
 
 def route_text(row: dict[str, Any]) -> str:
     """``Leadership (voice channel) → forum #leadership-notes (123), private``."""
-    kinds = {"voice": "voice channel", "category": "category", "meet": "Google Meet"}
+    kinds = {"voice": "voice channel", "category": "category", "meet": "Google Meet",
+             "any": "unreadable, covers every meeting"}
     target = row.get("channel_name") or row.get("channel") or "?"
     target = f"#{target}" if not str(target).isdigit() else str(target)
     if row.get("channel_id") and str(row["channel_id"]) != str(row.get("channel")):
@@ -270,7 +271,8 @@ def routes_summary(s: Settings, repo: Any) -> tuple[list[str], list[str]]:
         lines.append("meeting_routes: " + route_text(row) + checked)
         where = f"meeting_routes[{row['origin']}]"
         if row["status"] == "invalid":
-            problems.append(f"{where}: {row['detail']}; its meetings wait (kept private)")
+            scope = "every meeting of this space waits" if row["kind"] == "any" else "its meetings wait"
+            problems.append(f"{where}: {row['detail']}; {scope} (never published openly) until it is fixed")
         elif row["status"] not in ("ok", "not_checked"):
             problems.append(f"{where}: {row.get('detail') or row['status']}; its meetings wait")
         if row.get("warning"):

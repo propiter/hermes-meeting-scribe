@@ -46,6 +46,12 @@ def rule_for(settings: Any, meeting: Meeting) -> Any:
     return match_route(meeting, settings.routes())
 
 
+def marks_private(rule: Any) -> bool:
+    """A rule that makes a meeting private FOR GOOD: private and naming its origin. An unreadable
+    private entry (``any``) only holds every meeting back until it is fixed."""
+    return rule is not None and rule.private and rule.kind != "any"
+
+
 def is_private(repo: Any, settings: Any, meeting: Meeting) -> bool:
     if record(repo, meeting.id) is not None:
         return True

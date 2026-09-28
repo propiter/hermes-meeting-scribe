@@ -107,10 +107,10 @@ class Stages:
     def _mark_private(self, meeting: Meeting) -> None:
         """A private rule matching the meeting while it is recorded makes it private for good (DESIGN
         §19.2): editing the rule later never publishes it elsewhere."""
-        from ..privacy import remember, rule_for
+        from ..privacy import marks_private, remember, rule_for
 
         rule = rule_for(self.settings(meeting.space), meeting)
-        if rule is not None and rule.private:
+        if marks_private(rule):
             remember(self.repo, meeting.id, rule.origin, "")
 
     def discard(self, meeting: Meeting) -> Meeting:

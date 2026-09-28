@@ -16,7 +16,10 @@ record of :mod:`meeting_scribe.privacy`).
 
 Loading is lenient but FAILS CLOSED: an entry whose origin is readable but whose channel or option is
 not becomes a *broken* rule that still matches — its meetings are treated as private and their
-delivery waits with the reason — so a typo can never publish a private meeting in a public channel.
+delivery waits with the reason. An unreadable entry that mentions a private mark anywhere
+(``private``/``privado``/``privada``) whose origin cannot be read becomes a broken rule for EVERY
+meeting of the space (kind ``any``): all of them wait until it is fixed. An unreadable entry without
+a private mark is dropped with a warning.
 """
 from __future__ import annotations
 
@@ -30,12 +33,19 @@ from .domain.names import clean_channel_name
 from .domain.text import fold, is_ascii_digits
 
 PRIVATE_FLAGS = frozenset({"private", "privado", "privada"})
+_PRIVATE_MARK_RE = re.compile(r"(?<![a-z0-9])priv(?:ate|ado|ada)(?![a-z0-9])", re.IGNORECASE)
 CATEGORY_PREFIXES = ("category:", "categoria:", "categoría:")
 MEET_PREFIX = "meet:"
 _SEP_RE = re.compile(r"[-_\s]+")
 _NAME_MAX = 100
 # voice channel rules beat category rules; Meet rules only ever see Meet meetings
-_RANK = {"voice": 0, "category": 1, "meet": 0}
+# an unreadable private entry (``any``) beats every rule: all meetings wait until it is fixed
+_RANK = {"any": -1, "voice": 0, "category": 1, "meet": 0}
+
+
+def has_private_mark(entry: str) -> bool:
+    """``private``/``privado``/``privada`` as a word anywhere in ``entry``."""
+    return bool(_PRIVATE_MARK_RE.search(str(entry or "")))
 
 
 def norm_name(name: str) -> str:
@@ -46,15 +56,15 @@ def norm_name(name: str) -> str:
 
 @dataclass(frozen=True)
 class MeetingRoute:
-    kind: str  # voice | category | meet
-    ref: str  # id, name or (meet) lower-case pattern
+    kind: str  # voice | category | meet | any (an unreadable private entry: every meeting)
+    ref: str  # id, name, (meet) lower-case pattern or (any) the entry as written
     channel: str  # notes channel id or name ("" = broken rule)
     private: bool
     error: str = ""  # why a broken rule cannot be used (its meetings wait, as private)
 
     @property
     def by_id(self) -> bool:
-        return self.kind != "meet" and is_ascii_digits(self.ref)
+        return self.kind in ("voice", "category") and is_ascii_digits(self.ref)
 
     @property
     def origin(self) -> str:
@@ -63,7 +73,7 @@ class MeetingRoute:
             return f"category:{self.ref}"
         if self.kind == "meet":
             return f"{MEET_PREFIX}{self.ref}"
-        return self.ref
+        return self.ref  # voice, and ``any`` (the entry as written)
 
     @property
     def text(self) -> str:
@@ -72,6 +82,8 @@ class MeetingRoute:
         return f"{self.origin}={channel}" + (":private" if self.private else "")
 
     def matches(self, meeting: Meeting) -> bool:
+        if self.kind == "any":
+            return True
         if self.kind == "meet":
             if meeting.source != SOURCE_GOOGLE_MEET:
                 return False
@@ -124,6 +136,9 @@ def parse_route(entry: str) -> MeetingRoute:
     flag = flag.strip().lower()
     if flag and flag not in PRIVATE_FLAGS:
         raise ValueError(f"{origin.strip()}: unknown option {flag!r} (the only option is ':private')")
+    if not flag and has_private_mark(entry):
+        raise ValueError(f"{origin.strip()}: 'private' must be written as ':private' right after the channel "
+                         f"(origin = #channel:private), got {entry!r}")
     channel = _channel_value(channel)
     if not channel:
         raise ValueError(f"{origin.strip()}: expected the notes channel after '=' (id, <#id> or #name)")
@@ -132,7 +147,8 @@ def parse_route(entry: str) -> MeetingRoute:
 
 def load_routes(entries: Sequence[str]) -> tuple[list[MeetingRoute], list[str]]:
     """Lenient load: ``(rules, warnings)``. A readable origin with an unreadable rest is kept as a
-    BROKEN private rule (fails closed); an entry without a readable origin is dropped with a warning."""
+    BROKEN private rule (fails closed). Without a readable origin: an entry with a private mark becomes a
+    broken rule for every meeting (``any``); one without it is dropped with a warning."""
     rules: list[MeetingRoute] = []
     warnings: list[str] = []
     for entry in entries:
@@ -145,7 +161,12 @@ def load_routes(entries: Sequence[str]) -> tuple[list[MeetingRoute], list[str]]:
         try:
             kind, ref = parse_origin(origin if sep else "")
         except ValueError:
-            warnings.append(f"meeting_routes: {entry!r} ignored: {problem}")
+            if has_private_mark(entry):
+                rules.append(MeetingRoute("any", str(entry).strip()[:_NAME_MAX], "", True, error=problem))
+                warnings.append(f"meeting_routes: {entry!r} is not valid ({problem}) and looks private; "
+                                "EVERY meeting of this space waits until it is fixed")
+            else:
+                warnings.append(f"meeting_routes: {entry!r} ignored: {problem}")
             continue
         rules.append(MeetingRoute(kind, ref, "", True, error=problem))
         warnings.append(f"meeting_routes: {entry!r} is not valid ({problem}); its meetings are kept private and wait")

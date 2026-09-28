@@ -78,3 +78,25 @@ def test_meet_rules_only_match_meet_meetings(meeting):
     assert match_route(meet, load_routes(["meet:spaces-x?z = #r"])[0]).channel == "r"  # by room id
     assert match_route(meeting, rules) is None  # a Discord meeting never matches a Meet rule
     assert match_route(meet, load_routes(["abc-defg-hij = #v"])[0]) is None  # nor a Meet one a voice rule
+
+
+@pytest.mark.parametrize("entry", ["Leadership:private", "Leadership -> 700:private", "<#200> = 700:private",
+                                   "Leadership 700 privado", "PRIVADA Leadership"])
+def test_unreadable_entry_with_a_private_mark_holds_every_meeting(entry, meeting):
+    """An entry whose origin cannot be read but that says 'private' anywhere must never be dropped:
+    every meeting of the space waits (kind ``any``), none is published openly."""
+    rules, warnings = load_routes([entry, "Design=#design"])
+    assert rules[0].kind == "any" and rules[0].private and rules[0].error
+    assert match_route(meeting, rules) is rules[0]
+    assert match_route(replace(meeting, channel_name="Design"), rules) is rules[0]
+    assert any("EVERY meeting" in w for w in warnings)
+    with pytest.raises(ValueError):
+        validate_entries([entry])
+
+
+def test_private_mark_outside_the_option_is_refused_on_write_and_held_on_load(meeting):
+    with pytest.raises(ValueError, match="':private'"):
+        parse_route("Leadership = 700 private")
+    [rule], _ = load_routes(["Leadership = 700 private"])
+    assert (rule.kind, rule.ref, rule.private, rule.channel) == ("voice", "Leadership", True, "")
+    assert not load_routes(["=nothing"])[0]  # no private mark: dropped, as before

@@ -164,7 +164,8 @@ class DiscordNotesSink:
             pub = self._publisher(meeting)
             ptr = await pub.msgs_pointer(meeting)
             private = await pub.is_private(meeting)
-            if private:
+            rule = privacy.rule_for(self._settings(meeting), meeting)
+            if private and (rule is None or privacy.marks_private(rule)):
                 await asyncio.to_thread(privacy.remember, self._service().repo, meeting.id, dest.rule, "")
             if not dest.targets and (not ptr or private):  # a private meeting never stays outside its channel
                 if ptr:  # remove what is outside its known private channel; what is inside stays
