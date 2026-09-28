@@ -191,7 +191,7 @@ async def test_move_reposts_in_the_right_thread_deletes_the_old_message_and_lear
     sink = await deliver(env)
     old = next(m for m in env.chat.ordered() if "Budget" in m.content)
     env.svc.repo.save_meeting(env.meeting)
-    mention = await sink.move_item(env.meeting.id, "a3", "502")
+    mention = await sink.move_item(env.meeting.id, "a3", "502", viewer="10")
     assert mention == "<#502>" and old.id not in env.chat.messages
     _, neb = thread_of(env, env.nebula)
     assert any("Budget" in m.content for m in neb.ordered())
@@ -204,13 +204,13 @@ async def test_move_reposts_in_the_right_thread_deletes_the_old_message_and_lear
 
 async def test_move_learns_the_spoken_name(env):
     sink = await deliver(env)
-    await sink.move_item(env.meeting.id, "a2", "501")
+    await sink.move_item(env.meeting.id, "a2", "501", viewer="10")
     assert env.svc.repo.project_channel("main", "Nebulla") == "501"
 
 
 async def test_move_options_rank_the_likely_channels_first(env):
     sink = await deliver(env)
-    opts = await sink.move_options(env.meeting.id, "a2")
+    opts = await sink.move_options(env.meeting.id, "a2", viewer="10")
     assert opts[0] == ("502", "#nebula") and ("501", "#orion") in opts and all(o[0] != "900" for o in opts)
 
 
@@ -256,14 +256,14 @@ async def test_an_assignee_move_does_not_reroute_other_peoples_tasks(env):
     env.svc.repo.sync_action_items(env.meeting.id, items)
     env.notes = n
     sink = await deliver(env)
-    await sink.move_item(env.meeting.id, "a2", "501", learn=False)  # Ana moves HER task
+    await sink.move_item(env.meeting.id, "a2", "501", viewer="10", learn=False)  # Ana moves HER task
     assert env.svc.repo.project_channel("main", "Nebulla") is None
     assert ptr(env, "task:a2")["target"] == "501" and ptr(env, "task:a4")["target"] == "502"
 
 
 async def test_a_move_survives_reanalysis(env):
     sink = await deliver(env)
-    await sink.move_item(env.meeting.id, "a1", "502", learn=False)
+    await sink.move_item(env.meeting.id, "a1", "502", viewer="10", learn=False)
     env.svc.repo.sync_action_items(env.meeting.id, ITEMS)  # re-analysis rewrites the item data
     await deliver(env, sink)
     assert ptr(env, "task:a1")["target"] == "502"
@@ -277,7 +277,7 @@ async def test_move_that_cannot_delete_the_old_message_disarms_it(env):
     async def forbidden():
         raise PermissionError("Missing Permissions")
     old.delete = forbidden
-    await sink.move_item(env.meeting.id, "a1", "502")
+    await sink.move_item(env.meeting.id, "a1", "502", viewer="10")
     assert old.view is None and "<#502>" in old.content
 
 
@@ -411,3 +411,19 @@ async def test_publisher_never_posts_notes_or_fallback_tasks_in_another_server(e
     assert foreign.ordered() == [] and backlog.ordered() == []
     assert "Migración SMTP" in env.chat.ordered()[0].content
     assert any("Budget" in m.content for m in env.chat.ordered())
+
+
+async def test_move_offers_and_accepts_only_channels_the_clicker_can_see(env):
+    """📁 lists the bot's channels: a private one the clicker cannot see is neither offered nor accepted."""
+    secret = env.bot.add(777, "board-secret-plans", public=False)
+    secret.viewers = {99}
+    env.bot.guild.add_member(10)
+    sink = await deliver(env)
+    assert "777" not in [cid for cid, _ in await sink.move_options(env.meeting.id, "a2", viewer="10")]
+    with pytest.raises(LookupError):
+        await sink.move_item(env.meeting.id, "a2", "777", viewer="10", learn=False)
+    assert secret.ordered() == []
+    unknown = [cid for cid, _ in await sink.move_options(env.meeting.id, "a2", viewer="55")]  # not cached
+    assert "777" not in unknown and "502" in unknown
+    env.bot.guild.add_member(99)
+    assert "777" in [cid for cid, _ in await sink.move_options(env.meeting.id, "a2", viewer="99")]

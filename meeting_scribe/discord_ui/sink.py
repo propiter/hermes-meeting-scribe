@@ -27,6 +27,7 @@ from ..storage.artifacts import read_notes, read_transcript, render_transcript_m
 from .board import Board, move_options
 from .destination import (REPORT_KV, ROUTES_REPORT_KV, Destination, DestinationPending, Resolved, is_forum, pick_tags,
                           requires_tag, resolve, resolve_routes)
+from .guild import viewable_by
 from .private_share import ShareReport, share_all, share_dm, share_project, sync_copies, withdraw_public
 from .publisher import Pointers, ViewFactory
 from .render import RenderOptions
@@ -313,11 +314,23 @@ class DiscordNotesSink:
                              is_owner=is_owner)
         return self._views.panel_view(panel)
 
-    async def move_options(self, meeting_id: str, item_id: str) -> list[tuple[str, str]]:
+    async def move_options(self, meeting_id: str, item_id: str, *, viewer: str) -> list[tuple[str, str]]:
+        """📁 destinations for ``viewer`` (the clicker): only channels they can see; none in a
+        direct-messages meeting (it never lives in a channel, DESIGN §19.3)."""
         got = await self.board(meeting_id)
         if got is None:
             raise LookupError(meeting_id)
-        return move_options(got[1], item_id, self._settings(got[1].meeting).channel_name_ignore_prefixes)
+        pub, board = got
+        if await pub.is_dm(board.meeting):
+            return []
+        mine = self._viewable(pub, board.meeting, viewer)
+        options = move_options(board, item_id, self._settings(board.meeting).channel_name_ignore_prefixes)
+        return [(cid, name) for cid, name in options if cid in mine]
+
+    @staticmethod
+    def _viewable(pub: TaskPublisher, meeting: Meeting, viewer: str) -> set[str]:
+        guild = pub._destination(meeting).guild
+        return viewable_by(guild, viewer) if guild is not None else set()
 
     async def _check_forum_move(self, meeting: Meeting, channel_id: str, project: str) -> None:
         """A forum that requires a tag would refuse the task's post: say so BEFORE moving anything."""
@@ -327,18 +340,23 @@ class DiscordNotesSink:
                                                                       s.delivery_forum_default_tag):
             raise ForumTagRequired(f"forum {channel_id} requires a tag and none matches {project!r}")
 
-    async def move_item(self, meeting_id: str, item_id: str, channel_id: str, *, learn: bool = True) -> str:
-        """📁: pin the task to ``channel_id`` (``learn``: owners teach routing), re-post it there, drop the old one."""
+    async def move_item(self, meeting_id: str, item_id: str, channel_id: str, *, viewer: str,
+                        learn: bool = True) -> str:
+        """📁: pin the task to ``channel_id`` (``learn``: owners teach routing), re-post it there, drop the
+        old one. ``viewer`` (who asked) must be able to see that channel; a direct-messages meeting never
+        moves a task into a channel."""
         async with self._lock(meeting_id):
-            return await self._move_item(meeting_id, item_id, channel_id, learn)
+            return await self._move_item(meeting_id, item_id, channel_id, viewer, learn)
 
-    async def _move_item(self, meeting_id: str, item_id: str, channel_id: str, learn: bool) -> str:
+    async def _move_item(self, meeting_id: str, item_id: str, channel_id: str, viewer: str, learn: bool) -> str:
         got = await self.board(meeting_id)
         if got is None:
             raise LookupError(meeting_id)
-        _pub, board = got
+        pub, board = got
+        if await pub.is_dm(board.meeting):
+            raise ChannelUnavailable(f"meeting {meeting_id} goes by direct message only: its tasks are not moved")
         chan = next((c for c in board.channels if c.id == str(channel_id) and c.kind != "category"), None)
-        if chan is None or not chan.can_post:
+        if chan is None or not chan.can_post or chan.id not in self._viewable(pub, board.meeting, viewer):
             raise ChannelUnavailable(f"channel {channel_id} is not available")
         name = clean_channel_name(chan.name, self._settings(board.meeting).channel_name_ignore_prefixes) or chan.name
         if chan.kind == "forum":

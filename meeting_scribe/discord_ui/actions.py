@@ -210,7 +210,8 @@ class ButtonActions:
             await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             if action == "tsel":
-                reply = await self._move(meeting_id, item_id, list(values or ()), learn=self.is_owner(interaction))
+                reply = await self._move(meeting_id, item_id, list(values or ()), viewer=self._uid(interaction),
+                                         learn=self.is_owner(interaction))
             else:
                 reply = await asyncio.to_thread(self._run, action, meeting_id, item_id, list(values or ()))
         except (KeyError, LookupError, ValueError) as exc:  # expected: the clicker can do something about it
@@ -289,10 +290,10 @@ class ButtonActions:
             reply = friendly_error(exc, lang)
         await interaction.followup.send(clip_reply(reply), ephemeral=True)
 
-    async def _move(self, meeting_id: str, item_id: str, values: list[str], *, learn: bool) -> str:
+    async def _move(self, meeting_id: str, item_id: str, values: list[str], *, viewer: str, learn: bool) -> str:
         if not values:
             raise UserMessage(t("ui.no_selection", self.lang))
-        mention = await self._sink().move_item(meeting_id, item_id, values[0], learn=learn)
+        mention = await self._sink().move_item(meeting_id, item_id, values[0], viewer=viewer, learn=learn)
         item = await asyncio.to_thread(self._service().repo.get_action_item, meeting_id, item_id)
         if not learn:
             return t("tasks.moved_one", self.lang, channel=mention)
@@ -324,7 +325,8 @@ class ButtonActions:
     async def _offer_channels(self, interaction: Any, meeting_id: str, item_id: str) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            options = list(await self._sink().move_options(meeting_id, item_id))[:SELECT_LIMIT]
+            options = list(await self._sink().move_options(meeting_id, item_id,
+                                                          viewer=self._uid(interaction)))[:SELECT_LIMIT]
         except Exception as exc:
             log.exception("meeting-scribe: move options of %s/%s failed", meeting_id, item_id)
             await interaction.followup.send(clip_reply(friendly_error(exc, self.lang)), ephemeral=True)

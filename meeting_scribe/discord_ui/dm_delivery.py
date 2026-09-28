@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from .. import privacy
@@ -134,9 +134,10 @@ class DmDelivery:
                                      getattr(self.pub.views, "file", None), self.lang,
                                      max_bytes=int(s.delivery_transcript_max_mb) * 1024 * 1024)
         mine = [v for v in board.views if str(v.item.owner_speaker_id or "") == uid]
+        no_move = replace(self.pub.o, has_candidates=False)  # no 📁 Move in a DM (DESIGN §19.3)
         await self._put(p, "index", user, channel, render_dm_index(board.meeting, board.views, uid, self.lang))
         for view in mine:
-            await self._put(p, f"task:{view.item.id}", user, channel, render_task(board.meeting, view, self.pub.o))
+            await self._put(p, f"task:{view.item.id}", user, channel, render_task(board.meeting, view, no_move))
         alive = {v.item.id for v in mine}
         for item_id, old in (await p.with_prefix("task:")).items():  # gone, or now someone else's
             if item_id not in alive:

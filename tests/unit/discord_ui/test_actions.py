@@ -91,11 +91,13 @@ class Sink:
         self.calls.append(("panel", mid, uid, scope, page, is_owner))
         return ("panel", uid, scope, page)
 
-    async def move_options(self, mid, iid):
+    async def move_options(self, mid, iid, *, viewer):
+        self.calls.append(("options", mid, iid, viewer))
         return [("502", "#nebula"), ("501", "#orion")]
 
-    async def move_item(self, mid, iid, cid, *, learn):
+    async def move_item(self, mid, iid, cid, *, viewer, learn):
         self.calls.append(("move", mid, iid, cid, learn))
+        self.viewer = viewer
         return f"<#{cid}>"
 
 
@@ -201,6 +203,7 @@ async def test_move_offers_channels_then_select_moves_and_confirms(env):
     j = FakeInteraction(ANA, values=["502"])
     await env.acts.handle(j, "tsel", "k3v7q2ab", "a2")
     assert env.sink.calls[-1] == ("move", "k3v7q2ab", "a2", "502", False) and "<#502>" in j.replies()
+    assert ("options", "k3v7q2ab", "a2", str(ANA)) in env.sink.calls and env.sink.viewer == str(ANA)
     await env.acts.handle(FakeInteraction(OWNER, values=["502"]), "tsel", "k3v7q2ab", "a2")
     assert env.sink.calls[-1][-1] is True  # only an owner's correction is learned for everyone
 

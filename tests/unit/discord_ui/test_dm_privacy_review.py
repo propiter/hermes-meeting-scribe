@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
 
 from meeting_scribe import privacy
-from meeting_scribe.domain.models import Speaker
+from meeting_scribe.discord_ui.auth import check_dm
+from meeting_scribe.domain.models import ActionItem, Speaker
 
 from .test_dm_routes import SUMMARY_WORD, deliver, env, texts  # noqa: F401 - fixture reuse
 
@@ -48,3 +52,26 @@ async def test_the_recipients_are_worked_out_again_until_someone_got_it(env):
     res = await deliver(env)
     assert res.ok and SUMMARY_WORD in texts(marta.dm.ordered()), res.errors
     assert privacy.record(env.svc.repo, env.meeting.id)["recipients"] == ["11", "12"]
+
+
+async def test_a_dm_task_offers_no_move_and_a_move_click_is_refused(env):
+    await deliver(env)
+    task = next(m for m in env.luis.dm.ordered() if "**Landing page**" in m.content)
+    assert not any(":prj:" in c for c in (task.view or ()))
+    it = ActionItem(id="a1", title="x", owner_speaker_id="11")
+    click = SimpleNamespace(user=SimpleNamespace(id=11), guild=None, channel=SimpleNamespace(id=env.luis.dm.id),
+                            channel_id=env.luis.dm.id)
+    for action in ("prj", "tsel"):
+        assert not check_dm(click, {"11": str(env.luis.dm.id)}, action, it, "en").allowed
+
+
+async def test_a_dm_meeting_never_moves_a_task_into_a_channel(env):
+    secret = env.bot.add(777, "board-secret-plans", public=False)
+    secret.viewers = {99}
+    await deliver(env)
+    sink = env.make()
+    assert await sink.move_options(env.meeting.id, "a1", viewer="11") == []
+    with pytest.raises(LookupError):
+        await sink.move_item(env.meeting.id, "a1", "777", viewer="11", learn=False)
+    await sink.share(env.meeting.id, "a1", "project")
+    assert "Landing page" not in texts(secret.ordered())

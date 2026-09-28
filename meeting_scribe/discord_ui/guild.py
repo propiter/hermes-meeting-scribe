@@ -59,6 +59,19 @@ def snapshot_channels(guild: Any, *, need_threads: bool) -> list[ChannelInfo]:
     return out
 
 
+def viewable_by(guild: Any, user_id: str) -> set[str]:
+    """Ids of the server's channels member ``user_id`` can view (DESIGN §16, 📁 Move). A member the bot
+    cannot check (not cached, or no id) is judged as @everyone: only channels everyone sees (fail closed:
+    a private channel is never offered to someone who may not see it)."""
+    getter = getattr(guild, "get_member", None)
+    member = getter(int(user_id)) if callable(getter) and is_ascii_digits(str(user_id)) else None
+    who = member if member is not None else getattr(guild, "default_role", None)
+    if who is None:
+        return set()
+    return {str(ch.id) for ch in list(getattr(guild, "channels", None) or ())
+            if getattr(ch.permissions_for(who), "view_channel", False)}
+
+
 def guild_of(adapter: Any, meeting: Meeting, fallback_channels: Sequence[str] = ()) -> Any:
     """The meeting's guild; imported meetings (Google Meet, no guild) use their notes channel's guild."""
     client = getattr(adapter, "_client", None)

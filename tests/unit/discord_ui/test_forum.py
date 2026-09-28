@@ -297,9 +297,9 @@ async def test_a_project_forum_that_refuses_the_post_leaves_only_those_tasks_wai
 
 async def test_the_move_button_moves_a_task_into_a_project_forum_post(penv):
     sink, _ = await deliver(penv)
-    options = dict(await sink.move_options(penv.meeting.id, "a2"))
+    options = dict(await sink.move_options(penv.meeting.id, "a2", viewer="10"))
     assert "501" in options  # forums are offered
-    await sink.move_item(penv.meeting.id, "a2", "501")
+    await sink.move_item(penv.meeting.id, "a2", "501", viewer="10")
     [post] = penv.orion.posts
     assert any("Contract review" in m.content for m in post.ordered())
     assert ptr(penv, "task:a2")["channel"] == post.id
@@ -307,7 +307,7 @@ async def test_the_move_button_moves_a_task_into_a_project_forum_post(penv):
 
 async def test_the_move_button_moves_a_task_out_of_a_project_forum_post(penv):
     sink, _ = await deliver(penv)
-    await sink.move_item(penv.meeting.id, "a1", "502")
+    await sink.move_item(penv.meeting.id, "a1", "502", viewer="10")
     assert not any("Landing page" in m.content for m in penv.orion.posts[0].ordered())
     thread = next(c for c in penv.bot.channels.values() if c.parent is penv.nebula)
     assert any("Landing page" in m.content for m in thread.ordered())
@@ -367,7 +367,7 @@ async def test_the_move_button_refuses_a_forum_that_would_reject_the_post(penv):
     penv.orion.flags.require_tag = True
     penv.orion.available_tags = []
     with pytest.raises(ForumTagRequired) as err:
-        await sink.move_item(penv.meeting.id, "a2", "501")
+        await sink.move_item(penv.meeting.id, "a2", "501", viewer="10")
     assert "delivery_forum_default_tag" in friendly_error(err.value, "en")
     assert penv.orion.posts[0].ordered()[1:] and not any("Contract review" in m.content
                                                          for m in penv.orion.posts[0].ordered())

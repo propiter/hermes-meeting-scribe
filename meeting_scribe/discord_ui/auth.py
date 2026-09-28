@@ -12,7 +12,8 @@ Buttons on a public message are visible to everyone, so every click is checked a
 A DIRECT-MESSAGES meeting (DESIGN §19.3) is stricter: a button works only in the direct message the
 bot sent to the clicker for that meeting, and only on the clicker's own tasks — nobody acts on (or
 shares) someone else's task, owners included; everyone already has the whole meeting. ``shp`` (share
-MY task in its project channel) is the only share button; Kanban keeps its owners-only rule.
+MY task in its project channel) is the only share button; Kanban keeps its owners-only rule; 📁 Move
+is not offered nor accepted (it would pick among the bot's channels, private ones included).
 
 A PRIVATE meeting (DESIGN §19.2) adds one gate to every button: the click must come from the meeting's
 private channel (or its thread / forum post) and the clicker must be able to see that channel. The share
@@ -29,6 +30,8 @@ from ..i18n import t
 from .render_tasks import safe_name
 
 TASK_ACTIONS = frozenset({"ok", "lin", "no", "prj", "tsel"})
+# A direct-messages meeting never lives in a channel: no 📁 Move (``prj``/``tsel``) there (DESIGN §19.3).
+DM_TASK_ACTIONS = frozenset({"ok", "lin", "no", "shp"})
 SHARE_ACTIONS = frozenset({"shd", "shp", "sha", "shc"})
 OPEN_ACTIONS = frozenset({"mine", "pg"})
 MEETING_OWNER_ONLY = frozenset({"allk"})
@@ -80,7 +83,7 @@ def check_dm(interaction: Any, recipients: dict[str, str], action: str, item: Op
         return Verdict(False, t("dm.only_own_copy", lang))
     if action in OPEN_ACTIONS:
         return Verdict(True)
-    if action not in TASK_ACTIONS | {"shp"} or item is None:
+    if action not in DM_TASK_ACTIONS or item is None:
         return Verdict(False, t("dm.only_own_tasks", lang))
     if str(item.owner_speaker_id or "") != uid:
         return Verdict(False, t("dm.only_own_tasks", lang))
