@@ -256,13 +256,16 @@ class Runtime:
         self.reconcile_meet_pollers(force=True)
 
     def stop_pipeline(self) -> None:
+        # Workers first: their pulse reconciles the pollers and could start one again after the
+        # pollers were stopped. Joined outside the lock (see close()).
+        with self._lock:
+            runners = [svc.runner for svc in self._services.values()]
+        for runner in runners:
+            runner.stop()
         with self._lock:
             pollers, self._meet_pollers = list(self._meet_pollers.values()), {}
-            runners = [svc.runner for svc in self._services.values()]
         for poller in pollers:
             poller.stop()
-        for runner in runners:  # joined outside the lock (see close())
-            runner.stop()
 
     # -- Google Meet import (DESIGN §17, §23: one connection per space) ---------------------------
     # ``space=None`` (the CLI / doctor, which have no space selector yet): the install's only space;
