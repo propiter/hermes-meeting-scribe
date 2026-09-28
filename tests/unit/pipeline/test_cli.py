@@ -274,3 +274,23 @@ def test_reprocess_of_a_discarded_meeting_is_refused(rt, capsys):
     code, out = run(rt, ["reprocess", rt.mid, "--from", "transcribe"], capsys)
     assert code == 1 and "nothing to reprocess" in out
     assert repo.get_meeting(rt.mid).state is MeetingState.EMPTY
+
+
+def test_config_set_and_list_meeting_routes(rt, capsys):
+    """DESIGN §19.2: strict on write (canonical form, clear errors), each rule shown by ``config list``."""
+    from meeting_scribe.discord_ui.destination import ROUTES_REPORT_KV
+
+    code, _ = run(rt, ["config", "set", "meeting_routes", "Leadership = leadership-notes:privada, meet:abc-* = 610"],
+                  capsys)
+    assert code == 0 and rt.cfg["meeting_routes"] == ["Leadership=#leadership-notes:private", "meet:abc-*=610"]
+    code, out = run(rt, ["config", "set", "meeting_routes", "Leadership = #notes:hidden"], capsys)
+    assert code != 0 and "unknown option 'hidden'" in out
+    rt.service().repo.kv_set(ROUTES_REPORT_KV + rt.service().repo.get_meeting(rt.mid).space, json.dumps([
+        {"origin": "Leadership", "kind": "voice", "channel": "leadership-notes", "private": True, "status": "ok",
+         "channel_id": "700", "channel_name": "leadership-notes", "target_kind": "text", "public": False}]))
+    code, out = run(rt, ["config", "list"], capsys)
+    assert "· Leadership (voice channel) → #leadership-notes (700), private" in out
+    assert "· meet:abc-* (Google Meet) → 610, normal  (not checked against Discord yet)" in out
+    code, out = run(rt, ["config", "list", "--json"], capsys)
+    row = next(r for r in json.loads(out)["settings"] if r["key"] == "meeting_routes")
+    assert [r["origin"] for r in row["routes"]] == ["Leadership", "meet:abc-*"]

@@ -319,3 +319,19 @@ def test_library_of_one_space_never_shows_another_space(repo, tmp_path, meeting,
     assert lib.facets()["total"] == 1
     with pytest.raises(KeyError):
         lib.detail("other1")
+
+
+def test_library_marks_private_meetings(repo, tmp_path, meeting, utterances):
+    """DESIGN §19.2: Desktop (the operator's own library) shows everything and marks what is private."""
+    from meeting_scribe import privacy
+    from meeting_scribe.config import settings_from_mapping
+
+    seed(repo, meeting, utterances)
+    rules = settings_from_mapping({"meeting_routes": ["Daily Sync = 700:private"]})
+    lib = Library(repo, tmp_path, settings=lambda space=None: rules)
+    assert all(m["private"] for m in lib.meetings()["items"]) and lib.detail("m0")["meeting"]["private"]
+    plain = Library(repo, tmp_path, settings=lambda space=None: settings_from_mapping({}))
+    assert not any(m["private"] for m in plain.meetings()["items"])
+    privacy.remember(repo, "m1", "Daily Sync", "700")  # published as private: stays marked without the rule
+    assert [m["id"] for m in plain.meetings()["items"] if m["private"]] == ["m1"]
+    assert Library(repo, tmp_path).detail("m1")["meeting"]["private"] is True

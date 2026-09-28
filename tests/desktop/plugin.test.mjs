@@ -425,3 +425,18 @@ test('a discarded recording (no audio) is its own filter and state, not a failur
   assert.match(html, /Descartada: sin audio/)
   assert.match(html, /No se captó audio/)
 })
+
+test('a private meeting shows a lock in the list and a "private" pill in the detail', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$view.set('library'); mod.$selected.set('k3v7q2ab'); mod.$tab.set('summary')
+  const secret = { ...MEETING, private: true }
+  const html = await render(createElement(mod.MeetingsPage), {
+    '/v1/status': STATUS, [LIST_PATH]: { ...LIST, items: [secret, BUSY] }, '/v1/meetings/k3v7q2ab': { ...DETAIL, meeting: secret }
+  }, 'es')
+  assert.match(html, /class="ms-row-meta"><span>[^<]*<\/span><i data-codicon="lock"><\/i>/)
+  assert.match(html, /ms-pill ms-tone-warn[^>]*title="Reunión privada: [^"]+"[^>]*>.*?Privada/)
+  const plain = await render(createElement(mod.MeetingsPage), {
+    '/v1/status': STATUS, [LIST_PATH]: LIST, '/v1/meetings/k3v7q2ab': DETAIL
+  }, 'es')
+  assert.doesNotMatch(plain, /Privada/)
+})

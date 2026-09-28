@@ -203,6 +203,9 @@ def check_delivery(env: Any) -> Check:
         problems += [w for w in rep.get("warnings") or () if isinstance(w, str) and w]
     if not parts:
         parts.append("nothing delivered yet (channels are resolved on the first delivery)")
+    route_parts, route_problems = routes_summary(s, svc.repo)
+    parts += route_parts
+    problems += route_problems
     dm_getter = getattr(svc, "dm_notes", None)
     dm_notes = dm_getter() if callable(dm_getter) else {}
     if dm_notes:
@@ -213,6 +216,66 @@ def check_delivery(env: Any) -> Check:
     if problems:
         return Check.warn("; ".join(parts + problems))
     return Check.ok("; ".join(parts))
+
+
+def route_rows(s: Settings, repo: Optional[Any]) -> list[dict[str, Any]]:
+    """Every ``meeting_routes`` rule of ``s`` with what the gateway last resolved for it (DESIGN §19.2);
+    without storage (``repo=None``) the rules as written."""
+    import json
+
+    from .discord_ui.destination import ROUTES_REPORT_KV
+
+    raw = repo.kv_prefix(ROUTES_REPORT_KV) if repo is not None else {}
+    own = ROUTES_REPORT_KV + (s.space or "")
+    seen: dict[str, dict[str, Any]] = {}
+    # this space's report first; the global view (no space) takes any space's check of the same rule
+    for key in sorted(raw, key=lambda k: k != own):
+        if s.space and key != own:
+            continue
+        try:
+            rows = json.loads(raw[key] or "[]")
+        except ValueError:
+            continue
+        for r in rows if isinstance(rows, list) else ():
+            if isinstance(r, dict) and r.get("origin"):
+                seen.setdefault(str(r["origin"]), r)
+    rows = []
+    for rule in s.routes():
+        row = {"origin": rule.origin, "kind": rule.kind, "channel": rule.channel, "private": rule.private,
+               "status": "invalid" if rule.error else "not_checked", "detail": rule.error}
+        found = seen.get(rule.origin)
+        if found and not rule.error and found.get("channel") == rule.channel:
+            row.update({k: v for k, v in found.items() if k not in ("origin", "kind", "channel", "private")})
+        rows.append(row)
+    return rows
+
+
+def route_text(row: dict[str, Any]) -> str:
+    """``Leadership (voice channel) → forum #leadership-notes (123), private``."""
+    kinds = {"voice": "voice channel", "category": "category", "meet": "Google Meet"}
+    target = row.get("channel_name") or row.get("channel") or "?"
+    target = f"#{target}" if not str(target).isdigit() else str(target)
+    if row.get("channel_id") and str(row["channel_id"]) != str(row.get("channel")):
+        target += f" ({row['channel_id']})"
+    kind = {"forum": "forum ", "media": "forum "}.get(str(row.get("target_kind") or ""), "")
+    mode = "private" if row.get("private") else "normal"
+    return f"{row['origin']} ({kinds.get(row['kind'], row['kind'])}) → {kind}{target}, {mode}"
+
+
+def routes_summary(s: Settings, repo: Any) -> tuple[list[str], list[str]]:
+    """``(lines, problems)`` for doctor: each rule resolved, and what is wrong or risky."""
+    lines, problems = [], []
+    for row in route_rows(s, repo):
+        checked = "" if row["status"] != "not_checked" else " (not checked against Discord yet)"
+        lines.append("meeting_routes: " + route_text(row) + checked)
+        where = f"meeting_routes[{row['origin']}]"
+        if row["status"] == "invalid":
+            problems.append(f"{where}: {row['detail']}; its meetings wait (kept private)")
+        elif row["status"] not in ("ok", "not_checked"):
+            problems.append(f"{where}: {row.get('detail') or row['status']}; its meetings wait")
+        if row.get("warning"):
+            problems.append(str(row["warning"]))
+    return lines, problems
 
 
 def check_kanban(env: DoctorEnv) -> Check:

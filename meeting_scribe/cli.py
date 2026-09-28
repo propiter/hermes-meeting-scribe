@@ -427,8 +427,19 @@ def config_rows(rt: CliRuntime, space: Optional[str] = None) -> list[dict[str, A
                                "value": list(value) if isinstance(value, tuple) else value, "origin": origin}
         if key in resolved:
             row["resolved"] = resolved[key]
+        if key == "meeting_routes" and value:
+            row["routes"] = _route_rows(rt, settings)
         rows.append(row)
     return rows
+
+
+def _route_rows(rt: CliRuntime, settings: Settings) -> list[dict[str, Any]]:
+    """Each ``meeting_routes`` rule with what the gateway last resolved for it (DESIGN §19.2)."""
+    try:
+        repo = rt.service().repo
+    except Exception:  # no storage: the rules as written (doctor reports the storage)
+        repo = None
+    return doctor.route_rows(settings, repo)
 
 
 def _resolved_channels(rt: CliRuntime) -> dict[str, dict[str, Any]]:
@@ -461,6 +472,14 @@ def _resolved_channels(rt: CliRuntime) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _print_route(route: dict[str, Any]) -> None:
+    status = route.get("status")
+    extra = {"not_checked": "  (not checked against Discord yet)", "ok": ""}.get(str(status), f"  ! {route.get('detail') or status}")
+    _print(f"    · {doctor.route_text(route)}{extra}")
+    if route.get("warning"):
+        _print(f"      ! {route['warning']}")
+
+
 def _config_list(args: argparse.Namespace, rt: CliRuntime) -> int:
     space = selected(args, rt, action=False)
     rows = [r for r in config_rows(rt, space) if not args.group or r["group"] == args.group]
@@ -490,6 +509,8 @@ def _config_list(args: argparse.Namespace, rt: CliRuntime) -> int:
         _print(f"  {r['key']} = {_fmt(r['value'])}  ({r['origin']}){note}")
         for warning in res.get("warnings") or ():
             _print(f"    ! {warning}")
+        for route in r.get("routes") or ():
+            _print_route(route)
     if llm is not None and (not args.group or args.group == "llm"):
         _print(f"[{t('cfg.group.llm', rt.settings().ui_language)}]")
         _print_llm(llm, rt.settings().ui_language, indent="  ")

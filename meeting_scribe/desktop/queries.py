@@ -15,7 +15,7 @@ import re
 import time
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ..domain.models import KV_DM_NOTES, SOURCE_DISCORD, SOURCE_GOOGLE_MEET, MeetingState
 from ..llm_config import redact, safe_url
@@ -103,8 +103,20 @@ class Library:
     """The Desktop library of ONE space (DESIGN §23); ``space=None`` only for single-space tests of
     the pre-spaces surface. A meeting of another space is "not found", never shown."""
 
-    def __init__(self, repo: Repository, root: Path, space: Optional[str] = None) -> None:
+    def __init__(self, repo: Repository, root: Path, space: Optional[str] = None,
+                 settings: Optional[Callable[[str], Any]] = None) -> None:
+        """``settings(space)``: that space's settings, to mark meetings a private rule covers (DESIGN
+        §19.2); without it only meetings already published as private are marked."""
         self.repo, self.root, self.space = repo, Path(root), space
+        self._settings = settings
+
+    def private(self, meeting: Any) -> bool:
+        """Private meeting (Desktop shows it, with everything: the operator's own library)."""
+        from ..privacy import is_private, record
+
+        if self._settings is None:
+            return record(self.repo, meeting.id) is not None
+        return is_private(self.repo, self._settings(meeting.space), meeting)
 
     def _mine(self, mid: str) -> bool:
         if self.space is None:
@@ -185,6 +197,8 @@ class Library:
             data["task_count"] = int(self.repo._x("SELECT COUNT(*) FROM action_items WHERE meeting_id=? AND "
                                                   "status!='dismissed'", (r["id"],)).fetchone()[0])
             data["waiting_destination"] = self.repo.kv_get(WAITING_KV + r["id"]) is not None
+            meeting = self.repo.get_meeting(r["id"])
+            data["private"] = meeting is not None and self.private(meeting)
             items.append(data)
         more = len(rows) > limit
         return {"items": items,
@@ -243,6 +257,7 @@ class Library:
         projects = sorted({p for p in [meeting.project, *(t.get("project") for t in tasks)] if p}, key=str.lower)
         public = public_meeting(meeting.to_dict())
         public["people"] = _people(public)
+        public["private"] = self.private(meeting)
         return {"meeting": public, "notes": notes, "tasks": tasks, "projects": projects,
                 "transcript_total": self.repo.utterance_count(mid), "job": self.job(mid),
                 "history": self.history(mid),

@@ -140,7 +140,8 @@ def _space(c: dict[str, Any], wanted: str, *, required: bool = True) -> Optional
 def _library(c: dict[str, Any], wanted: str) -> Any:
     from .queries import Library
 
-    return Library(c["repo"], c["root"], _space(c, wanted))
+    spaces = _spaces(c)
+    return Library(c["repo"], c["root"], _space(c, wanted), settings=spaces.settings)
 
 
 def _command_in_space(c: dict[str, Any], request_id: str, wanted: str) -> None:

@@ -253,3 +253,33 @@ def test_owner_check_names_the_owner_or_says_single_profile():
     assert registry.names()[0] == "owner"
     assert check_owner(SimpleNamespace(owner_status=lambda: "this is the owner: x")) == Check.ok("this is the owner: x")
     assert check_owner(SimpleNamespace()) == Check.ok("single profile")
+
+
+def test_delivery_check_lists_each_meeting_route_and_its_risks(tmp_path):
+    """DESIGN §19.2: every rule resolved; a private rule on a public channel and a broken rule are warned."""
+    import json
+
+    from meeting_scribe.discord_ui.destination import ROUTES_REPORT_KV
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    svc = SimpleNamespace(repo=repo, waiting_destination=lambda: {})
+    e = env(tmp_path, meeting_routes=["Leadership = #leadership-notes:private", "category:Design = 710",
+                                      "Dirección = #x:hidden"])
+    e.service = lambda: svc
+    res = check_delivery(e)
+    assert "Leadership (voice channel) → #leadership-notes, private (not checked against Discord yet)" in res.detail
+    assert "category:Design (category) → 710, normal" in res.detail
+    assert res.status == "warn" and "meeting_routes[Dirección]: " in res.detail and "unknown option" in res.detail
+    repo.kv_set(ROUTES_REPORT_KV, json.dumps([
+        {"origin": "Leadership", "kind": "voice", "channel": "leadership-notes", "private": True, "status": "ok",
+         "channel_id": "700", "channel_name": "leadership-notes", "target_kind": "forum", "public": True,
+         "warning": "meeting_routes[Leadership]: private rule, but #leadership-notes is visible to @everyone; "
+                    "everyone there sees the whole meeting"},
+        {"origin": "category:Design", "kind": "category", "channel": "710", "private": False, "status": "missing",
+         "detail": "channel 710 not found"}]))
+    res = check_delivery(e)
+    assert "Leadership (voice channel) → forum #leadership-notes (700), private" in res.detail
+    assert "visible to @everyone" in res.detail and "channel 710 not found; its meetings wait" in res.detail
+    repo.close()

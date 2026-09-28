@@ -131,6 +131,7 @@ export const LOCALES = {
       pickBody: 'Its summary, transcript, tasks and processing appear here.'
     },
     source: { discord: 'Discord', google_meet: 'Google Meet' },
+    private: { label: 'Private', hint: 'Private meeting: its notes are only in its private channel, and tasks leave it only when someone there shares them.' },
     state: {
       recording: 'Recording', captured: 'Waiting to be processed', transcribing: 'Transcribing',
       transcribed: 'Transcribed', analyzing: 'Writing the notes', analyzed: 'Notes written',
@@ -339,6 +340,7 @@ export const LOCALES = {
       pickBody: 'Aquí verás su resumen, transcripción, tareas y procesamiento.'
     },
     source: { discord: 'Discord', google_meet: 'Google Meet' },
+    private: { label: 'Privada', hint: 'Reunión privada: sus notas solo están en su canal privado y las tareas salen de ahí solo cuando alguien del canal las comparte.' },
     state: {
       recording: 'Grabando', captured: 'Esperando proceso', transcribing: 'Transcribiendo',
       transcribed: 'Transcrita', analyzing: 'Escribiendo las notas', analyzed: 'Notas escritas',
@@ -1001,6 +1003,7 @@ function MeetingRow({ meeting: m, active, locale, onSelect }) {
       h('span', { className: `ms-row-sub${tone === 'bad' ? ' ms-tone-text-bad' : ''}` }, rowSubtitle(t, m))),
     h('span', { className: 'ms-row-meta' },
       h('span', null, fmtShort(m.started_at, locale)),
+      m.private ? h(Codicon, { name: 'lock', size: '0.7rem', 'aria-label': t('private.label'), title: t('private.hint') }) : null,
       m.source === 'google_meet' ? h(Codicon, { name: 'device-camera-video', size: '0.7rem', 'aria-label': t('source.google_meet') }) : null)))
 }
 
@@ -1056,6 +1059,7 @@ export function MeetingDetail({ id, onBack }) {
       h('p', { className: 'ms-detail-meta' }, meta.join(' · ')),
       h('div', { className: 'ms-chips' },
         h(Pill, null, h(Codicon, { name: m.source === 'google_meet' ? 'device-camera-video' : 'comment-discussion', size: '0.7rem' }), t(`source.${m.source}`) || m.source),
+        m.private ? h(Pill, { tone: 'warn', title: t('private.hint') }, h(Codicon, { name: 'lock', size: '0.7rem' }), t('private.label')) : null,
         (d.projects || []).map(p => h(Pill, { key: p, tone: 'accent' }, h(Codicon, { name: 'folder', size: '0.7rem' }), p)))),
     h(Tabs, { value: tab, onValueChange: v => $tab.set(v), className: 'ms-tabs' },
       h(TabsList, { className: 'ms-tabs-list', 'aria-label': meetingTitle(t, m) },
