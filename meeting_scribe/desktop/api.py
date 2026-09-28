@@ -457,4 +457,7 @@ def reset_seams() -> None:  # tests
     SEAMS.update(_DEFAULT_SEAMS)
 
 
+from . import api_routes  # noqa: E402,F401  (registers the catalog and rule endpoints on ``router``)
+
+
 __all__ = ["router", "SEAMS", "reset_seams"]
