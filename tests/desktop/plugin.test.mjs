@@ -377,6 +377,18 @@ test('status shows worker, queue problems, warnings, Google guide and diagnostic
   // a zero counter is neutral; only a non-zero one carries a colour
   assert.match(html, /ms-counter ms-counter-queued is-zero/)
   assert.match(html, /ms-counter ms-counter-failed"/)
+  assert.match(html, /Not recording right now/)
+})
+
+test('status names the meeting being recorded now and a recording whose capture is gone', opts, async () => {
+  const { createElement } = await import('react')
+  const recording = [{ meeting_id: 'r1', title: 'Weekly planning', started_at: '2026-01-01T10:00:00+00:00', live: true },
+    { meeting_id: 'r2', title: 'Old call', started_at: '2026-01-01T09:00:00+00:00', live: false }]
+  const html = await render(createElement(mod.StatusView), { '/v1/status': { ...STATUS, recording } })
+  assert.match(html, /Recording now — restarting the gateway would cut it/)
+  assert.match(html, /Weekly planning/)
+  assert.doesNotMatch(html, /Not recording right now/)
+  assert.match(html, /Old call[^]*the process capturing it is gone/)
 })
 
 test('the page styles use only host tokens: no literal colours or accent-tinted surfaces', () => {

@@ -245,6 +245,8 @@ export const LOCALES = {
       lastSeen: when => `Last seen ${when}`,
       running: 'In progress', queued: 'Waiting', failed: 'Need attention',
       noJobs: 'Nothing is waiting to be processed.',
+      recording: 'Recording now — restarting the gateway would cut it:', notRecording: 'Not recording right now.',
+      orphanRecording: 'Marked as recording, but the process capturing it is gone; the gateway closes it when it starts.',
       waiting: 'Waiting for a place to publish', dmNotes: 'Notes left in a direct message',
       commands: 'Recent actions', noCommands: 'No actions from this page yet.',
       googleConnected: 'Connected. New Meet transcripts are imported automatically.',
@@ -479,6 +481,8 @@ export const LOCALES = {
       lastSeen: when => `Visto por última vez ${when}`,
       running: 'En proceso', queued: 'En espera', failed: 'Requieren atención',
       noJobs: 'No hay nada esperando proceso.',
+      recording: 'Grabando ahora — reiniciar el gateway la cortaría:', notRecording: 'No hay ninguna grabación en curso.',
+      orphanRecording: 'Figura como grabando, pero el proceso que la capturaba ya no existe; el gateway la cerrará al arrancar.',
       waiting: 'Esperando un lugar donde publicar', dmNotes: 'Notas que quedaron en un mensaje directo',
       commands: 'Acciones recientes', noCommands: 'Todavía no hay acciones desde esta página.',
       googleConnected: 'Conectado. Las transcripciones nuevas de Meet se importan solas.',
@@ -1514,6 +1518,7 @@ export function StatusView() {
       h(SectionLabel, { actions: h(Button, { type: 'button', variant: 'ghost', size: 'xs', onClick: () => query.refetch() }, h(Codicon, { name: 'refresh', size: '0.75rem' }), t('common.refresh')) }, t('status.bot')),
       h('p', { className: 'ms-status-line' }, h(Dot, { tone: workerTone }), tOr(t, `status.worker.${worker.state}`, t('status.worker.unknown'))),
       worker.last_seen ? h('p', { className: 'ms-hint' }, t('status.lastSeen', fmtEpoch(worker.last_seen, locale))) : null,
+      h(RecordingNow, { recording: s.recording || [], openMeeting }),
       h('div', { className: 'ms-counters' }, ['running', 'queued', 'failed'].map(k => h('div', { key: k, className: `ms-counter ms-counter-${k}${s.counts?.[k] ? '' : ' is-zero'}` },
         h('span', { className: 'ms-counter-n' }, String(s.counts?.[k] ?? 0)), h('span', { className: 'ms-counter-l' }, t(`status.${k}`)))))),
     h('section', { className: 'ms-card' },
@@ -1551,6 +1556,25 @@ export function StatusView() {
           openMeeting(c.meeting_id))))
         : h('p', { className: 'ms-muted' }, t('status.noCommands'))),
     h(DoctorCard, null))
+}
+
+// What is being captured right now (from the database, so any profile sees the gateway's captures):
+// the operator reads it before restarting the gateway.
+function RecordingNow({ recording, openMeeting }) {
+  const t = usePluginI18n(ID)
+  const live = recording.filter(r => r.live)
+  const orphans = recording.filter(r => !r.live)
+  return h(Fragment, null,
+    live.length
+      ? h(Fragment, null, h('p', { className: 'ms-status-line', role: 'status' }, h(Dot, { tone: 'bad' }), t('status.recording')),
+        h('ul', { className: 'ms-list' }, live.map(r => h('li', { key: r.meeting_id, className: 'ms-list-row' },
+          h(Dot, { tone: 'bad' }), h('span', { className: 'ms-grow ms-list-title' }, r.title || r.meeting_id), openMeeting(r.meeting_id)))))
+      : h('p', { className: 'ms-status-line', role: 'status' }, h(Dot, { tone: 'muted' }), t('status.notRecording')),
+    orphans.length
+      ? h('ul', { className: 'ms-list' }, orphans.map(r => h('li', { key: r.meeting_id, className: 'ms-list-row' },
+        h(Dot, { tone: 'warn' }), h('span', { className: 'ms-grow' }, h('span', { className: 'ms-list-title' }, r.title || r.meeting_id),
+          h('span', { className: 'ms-list-sub' }, t('status.orphanRecording'))), openMeeting(r.meeting_id))))
+      : null)
 }
 
 function GoogleCard({ google: g, locale }) {

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import timedelta
 import argparse
 import json
@@ -363,3 +364,46 @@ def test_private_move_is_the_explicit_way_to_move_a_private_meeting(rt, capsys):
     assert code == 0 and "800" in out
     assert privacy.record(rt.service().repo, rt.mid) == {"rule": "Daily Sync", "channel": "800"}
     assert rt.service().repo.get_job(rt.mid).stage is Stage.DELIVER
+
+
+def _live_owner():
+    """The owner id of ANOTHER running process on this host (the test runner's parent): the gateway."""
+    import os
+    import socket
+    return f"{socket.gethostname()}:{os.getppid()}:feedbeef"
+
+
+def _dead_owner():
+    import socket
+    import subprocess
+    import sys
+    proc = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    return f"{socket.gethostname()}:{proc.stdout.strip()}:deadbeef"
+
+
+def test_status_headline_names_the_gateways_recording_read_from_the_database(rt, capsys, meeting):
+    # Regression: the headline was a fixed "Not recording right now" string, so the CLI (a process
+    # without capture) denied a recording the gateway was writing — and operators restart on it.
+    repo = rt.service().repo
+    live = replace(meeting, id="rec1live", state=MeetingState.RECORDING, ended_at=None, title="Planning")
+    repo.save_meeting(live)
+    repo.set_capture_owner(live.id, _live_owner())
+    code, out = run(rt, ["status"], capsys)
+    head = out.splitlines()[0]
+    assert "Not recording" not in out
+    assert head.startswith("Recording now:") and "`rec1live` Planning" in head
+    code, out = run(rt, ["status", "--json"], capsys)
+    assert json.loads(out)["recording"] == [{"id": "rec1live", "space": live.space, "title": "Planning",
+                                             "channel": live.channel_name,
+                                             "started_at": live.started_at.isoformat(), "live": True}]
+
+
+def test_status_says_when_a_recording_row_has_no_live_capture(rt, capsys, meeting):
+    repo = rt.service().repo
+    orphan = replace(meeting, id="rec2dead", state=MeetingState.RECORDING, ended_at=None)
+    repo.save_meeting(orphan)
+    repo.set_capture_owner(orphan.id, _dead_owner())
+    code, out = run(rt, ["status"], capsys)
+    lines = out.splitlines()
+    assert lines[0].startswith("Not recording right now")
+    assert "`rec2dead` is marked as recording, but the process capturing it is gone" in lines[1]

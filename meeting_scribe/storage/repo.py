@@ -377,6 +377,14 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
         row = self._x("SELECT capture_owner FROM meetings WHERE id=?", (meeting_id,)).fetchone()
         return row["capture_owner"] if row else None
 
+    def recordings(self, space: Optional[str] = None) -> list[tuple[Meeting, Optional[str]]]:
+        """Every meeting in state ``recording`` with the process capturing it (``capture_owner``),
+        oldest first; ``space=None``: every space."""
+        where, params = ("", ()) if space is None else (" AND space=?", (space,))
+        rows = self._x(f"SELECT {_MEETING_COLS}, capture_owner FROM meetings WHERE state=?{where} "
+                       "ORDER BY started_at", (MeetingState.RECORDING.value, *params)).fetchall()
+        return [(meeting_from_row(r), r["capture_owner"]) for r in rows]
+
     def upsert_speakers(self, meeting_id: str, speakers: Sequence[Speaker]) -> None:
         self._tx([("INSERT INTO speakers (meeting_id, user_id, name, is_bot) VALUES (?,?,?,?)"
                    " ON CONFLICT(meeting_id, user_id) DO UPDATE SET name=excluded.name",

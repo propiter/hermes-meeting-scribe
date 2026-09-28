@@ -54,6 +54,13 @@ def owner_alive(owner: Optional[str]) -> bool:
     return True
 
 
+def capturing(owner: Optional[str], own: Optional[str] = None) -> bool:
+    """True when the recording owned by ``owner`` is being captured right now: by us (``own``, the
+    caller's own owner id; default this process) or by another live process on this host. Any
+    process may ask — the CLI and Desktop read the gateway's recordings this way."""
+    return bool(owner) and (owner == (own or process_owner_id()) or owner_alive(owner))
+
+
 def owner_dead(owner: Optional[str]) -> bool:
     """True only when ``owner`` is PROVABLY gone: this host, a different process id that no longer
     exists, or a previous incarnation of our own pid. Unknown hosts or malformed ids are not dead —

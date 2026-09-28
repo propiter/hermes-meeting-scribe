@@ -188,6 +188,8 @@
   "cmd.search_line": "`{id}` [{ts}] **{speaker}**: {text}",
   "cmd.status_failed_extra": " — no se pudo terminar {stage}. Prueba con `reprocess` o pide a un administrador que revise `hermes meeting-scribe status`.",
   "cmd.status_idle": "No hay ninguna grabación en curso. Reuniones por procesar: {queued}.",
+  "cmd.status_orphan": "`{id}` figura como grabando, pero el proceso que la capturaba ya no existe: el gateway la cerrará y procesará al arrancar.",
+  "cmd.status_recording": "Grabando ahora: {meetings}. Reuniones por procesar: {queued}.",
   "cmd.status_line": "`{id}` {title} — {state}{extra}",
   "cmd.status_waiting_channel": " — esperando un canal donde publicar las notas; un administrador tiene que elegirlo.",
   "cmd.unknown": "No conozco la opción `{sub}`. Prueba `help`.",

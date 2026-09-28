@@ -339,3 +339,15 @@ def test_library_marks_private_meetings(repo, tmp_path, meeting, utterances):
     privacy.remember(repo, "m1", "Daily Sync", "700")  # published as private: stays marked without the rule
     assert [m["id"] for m in plain.meetings()["items"] if m["private"]] == ["m1"]
     assert Library(repo, tmp_path).detail("m1")["meeting"]["private"] is True
+
+
+def test_status_lists_recordings_from_the_database_with_their_liveness(repo, tmp_path, meeting):
+    import os
+    import socket
+    repo.save_meeting(replace(meeting, state=MeetingState.RECORDING, ended_at=None))
+    repo.set_capture_owner(meeting.id, f"{socket.gethostname()}:{os.getppid()}:feedbeef")
+    rec = Library(repo, tmp_path).status()["recording"]
+    assert rec == [{"meeting_id": meeting.id, "title": meeting.title, "started_at": meeting.started_at.isoformat(),
+                    "live": True}]
+    repo.set_capture_owner(meeting.id, "elsewhere:1:x")  # another host: not provably ours to call live
+    assert Library(repo, tmp_path).status()["recording"][0]["live"] is False

@@ -85,6 +85,18 @@ def caller_from_session() -> Caller:
                   cron=bool(get_session_env("HERMES_CRON_SESSION", "")))
 
 
+def status_headline(st: dict[str, Any], lang: str, visible: Callable[[str], bool] = lambda mid: True) -> list[str]:
+    """The first lines of every ``status`` (chat and CLI): what is being recorded NOW, from the
+    database (``MeetingService.recording``), then any recording whose capturing process is gone.
+    Operators read it to decide whether the gateway may be restarted."""
+    rows = [r for r in st["recording"] if visible(r["id"])]
+    live = [r for r in rows if r["live"]]
+    head = (t("cmd.status_recording", lang, queued=st["queued"],
+              meetings=", ".join(f"`{r['id']}` {r['title']}" for r in live))
+            if live else t("cmd.status_idle", lang, queued=st["queued"]))
+    return [head, *(t("cmd.status_orphan", lang, id=r["id"]) for r in rows if not r["live"])]
+
+
 class CaptureController(Protocol):
     """Implemented by Phase B (``meeting_scribe.capture``). Both return the chat reply."""
 
@@ -224,7 +236,7 @@ class MeetingCommands:
 
     def _cmd_status(self, args: list[str], caller: Caller, lang: str, cmd: str) -> str:
         st = self.service.status(self._space)
-        lines = [t("cmd.status_idle", lang, queued=st["queued"])]
+        lines = status_headline(st, lang, visible=lambda mid: self._visible(mid, caller))
         for row in st["recent"]:
             if not self._visible(row["id"], caller):
                 continue

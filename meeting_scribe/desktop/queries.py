@@ -21,6 +21,7 @@ from ..privacy import DM_UNREACHABLE_KV
 from ..domain.models import KV_DM_NOTES, SOURCE_DISCORD, SOURCE_GOOGLE_MEET, MeetingState
 from ..llm_config import redact, safe_url
 from ..storage.layout import Layout
+from ..storage.owner import capturing
 from ..storage.repo import Repository, meeting_dict_from_row
 from .control import HEARTBEAT_KV
 
@@ -406,7 +407,9 @@ class Library:
                     if self._mine(k[len(KV_DM_NOTES):])}
         unreachable = {k[len(DM_UNREACHABLE_KV):]: v for k, v in self.repo.kv_prefix(DM_UNREACHABLE_KV).items()
                        if self._mine(k[len(DM_UNREACHABLE_KV):])}
-        return {"worker": {"state": worker, "last_seen": seen},
+        recording = [{"meeting_id": m.id, "title": m.title or m.channel_name, "started_at": m.started_at.isoformat(),
+                      "live": capturing(owner)} for m, owner in self.repo.recordings(self.space)]
+        return {"worker": {"state": worker, "last_seen": seen}, "recording": recording,
                 "counts": {s: sum(1 for j in jobs if j["state"] == s) for s in ("running", "queued", "failed")},
                 "jobs": jobs[:100],
                 "waiting_destination": [{"meeting_id": k, "title": title(k), "detail": redact(v)}

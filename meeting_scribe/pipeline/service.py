@@ -26,6 +26,7 @@ from ..domain.models import (
 from ..domain.ports import Clock, ProjectCatalog
 from ..storage.artifacts import read_meta, read_notes, write_meta, write_notes, write_transcript, write_transcript_md
 from ..storage.layout import Layout
+from ..storage.owner import capturing
 from ..storage.repo import Repository
 from .runner import PipelineRunner, effective_stage
 from .task_moves import apply_move
@@ -121,8 +122,17 @@ class MeetingService:
             if row["id"] in waiting:
                 row["delivery"] = {"state": "waiting_destination", "reason": waiting[row["id"]]}
         return {"queued": self.repo.pending_job_count(space), "worker_running": self.runner.running, "recent": rows,
+                "recording": self.recording(space),
                 "waiting_destination": waiting, "dm_notes": self._in_space(self.dm_notes(), space),
                 "dm_unreachable": self._in_space(self.dm_unreachable(), space)}
+
+    def recording(self, space: Optional[str] = None) -> list[dict[str, Any]]:
+        """Meetings in state ``recording`` read from the DATABASE, so every process sees the gateway's
+        captures (the CLI has no capture of its own). ``live``: the process capturing it still runs —
+        restarting the gateway would cut it; ``False`` is an orphan the gateway closes on its next start."""
+        return [{"id": m.id, "space": m.space, "title": m.title or m.channel_name, "channel": m.channel_name,
+                 "started_at": m.started_at.isoformat(), "live": capturing(owner, self.runner.owner)}
+                for m, owner in self.repo.recordings(space)]
 
     def _in_space(self, by_meeting: dict[str, str], space: Optional[str]) -> dict[str, str]:
         if space is None:

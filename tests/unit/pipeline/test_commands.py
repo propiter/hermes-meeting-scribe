@@ -175,3 +175,14 @@ def test_every_state_and_stage_has_a_label():
             assert stage_label(sg, lang) != sg.value
         for sg in (Stage.TRANSCRIBE, Stage.ANALYZE, Stage.DELIVER):
             assert stage_label(sg, lang, redo=True) != sg.value
+
+
+def test_chat_status_names_a_recording_captured_by_another_process(prepo, layout, settings, clock, meeting):
+    import os
+    import socket
+    cmds, service, runner = make(prepo, layout, settings, clock)
+    live = replace(meeting, state=MeetingState.RECORDING, ended_at=None)
+    prepo.save_meeting(live)
+    prepo.set_capture_owner(live.id, f"{socket.gethostname()}:{os.getppid()}:feedbeef")
+    head = cmds.handle("status", CALLER, "meeting").splitlines()[0]
+    assert head.startswith("Recording now:") and f"`{live.id}`" in head

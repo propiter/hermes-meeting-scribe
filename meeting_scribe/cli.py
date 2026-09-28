@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional, Protocol
 
 from . import cli_google, cli_routes, cli_spaces, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
+from .commands import status_headline
 from .config import DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
 from .domain.models import MeetingState, Stage
 from .i18n import t
@@ -231,7 +232,8 @@ def _status(args: argparse.Namespace, rt: CliRuntime) -> int:
         _print(json.dumps(st, ensure_ascii=False, default=str))
         return 0
     lang = rt.settings().ui_language
-    _print(t("cmd.status_idle", lang, queued=st["queued"]))
+    for line in status_headline(st, lang):
+        _print(line)
     for row in st["recent"]:
         job = row["job"] or {}
         if row.get("delivery"):

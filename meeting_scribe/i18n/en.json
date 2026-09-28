@@ -188,6 +188,8 @@
   "cmd.search_line": "`{id}` [{ts}] **{speaker}**: {text}",
   "cmd.status_failed_extra": " — couldn't finish ({stage}). Try `reprocess`, or ask an administrator to check `hermes meeting-scribe status`.",
   "cmd.status_idle": "Not recording right now. Meetings waiting to be processed: {queued}.",
+  "cmd.status_orphan": "`{id}` is marked as recording, but the process capturing it is gone: the gateway closes and processes it when it starts.",
+  "cmd.status_recording": "Recording now: {meetings}. Meetings waiting to be processed: {queued}.",
   "cmd.status_line": "`{id}` {title} — {state}{extra}",
   "cmd.status_waiting_channel": " — waiting for a channel to post the notes in; an administrator needs to choose one.",
   "cmd.unknown": "Unknown option `{sub}`. Try `help`.",
