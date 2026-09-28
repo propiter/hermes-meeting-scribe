@@ -153,7 +153,7 @@ async def publish_transcript(msgs: Messages, ptrs: Pointers, channel: Any, meeti
         ptr["sending"] = part.name
         await ptrs.save(SUFFIX, ptr)  # BEFORE the upload: a lost pointer write can be healed
         try:
-            msg = await channel.send(label, file=make_file(part.name, part.data))
+            msg = await channel.send(label, file=make_file(part.name, part.data), **msgs.views.mention_kwargs(()))
         except Exception as exc:
             if _no_permission(exc):
                 log.info("meeting-scribe: cannot attach the transcript in %s: %s", channel.id, exc)

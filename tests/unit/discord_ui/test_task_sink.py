@@ -51,7 +51,7 @@ class Views:
                                             for b in panel.blocks), tuple(x.custom_id for x in panel.nav))
 
     def send_kwargs(self):
-        return {}
+        return self.mention_kwargs(())
 
     def mention_kwargs(self, users):
         return {"allowed_mentions": {"users": tuple(users), "roles": False, "everyone": False}}

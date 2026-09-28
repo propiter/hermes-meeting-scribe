@@ -126,7 +126,8 @@ class ViewKit:
         return view
 
     def send_kwargs(self) -> dict[str, Any]:
-        return {"allowed_mentions": discord.AllowedMentions(users=True, roles=False, everyone=False)}
+        """A panel (components v2): it pings nobody."""
+        return self.mention_kwargs(())
 
     def mention_kwargs(self, users: Sequence[str]) -> dict[str, Any]:
         """Ping exactly ``users`` (never @everyone/@here, roles or the replied user)."""

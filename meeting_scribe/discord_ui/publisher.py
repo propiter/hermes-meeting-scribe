@@ -91,9 +91,9 @@ class Messages:
         return await target.send(spec.content, view=self.views.view(spec.buttons), **self._mentions(spec))
 
     def _mentions(self, spec: MessageSpec) -> dict[str, Any]:
-        """``allowed_mentions`` of a message: the default, or exactly the users a spec names (§19.4)."""
-        if spec.mentions is None:
-            return self.views.send_kwargs()
+        """``allowed_mentions`` of a message: exactly the users its spec names, nobody by default. Text
+        written by the model or typed by people (a summary, a task title, a Meet name) can hold ``<@id>``:
+        it may show a mention but never notifies anyone the spec did not name (DESIGN §19.4)."""
         return self.views.mention_kwargs(spec.mentions)
 
     async def create_post(self, forum: Any, *, name: str, spec: MessageSpec, tags: Sequence[Any] = ()) -> tuple[Any, Any]:
@@ -129,8 +129,7 @@ class Messages:
             await msg.edit(view=self.views.panel_view(panel), **extra)
         else:
             assert spec is not None
-            if spec.mentions is not None:  # an edit never pings (DESIGN §19.4)
-                extra.update(self.views.mention_kwargs(()))
+            extra.update(self.views.mention_kwargs(()))  # an edit never pings (DESIGN §19.4)
             await msg.edit(content=spec.content, view=self.views.view(spec.buttons), **extra)
         return msg
 

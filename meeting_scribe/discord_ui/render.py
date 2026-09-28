@@ -36,9 +36,10 @@ class ButtonSpec:
 class MessageSpec:
     content: str
     buttons: tuple[ButtonSpec, ...] = ()
-    # ``None``: the default mention policy. A tuple: ping exactly these user ids and nothing else
-    # (``()`` pings nobody) — the notes' participants line (DESIGN §19.4).
-    mentions: Optional[tuple[str, ...]] = None
+    # The user ids this message may notify, and nobody else (``()``: nobody): the notes' participants
+    # line, a task's assignee. Any other ``<@id>`` in the text (model output, typed names) stays inert
+    # (DESIGN §19.4).
+    mentions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -114,8 +115,7 @@ def render_header(meeting: Meeting, notes: Notes, lang: str, participants: str =
                   pings: Optional[tuple[str, ...]] = None) -> list[MessageSpec]:
     """The meeting-chat summary (title, TL;DR, decisions, open questions), split under 2000 chars.
     ``participants`` (a line under the title) and ``pings`` (who that line may ping) only concern the
-    FIRST part; every other part pings nobody when a participants line is present."""
+    FIRST part; every other part, and the model's text anywhere, pings nobody."""
     parts = split_text(_header(meeting, notes, lang, participants))
-    if not participants:
-        return [MessageSpec(part) for part in parts]
-    return [MessageSpec(part, mentions=(tuple(pings or ()) if i == 0 else ())) for i, part in enumerate(parts)]
+    return [MessageSpec(part, mentions=(tuple(pings or ()) if i == 0 and participants else ()))
+            for i, part in enumerate(parts)]

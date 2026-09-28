@@ -118,11 +118,14 @@ async def test_private_channel_names_members_the_bot_cannot_check(env):
     assert allowed(env.private.ordered()[0])["users"] == ("11",)
 
 
-async def test_setting_off_adds_no_line_and_default_mentions(env):
+NOBODY = {"users": (), "roles": False, "everyone": False}
+
+
+async def test_setting_off_adds_no_line_and_pings_nobody(env):
     env.cfg["delivery_mention_participants"] = False
     await deliver(env)
     first = env.chat.ordered()[0]
-    assert "Participants" not in first.content and allowed(first) is None
+    assert "Participants" not in first.content and allowed(first) == NOBODY
 
 
 async def test_dm_only_meetings_have_no_participants_line(env):
@@ -131,11 +134,11 @@ async def test_dm_only_meetings_have_no_participants_line(env):
     assert env.chat.ordered() == [] and env.private.ordered() == []
     for uid in (10, 11):
         first = env.bot.users[uid].dm.ordered()[0]
-        assert "Participants" not in first.content and allowed(first) is None
+        assert "Participants" not in first.content and allowed(first) == NOBODY
 
 
-def test_render_header_without_participants_keeps_the_default_policy(meeting, notes):
-    assert all(s.mentions is None for s in render_header(meeting, notes, "en"))
+def test_render_header_without_participants_pings_nobody(meeting, notes):
+    assert all(s.mentions == () for s in render_header(meeting, notes, "en"))
     specs = render_header(meeting, notes, "es", "-# 👥 Participantes: <@10>", ("10",))
     assert specs[0].mentions == ("10",) and "Participantes: <@10>" in specs[0].content
 
