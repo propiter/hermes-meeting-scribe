@@ -216,8 +216,14 @@ touching Hermes:
 
 - **Retain, don't decode.** `_Decoders` hands Hermes a `_Retainer` for an
   unmapped SSRC: it keeps the payload after the transport layer (NaCl) with its
-  arrival time. Bounded: `RETAIN_SECONDS` (60 s) per SSRC and
-  `RETAIN_MAX_BYTES` (4 MiB) overall — the oldest frame of any SSRC goes first.
+  arrival time, **from the first packet and for the whole meeting if needed**,
+  so a voice identified late gets its complete track, not only what follows
+  the mapping. Caps: `RETAIN_SECONDS` 4 h (the default
+  `limits_max_duration_minutes`) and `RETAIN_SSRC_MAX_BYTES` 256 MiB per SSRC,
+  `RETAIN_MAX_BYTES` 1 GiB overall; each frame is counted as its bytes plus
+  `FRAME_OVERHEAD` (120 B of Python objects). Encrypted Opus is ~6-8 KB/s per
+  speaker (≈100 MB in 4 h with overhead), so a normal meeting never hits them;
+  past a cap the oldest frame goes first and is counted.
 - **Candidates.** People in the voice channel (voice states, every tick),
   CLIENTS_CONNECT (op 11: the `user_ids` already in the call, sent during the
   voice handshake) and CLIENT_CONNECT/DISCONNECT (ops 12/13), plus
@@ -236,12 +242,28 @@ touching Hermes:
   keys opening it (never expected) = ambiguous → not attributed, WARNING.
   libdave rejects a repeated nonce, so the Opus opened while testing is cached
   and claim + map + replay happen atomically under the receiver lock.
+- **Retries.** Retained DAVE frames are tried again with every key not yet
+  tried as soon as the candidate set grows (a voice-state join, op 11/12) and,
+  with every unproven candidate, every `RETRY_SECONDS` (5 s) — a key can start
+  working without a new candidate (the MLS commit adding its decryptor lands
+  late). Only the newest `RETRY_SCAN_FRAMES` (250, 5 s of audio) are scanned — any
+  frame of the SSRC proves its owner, `CONFIRM_PACKETS` suffice, and the loop
+  stays cheap; the replay opens the rest. Voice states of the channel
+  alone are enough candidates when op 11 never arrives.
 - **Without DAVE:** after `IDENTIFY_GRACE` (2 s) with no SPEAKING, the SSRC goes
   to the sole unmuted person present without an SSRC; another bot present, or
-  two candidates, blocks the guess.
-- **Replay.** Once mapped (key, sole candidate or a late SPEAKING — always
-  authoritative), the retained audio is decoded and written at its original
-  arrival times, so the track timeline is exact.
+  two candidates, blocks the guess. With several candidates, **voice-state
+  timing** decides when it can: someone muted or absent at two consecutive
+  presence snapshots while the SSRC sent ≥ `EVIDENCE_PACKETS` (10) packets in
+  between is not its owner; if exactly one person is left (and no other
+  unowned SSRC is left with the same person) it is theirs. Timing can also name
+  an `unidentified-N` track later. Otherwise the audio stays unidentified.
+- **Replay.** Once an owner is known (key, sole candidate, timing, or a late
+  SPEAKING — always authoritative), the whole retained audio is decoded and
+  written at its original arrival times, `REPLAY_BATCH` (1500 frames = 30 s)
+  per drain so a long backlog never stalls the loop; live packets queue behind
+  it and the SSRC is handed to Hermes' live path only when the backlog is
+  empty, so the track is in time order. The final drain replays everything.
 - **Never the wrong person.** Decodable audio still unattributable after
   `UNIDENTIFIED_AFTER` (10 s) is written to its own track
   `unidentified-N`, speaker "Unidentified participant" (transcribed); a later

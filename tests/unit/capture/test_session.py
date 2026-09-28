@@ -337,3 +337,64 @@ async def test_every_participant_is_a_speaker_with_the_names_they_go_by(world):
     assert set(speakers) == {"42", "43"}
     assert speakers["43"].aliases == ("Luis Paz", "lpaz")  # the nick equals the display name
     assert speakers["42"].aliases == ()
+
+
+async def test_three_people_present_without_speaking_get_full_tracks_from_second_zero(world):
+    """End to end (DESIGN §4.1): the bot joins a call with three people already talking; Discord
+    sends no SPEAKING and no op 11, and for the first 90 s the bot has no DAVE decryptor for anyone
+    (the MLS commit lands late). Every voice ends in its own track with the audio from second 0."""
+    from unittest.mock import patch
+
+    from .fakes import FakeConn, FakeDave, build_rtp_packet, dave_frame
+
+    pytest.importorskip("nacl")
+    voice, guild = world["voice"], world["guild"]
+    third = FakeMember(44, "Eva", channel=voice)
+    voice.members.append(third)
+    guild.members[44] = third
+    dave = FakeDave([])
+    dave.get_user_ids = lambda: []  # no group info: only the channel's voice states name candidates
+    connect = voice.connect
+
+    async def connect_with_dave(**kw):
+        vc = await connect(**kw)
+        vc._connection = FakeConn(dave=dave)
+        return vc
+    voice.connect = connect_with_dave
+    from dataclasses import replace as dc_replace
+
+    from .fakes import FakeCodec
+    cls = scribe_receiver_class(FakeVoiceReceiver)
+    deps = dc_replace(world["deps"](), receiver_cls=lambda vc, clock: cls(vc, clock=clock, codec=FakeCodec()))
+    s = RecordingSession(world["adapter"], voice, deps, started_by="42")
+    await s.start()
+    s.receiver.decoder_factory = FakeCodec  # Hermes' own Opus decoder once an SSRC is mapped
+    people = {42: 500, 43: 600, 44: 700}
+    seconds, per_second = 100, 2
+
+    def send(ssrc, payload, seq):
+        with patch("nacl.secret.Aead") as aead:
+            aead.return_value.decrypt.return_value = payload
+            s.receiver._on_packet(build_rtp_packet(ssrc=ssrc, seq=seq))
+
+    seq = 0
+    for second in range(seconds):
+        if second == 90:
+            dave.members += list(people)  # the keys arrive; nobody announced anything
+        for _ in range(per_second):
+            seq += 1
+            for uid, ssrc in people.items():
+                send(ssrc, dave_frame(uid, seq), seq)
+            world["clock"].t += 1 / per_second
+        await run_ticks(1)
+    await run_ticks()
+    await s.stop("stopped")
+    tracks = {w.path.stem: w for w in FakeWriter.instances}
+    assert set(tracks) == {"42", "43", "44"}
+    for uid in ("42", "43", "44"):
+        frames = tracks[uid].frames
+        assert len(frames) == seconds * per_second  # nothing lost
+        assert frames[0][0] == s.t0  # from second 0
+        assert [f[0] for f in frames] == sorted(f[0] for f in frames)
+    assert s.missing_audio == ()
+    assert {sp.user_id for sp in world["service"].finished[0][1]} == {"42", "43", "44"}

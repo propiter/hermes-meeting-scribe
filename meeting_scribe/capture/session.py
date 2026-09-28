@@ -278,10 +278,10 @@ class RecordingSession:
             return None
         return writer
 
-    def _drain(self) -> None:
+    def _drain(self, final: bool = False) -> None:
         if self.receiver is None or self.meeting is None:
             return
-        for user_id, frames in self.receiver.drain().items():
+        for user_id, frames in self.receiver.drain(final=final).items():
             if self._speaker_for(user_id) is None:
                 continue
             writer = self._writer_for(user_id)
@@ -366,7 +366,7 @@ class RecordingSession:
     async def _tear_down(self, reason: str) -> None:
         try:
             try:
-                self._drain()
+                self._drain(final=True)  # the whole retained backlog of late-identified voices too
             except Exception:
                 log.exception("meeting-scribe final drain failed")
             self._stop_receiver()

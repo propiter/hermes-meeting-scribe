@@ -249,6 +249,91 @@ def test_speaking_after_unidentified_names_the_label(clock):
 
 
 # -- memory ---------------------------------------------------------------------------------------
+def test_default_retention_keeps_a_whole_meeting_of_one_speaker():
+    cls = scribe_receiver_class(FakeVoiceReceiver)
+    assert cls.RETAIN_SECONDS >= 4 * 3600  # the default limits_max_duration_minutes
+    # 4 h of 20 ms frames at 64 kbps (160 B) plus Python overhead fit the per-SSRC cap
+    assert 4 * 3600 * 50 * (160 + 120) <= cls.RETAIN_SSRC_MAX_BYTES <= cls.RETAIN_MAX_BYTES
+
+
+def test_an_hour_identified_late_is_recovered_from_the_first_packet(clock):
+    """Nobody is a key candidate for an hour (no presence, no group, no op 11); when the owner's key
+    finally is, the retained audio from the FIRST packet goes to their track, in time order and
+    ahead of the live audio."""
+    dave = FakeDave([C])
+    dave.get_user_ids = lambda: []
+    rx = make(clock, dave=dave, present=(A,))
+    t0 = clock.t
+    talk_dave(rx, clock, 700, C, 3600, step=1.0)  # one packet a second for an hour
+    assert rx.drain() == {} and rx.voice_report().undecided == {700: 3600}
+    rx.update_presence([A, C])  # C shows up in the member list: a new candidate, retried at once
+    out = rx.drain()
+    talk_dave(rx, clock, 700, C, 2, start=3601)  # live audio while the backlog replays
+    while rx._pending:
+        for uid, frames in rx.drain().items():
+            out.setdefault(uid, []).extend(frames)
+    got = out[C]
+    assert len(got) == 3602 and got[0][0] == t0
+    assert [t for t, _ in got] == sorted(t for t, _ in got)
+    assert payloads(got)[:2] == [b"1", b"2"] and payloads(got)[-1] == b"3602"
+    assert rx.voice_report().identified == {700: (C, "dave")}
+
+
+def test_retained_dave_frames_are_retried_periodically_when_a_key_appears(clock):
+    dave = FakeDave([A])  # C is in the channel, but its decryptor does not exist yet
+    rx = make(clock, dave=dave, present=(A, C))
+    talk_dave(rx, clock, 700, C, 5)
+    assert rx.drain() == {}
+    dave.members.append(C)  # the MLS commit adding C's key lands; no presence change
+    clock.t += rx.RETRY_SECONDS
+    assert payloads(rx.drain()[C]) == [b"1", b"2", b"3", b"4", b"5"]
+
+
+def test_voice_states_alone_name_dave_candidates_without_op_11(clock):
+    dave = FakeDave([A, B, C])
+    dave.get_user_ids = lambda: []  # no MLS group info either
+    rx = make(clock, dave=dave, present=(A, B, C))
+    for owner, ssrc in ((A, 500), (B, 600), (C, 700)):
+        talk_dave(rx, clock, ssrc, owner, 3)
+    assert sorted(rx.drain()) == [A, B, C]
+
+
+def test_plain_voice_state_timing_names_the_ssrc_among_several_candidates(clock):
+    """No DAVE, two people without SSRC and both unmuted now: B was muted while the SSRC talked
+    (muted at two consecutive snapshots with packets in between), so it is A's."""
+    rx = make(clock, present=(A, B), muted=(B,))
+    t0 = clock.t
+    talk_plain(rx, clock, 500, 20, step=0.05)
+    rx.update_presence([A, B], muted=[B])  # a second snapshot: B stayed muted through it
+    rx.update_presence([A, B])  # B unmutes: the sole-candidate rule no longer applies
+    clock.t += rx.IDENTIFY_GRACE
+    out = rx.drain()
+    assert list(out) == [A] and out[A][0][0] == t0 and len(out[A]) == 20
+    assert rx.voice_report().identified == {500: (A, "timing")}
+
+
+def test_plain_timing_is_ambiguous_when_both_talked(clock):
+    rx = make(clock, present=(A, B))
+    talk_plain(rx, clock, 500, 60, step=0.2)
+    rx.update_presence([A, B])
+    clock.t += 1
+    assert rx.drain() == {} and list(rx.drain_unidentified()) == ["unidentified-1"]
+
+
+def test_timing_later_names_an_unidentified_track(clock):
+    rx = make(clock, present=(A, B))
+    talk_plain(rx, clock, 500, 60, step=0.2)
+    rx.drain()
+    rx.drain_unidentified()
+    rx.update_presence([A, B], muted=[A])
+    talk_plain(rx, clock, 500, 20, start=61, step=0.1)
+    rx.update_presence([A, B], muted=[A])  # A muted while it kept talking: it is B
+    rx.drain()
+    assert rx.voice_report().resolved == {"unidentified-1": B}
+    talk_plain(rx, clock, 500, 2, start=81)
+    assert list(rx.drain()) == [B]
+
+
 def test_retention_is_bounded_per_ssrc_and_globally(clock):
     rx = make(clock, present=(A, B))
     rx.RETAIN_SECONDS = 1.0
@@ -256,9 +341,9 @@ def test_retention_is_bounded_per_ssrc_and_globally(clock):
     talk_plain(rx, clock, 500, 200, step=0.02)  # 4 s
     p = rx._pending[500]
     assert len(p.frames) <= 51 and p.dropped >= 149
-    rx.RETAIN_MAX_BYTES = 50
-    talk_plain(rx, clock, 600, 20)
-    assert rx._retained_bytes <= 50
+    rx.RETAIN_MAX_BYTES = 10_000
+    talk_plain(rx, clock, 600, 200)
+    assert rx._retained_bytes <= 10_000
     assert rx._retained_bytes == sum(q.size for q in rx._pending.values())
 
 

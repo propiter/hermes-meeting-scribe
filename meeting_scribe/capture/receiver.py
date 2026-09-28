@@ -19,18 +19,28 @@ decoder. We swap ``_decoders`` for :class:`_Decoders`: for an unmapped SSRC it r
   After ``CONFIRM_PACKETS`` frames that open *and* decode as Opus for exactly one person — and never
   for anyone else — the SSRC is theirs. The opened Opus is cached with the frame: a DAVE decryptor
   refuses a nonce it has already processed, so a frame cannot be opened twice.
+  Frames retained before the owner's key was a candidate (their key/presence came later) are tried
+  again whenever the candidate set grows, and every ``RETRY_SECONDS``, from the event loop.
 * Plain Opus (no DAVE, or DAVE passthrough): mapped only when, after ``IDENTIFY_GRACE`` seconds
   without SPEAKING, exactly one unmuted person in the channel has no SSRC and this is the only
-  unmapped SSRC talking.
+  unmapped SSRC talking — or when voice-state TIMING leaves one person: whoever was muted, or not in
+  the channel, at two consecutive presence snapshots while the SSRC sent ``EVIDENCE_PACKETS`` or more
+  packets in between cannot be its owner; one candidate left (and no other unowned SSRC claiming
+  them) owns it.
 
-Once mapped, the retained audio is decoded and stamped with its ORIGINAL arrival times, so nothing
-said before identification is lost. When no safe decision exists the audio is never attributed to
-a guess: after ``UNIDENTIFIED_AFTER`` seconds audio that can be decoded becomes an "unidentified
+Once an owner is known, the whole retained audio — from the first packet — is decoded and stamped
+with its ORIGINAL arrival times, in batches of ``REPLAY_BATCH`` frames per drain so a long backlog
+never stalls the event loop; the SSRC is handed to Hermes' live path only when the backlog is empty,
+so the track stays in time order. When no safe decision exists the audio is never attributed to a
+guess: after ``UNIDENTIFIED_AFTER`` seconds audio that can be decoded becomes an "unidentified
 participant" track; DAVE audio no candidate's key opens cannot be decoded at all, stays pending
-(bounded) and is reported at the end (:meth:`voice_report`).
+and is reported at the end (:meth:`voice_report`).
 
-Memory: retained payloads are compressed packets (~100-200 bytes / 20 ms), capped per SSRC by
-``RETAIN_SECONDS`` and globally by ``RETAIN_MAX_BYTES`` (oldest dropped first, counted).
+Memory: retained payloads are the compressed packets (~100-200 bytes per 20 ms frame, about
+``FRAME_OVERHEAD`` more in Python) kept for the WHOLE meeting if needed: ``RETAIN_SECONDS`` (4 h,
+the default ``limits_max_duration_minutes``) and ``RETAIN_SSRC_MAX_BYTES`` (256 MiB ≈ 4 h of one
+speaker at 64 kbps with overhead) per SSRC, ``RETAIN_MAX_BYTES`` (1 GiB) overall; oldest dropped
+first, counted.
 
 The scribe never calls ``check_silence``/``flush_pending`` (they would hand utterances to the
 agent) and ignores ``allowed_user_ids``: a meeting records everyone in the channel.
@@ -51,7 +61,9 @@ Frames = list[tuple[float, bytes]]
 _CLASSES: dict[type, type] = {}
 DAVE_MAGIC = b"\xfa\xfa"
 UNIDENTIFIED_PREFIX = "unidentified-"
-_HOW = {"dave": "DAVE key", "sole": "only person without SSRC", "speaking": "late SPEAKING"}
+_HOW = {"dave": "DAVE key", "sole": "only person without SSRC", "speaking": "late SPEAKING",
+        "timing": "voice-state timing"}
+FRAME_OVERHEAD = 120  # bytes of Python objects per retained frame (``_Frame`` + its ``bytes``)
 
 
 class TimedBuffer:
@@ -118,7 +130,7 @@ class _Frame:
 
     @property
     def size(self) -> int:
-        return len(self.raw) + sum(len(o) for o in self.opened.values())
+        return FRAME_OVERHEAD + len(self.raw) + sum(len(o) for o in self.opened.values())
 
 
 @dataclass
@@ -134,6 +146,14 @@ class _Pending:
     dave: bool = False
     hits: dict[int, int] = field(default_factory=dict)  # user id -> frames their key opened
     label: Optional[str] = None  # set once it streams into an "unidentified participant" track
+    tried: set[int] = field(default_factory=set)  # DAVE keys already tried on the retained frames
+    retried_at: float = 0.0
+    recent: int = 0  # packets since the last presence snapshot (timing evidence)
+    excluded: set[int] = field(default_factory=set)  # muted/absent while it talked: not the owner
+    owner: Optional[int] = None  # identified; the backlog is being replayed into its track
+    how: str = ""
+    decoder: Any = None
+    kept: int = 0
 
     @property
     def ambiguous(self) -> bool:
@@ -196,8 +216,13 @@ def scribe_receiver_class(base: type) -> type:
         IDENTIFY_GRACE = 2.0  # seconds SPEAKING may lag before the sole-candidate rule applies
         UNIDENTIFIED_AFTER = 10.0  # decodable audio still unattributable -> "unidentified" track
         ACTIVE_WINDOW = 5.0  # an unmapped SSRC silent longer than this is not "talking now"
-        RETAIN_SECONDS = 60.0  # per-SSRC retention window
-        RETAIN_MAX_BYTES = 4 * 1024 * 1024  # all SSRCs together
+        RETRY_SCAN_FRAMES = 250  # newest retained frames (5 s of audio) a key is tried on: any of them proves it
+        RETRY_SECONDS = 5.0  # retained DAVE frames are tried again with every candidate this often
+        EVIDENCE_PACKETS = 10  # packets between two presence snapshots that make them timing evidence
+        REPLAY_BATCH = 1500  # retained frames (30 s of audio) replayed per drain
+        RETAIN_SECONDS = 4 * 3600.0  # per-SSRC retention window: a whole default-length meeting
+        RETAIN_SSRC_MAX_BYTES = 256 * 1024 * 1024  # per SSRC (~4 h at 64 kbps with overhead)
+        RETAIN_MAX_BYTES = 1024 * 1024 * 1024  # all SSRCs together
 
         def __init__(self, voice_client: Any, *, clock: Clock = time.monotonic,
                      codec: Optional[Any] = None) -> None:
@@ -221,6 +246,8 @@ def scribe_receiver_class(base: type) -> type:
             self._labels: dict[str, int] = {}
             self._resolved: dict[str, int] = {}  # unidentified label -> user SPEAKING named later
             self._voice_clients: set[int] = set()  # users op 11/12 says have media in the call
+            self._seen: set[int] = set()  # everyone ever in the channel (timing candidates)
+            self._candidates_grew = False  # a new DAVE key candidate: retry the retained frames
 
         # -- voice gateway opcodes ----------------------------------------------------------------
         def start(self) -> None:
@@ -243,21 +270,35 @@ def scribe_receiver_class(base: type) -> type:
                 log.info("meeting-scribe: voice CLIENTS_CONNECT: %d user(s) already in the call: %s",
                          len(ids), sorted(ids))
                 with self._lock:
+                    self._candidates_grew |= not ids <= self._voice_clients
                     self._voice_clients |= ids
             elif op in (12, 13) and str(data.get("user_id") or "").isdigit():
+                uid = int(data["user_id"])
                 with self._lock:
-                    (self._voice_clients.add if op == 12 else self._voice_clients.discard)(int(data["user_id"]))
+                    if op == 12:
+                        self._candidates_grew |= uid not in self._voice_clients
+                        self._voice_clients.add(uid)
+                    else:
+                        self._voice_clients.discard(uid)
 
         # -- presence (event-loop thread) -------------------------------------------------------
         def update_presence(self, user_ids: Iterable[int], muted: Iterable[int] = ()) -> None:
             """The people in the voice channel right now (voice states) and which are muted."""
             present = frozenset(int(u) for u in user_ids)
+            unmuted = present - {int(u) for u in muted}
             with self._lock:
                 if self._present is not None:  # the first snapshot is the baseline, not joins
                     for u in present - self._present:
                         self._joined[u] = next(self._order)
+                    silent = self._seen - (unmuted | self._unmuted)  # muted or away at both snapshots
+                    for p in self._pending.values():
+                        if not p.dave and p.owner is None and p.recent >= self.EVIDENCE_PACKETS:
+                            p.excluded |= silent
+                        p.recent = 0
+                self._candidates_grew |= not present <= self._seen
+                self._seen |= present
                 self._present = present
-                self._unmuted = present - {int(u) for u in muted}
+                self._unmuted = unmuted
 
         def refresh_connection(self) -> None:
             """Re-read DAVE session / transport key (cheap attribute reads; called every tick)."""
@@ -287,7 +328,7 @@ def scribe_receiver_class(base: type) -> type:
             with self._lock:
                 p = self._pending.get(ssrc)
                 if p is not None and p.label is None:
-                    kept = self._claim(ssrc, int(user_id), "speaking")
+                    self._assign(p, int(user_id), "speaking")  # authoritative, even over a key/timing
                 else:
                     if p is not None:  # already streaming as unidentified: name that track after them
                         self._resolved[p.label] = int(user_id)
@@ -295,7 +336,7 @@ def scribe_receiver_class(base: type) -> type:
                     self._ssrc_to_user[ssrc] = user_id
                     self._mapped_at[ssrc] = next(self._order)
                     return
-            self._log_identified(ssrc, int(user_id), "speaking", kept, p)
+            self._log_identified(ssrc, p)
 
         # -- unmapped SSRCs (reader thread, via _Retainer) ---------------------------------------
         def _is_unmapped(self, ssrc: object) -> bool:
@@ -305,19 +346,26 @@ def scribe_receiver_class(base: type) -> type:
             now = self._clock()
             dave = self._dave_frame(payload)
             frame = _Frame(now, payload)
-            if dave:  # outside the lock: trial decryption is the slow part
-                for u in self._key_candidates():
-                    opus = self._open(u, payload)
-                    if opus is not None and self._decodes(opus):
-                        frame.opened[u] = opus
+            with self._lock:
+                p = self._pending.get(ssrc)
+                owned = p is not None and p.owner is not None
+            candidates = self._key_candidates() if dave and not owned else []
+            for u in candidates:  # outside the lock: trial decryption is the slow part
+                opus = self._open(u, payload)
+                if opus is not None and self._decodes(opus):
+                    frame.opened[u] = opus
             with self._lock:
                 p = self._pending.get(ssrc)
                 if p is None:
-                    p = self._pending[ssrc] = _Pending(first=now, last=now)
+                    p = self._pending[ssrc] = _Pending(first=now, last=now, tried=set(candidates))
                     log.info("meeting-scribe: audio from ssrc=%d before SPEAKING; identifying", ssrc)
                 p.last = now
                 p.packets += 1
+                p.recent += 1
                 p.dave = p.dave or dave
+                if p.owner is not None:  # identified, backlog still replaying: queue behind it
+                    self._keep(p, frame)
+                    return
                 was_ambiguous = p.ambiguous
                 for u in frame.opened:
                     p.hits[u] = p.hits.get(u, 0) + 1
@@ -339,7 +387,8 @@ def scribe_receiver_class(base: type) -> type:
             p.frames.append(frame)
             p.size += frame.size
             self._retained_bytes += frame.size
-            while p.frames and frame.t - p.frames[0].t > self.RETAIN_SECONDS:
+            while p.frames and (frame.t - p.frames[0].t > self.RETAIN_SECONDS
+                                or p.size > self.RETAIN_SSRC_MAX_BYTES):
                 self._drop_oldest(p)
             while self._retained_bytes > self.RETAIN_MAX_BYTES:
                 self._drop_oldest(min((q for q in self._pending.values() if q.frames),
@@ -370,46 +419,97 @@ def scribe_receiver_class(base: type) -> type:
                 if p is None or p.label is not None or p.ambiguous or not p.hits:
                     return
                 (user_id, hits), = p.hits.items()
-                if hits < self.CONFIRM_PACKETS:
+                if hits < self.CONFIRM_PACKETS or p.owner is not None:
                     return
-                kept = self._claim(ssrc, user_id, "dave")
-            self._log_identified(ssrc, user_id, "dave", kept, p)
+                self._assign(p, user_id, "dave")
+            self._log_identified(ssrc, p)
+
+        def _retry_keys(self, ssrc: int, p: _Pending, now: float, *, periodic: bool) -> None:
+            """Event loop: open the newest ``RETRY_SCAN_FRAMES`` retained DAVE frames with keys not tried
+            on them yet (the owner's presence or MLS membership came after they spoke) — and, every
+            ``RETRY_SECONDS`` (``periodic``), with every candidate not proven yet, since a key can start
+            working without a new candidate (the MLS commit adding its decryptor). Then decide as
+            :meth:`_try_keys`. Proof needs only a few frames; the replay opens the rest."""
+            candidates = self._key_candidates()
+            fresh = [u for u in candidates if u not in p.tried or (periodic and p.hits.get(u, 0) < self.CONFIRM_PACKETS)]
+            p.retried_at = now
+            if not fresh:
+                return
+            with self._lock:
+                frames = list(p.frames)[-self.RETRY_SCAN_FRAMES:]
+                p.tried |= set(fresh)
+            for f in reversed(frames):
+                for u in fresh:
+                    if u in f.opened or p.hits.get(u, 0) >= self.CONFIRM_PACKETS:
+                        continue
+                    opus = self._open(u, f.raw)
+                    if opus is not None and self._decodes(opus):
+                        with self._lock:
+                            f.opened[u] = opus
+                            p.size += len(opus)
+                            self._retained_bytes += len(opus)
+                            p.hits[u] = p.hits.get(u, 0) + 1
+            self._try_keys(ssrc)
 
         def _try_sole(self, ssrc: int) -> None:
             now = self._clock()
             with self._lock:
                 p = self._pending.get(ssrc)
-                if p is None or p.label is not None or p.hits or (p.dave and self._dave_session):
+                if (p is None or p.label is not None or p.owner is not None or p.hits
+                        or (p.dave and self._dave_session)):
                     return
                 talking = [s for s, q in self._pending.items()
-                           if q.label is None and now - q.last <= self.ACTIVE_WINDOW]
-                mapped = {int(u) for s, u in self._ssrc_to_user.items()
-                          if u and self._mapped_at.get(s, 0) >= self._joined.get(int(u), 0)}
-                candidates = sorted(self._unmuted - mapped)
+                           if q.label is None and q.owner is None and now - q.last <= self.ACTIVE_WINDOW]
+                candidates = sorted(self._unmuted - self._owners())
                 if talking != [ssrc] or len(candidates) != 1:
                     return
-                user_id = candidates[0]
-                kept = self._claim(ssrc, user_id, "sole")
-            self._log_identified(ssrc, user_id, "sole", kept, p)
+                self._assign(p, candidates[0], "sole")
+            self._log_identified(ssrc, p)
 
-        def _claim(self, ssrc: int, user_id: int, how: str) -> int:
-            """Caller holds ``_lock``. Map the SSRC and decode its retained audio into the buffer at
-            the original arrival times, atomically: no drain and no second guess can interleave.
-            Returns how many retained frames made it."""
-            p = self._pending.pop(ssrc)
-            self._retained_bytes -= p.size
-            self._ssrc_to_user[ssrc] = user_id
-            self._mapped_at[ssrc] = next(self._order)
-            self._identified[ssrc] = (user_id, how)
-            decoder = self._codec.new_decoder()
-            buf = self._buffers[ssrc]
-            kept = 0
-            for f in p.frames:
-                pcm = self._pcm(decoder, f, user_id)
-                if pcm:
-                    buf.add(f.t, pcm)
-                    kept += 1
-            return kept
+        def _owners(self) -> set[int]:
+            """Caller holds ``_lock``. Users whose current connection already has an SSRC (mapped, or
+            identified and replaying)."""
+            mapped = {int(u) for s, u in self._ssrc_to_user.items()
+                      if u and self._mapped_at.get(s, 0) >= self._joined.get(int(u), 0)}
+            return mapped | {q.owner for q in self._pending.values() if q.owner is not None}
+
+        def _timing_candidate(self, ssrc: int, p: _Pending) -> Optional[int]:
+            """Caller holds ``_lock``. The one person voice-state timing leaves for a plain SSRC."""
+            if p.dave or p.owner is not None or not p.excluded:
+                return None
+            def left(q: _Pending) -> set[int]:
+                return self._seen - q.excluded - self._owners()
+            mine = left(p)
+            if len(mine) != 1:
+                return None
+            others = [s for s, q in self._pending.items() if s != ssrc and q.owner is None and not q.dave
+                      and q.label is None and left(q) == mine]
+            return None if others else next(iter(mine))
+
+        def _try_timing(self, ssrc: int) -> None:
+            with self._lock:
+                p = self._pending.get(ssrc)
+                user_id = None if p is None else self._timing_candidate(ssrc, p)
+                if user_id is None:
+                    return
+                if p.label is not None:  # already streaming as unidentified: name that track after them
+                    self._resolved[p.label] = user_id
+                    self._pending.pop(ssrc)
+                    self._ssrc_to_user[ssrc] = user_id
+                    self._mapped_at[ssrc] = next(self._order)
+                    self._identified[ssrc] = (user_id, "timing")
+                    log.info("meeting-scribe: ssrc=%d (%s) identified as user %d by voice-state timing",
+                             ssrc, p.label, user_id)
+                    return
+                self._assign(p, user_id, "timing")
+            self._log_identified(ssrc, p)
+
+        def _assign(self, p: _Pending, user_id: int, how: str) -> None:
+            """Caller holds ``_lock``. The SSRC is ``user_id``'s: its retained frames (from the first
+            packet) are replayed by :meth:`drain` at their original times; Hermes' live path takes
+            over when the backlog is empty (:meth:`_replay`)."""
+            p.owner, p.how = user_id, how
+            p.decoder = self._codec.new_decoder()
 
         def _pcm(self, decoder: Any, frame: _Frame, user_id: Optional[int]) -> Optional[bytes]:
             """PCM of a retained frame for ``user_id`` (None when it cannot be opened/decoded)."""
@@ -425,10 +525,38 @@ def scribe_receiver_class(base: type) -> type:
             except Exception:  # a corrupt packet: skip it like Hermes does, keep the rest
                 return None
 
-        @staticmethod
-        def _log_identified(ssrc: int, user_id: int, how: str, kept: int, p: _Pending) -> None:
-            log.info("meeting-scribe: ssrc=%d identified as user %d (%s); %d earlier frames kept, %d lost",
-                     ssrc, user_id, _HOW[how], kept, p.dropped + len(p.frames) - kept)
+        def _log_identified(self, ssrc: int, p: _Pending) -> None:
+            with self._lock:
+                self._identified[ssrc] = (int(p.owner), p.how)
+            log.info("meeting-scribe: ssrc=%d identified as user %d (%s); replaying %d retained frames "
+                     "from %.1f s before (%d dropped by the retention caps)", ssrc, p.owner, _HOW[p.how],
+                     len(p.frames), self._clock() - p.first, p.dropped)
+
+        def _replay(self, out: dict[int, Frames], limit: Optional[int]) -> None:
+            """Decode up to ``limit`` retained frames of each identified SSRC into ``out`` (``None``: all).
+            The SSRC is mapped for Hermes only when its backlog is empty, under the lock, so no live
+            frame can overtake a retained one."""
+            with self._lock:
+                jobs = [(s, p) for s, p in self._pending.items() if p.owner is not None]
+            for ssrc, p in jobs:
+                with self._lock:
+                    n = len(p.frames) if limit is None else min(limit, len(p.frames))
+                    batch = [p.frames.popleft() for _ in range(n)]
+                    for f in batch:
+                        p.size -= f.size
+                        self._retained_bytes -= f.size
+                    done = not p.frames
+                    if done:
+                        self._pending.pop(ssrc)
+                        self._ssrc_to_user[ssrc] = p.owner
+                        self._mapped_at[ssrc] = next(self._order)
+                frames = [(f.t, pcm) for f in batch if (pcm := self._pcm(p.decoder, f, p.owner))]
+                p.kept += len(frames)
+                if frames:
+                    out.setdefault(int(p.owner), []).extend(frames)
+                if done:
+                    log.info("meeting-scribe: ssrc=%d replay done: %d frames of user %d recovered, %d dropped",
+                             ssrc, p.kept, p.owner, p.dropped)
 
         # -- unidentified participant tracks -----------------------------------------------------
         def _stream_unidentified(self, label: str, frame: _Frame) -> None:
@@ -450,12 +578,21 @@ def scribe_receiver_class(base: type) -> type:
             before the grace ran out) and the switch of unattributable audio to a labelled track."""
             now = self._clock()
             with self._lock:
-                waiting = [(s, p) for s, p in self._pending.items() if p.label is None]
+                grew, self._candidates_grew = self._candidates_grew, False
+                waiting = [(s, p) for s, p in self._pending.items() if p.owner is None]
             for ssrc, p in waiting:
+                if p.label is not None:  # an unidentified track timing may still name
+                    self._try_timing(ssrc)
+                    continue
+                periodic = now - p.retried_at >= self.RETRY_SECONDS
+                if p.dave and self._dave_session and (grew or periodic):
+                    self._retry_keys(ssrc, p, now, periodic=periodic)
                 if now - p.first >= self.IDENTIFY_GRACE:
                     self._try_sole(ssrc)
+                    self._try_timing(ssrc)
                 with self._lock:
-                    if self._pending.get(ssrc) is not p or now - p.first < self.UNIDENTIFIED_AFTER:
+                    if (self._pending.get(ssrc) is not p or p.owner is not None
+                            or now - p.first < self.UNIDENTIFIED_AFTER):
                         continue
                     if p.dave and self._dave_session and not p.ambiguous:
                         continue  # only its owner's key can open it: keep trying (bounded)
@@ -472,10 +609,12 @@ def scribe_receiver_class(base: type) -> type:
                     self._stream_unidentified(label, frame)
 
         # -- drain (event-loop thread) -----------------------------------------------------------
-        def drain(self) -> dict[int, Frames]:
-            """Swap out all mapped buffers under the receiver lock; ``{user_id: [(t, pcm), ...]}``."""
+        def drain(self, *, final: bool = False) -> dict[int, Frames]:
+            """Swap out all mapped buffers under the receiver lock; ``{user_id: [(t, pcm), ...]}``, with
+            the next batch of replayed retained audio (``final``: all of it — the recording ends)."""
             self._settle()
             out: dict[int, Frames] = {}
+            self._replay(out, None if final else self.REPLAY_BATCH)
             with self._lock:
                 mapping = dict(self._ssrc_to_user)
                 for ssrc in list(self._buffers):
@@ -497,7 +636,7 @@ def scribe_receiver_class(base: type) -> type:
 
         def voice_report(self) -> VoiceReport:
             with self._lock:
-                undecided = {s: p.packets for s, p in self._pending.items() if p.label is None}
+                undecided = {s: p.packets for s, p in self._pending.items() if p.label is None and p.owner is None}
                 return VoiceReport(dict(self._identified), dict(self._labels), dict(self._resolved), undecided)
 
         def stop(self) -> None:
