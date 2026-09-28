@@ -18,8 +18,7 @@ The plugin runs on any server, so nothing here knows a particular naming scheme:
 
 * :func:`match_person` resolves a person's name as SPOKEN (a task owner the LLM wrote down) to one
   participant: exact name, then a whole-word part of it (given name, surname), then a phonetic
-  match for Spanish/English spellings (``Dayana``/``Dahiana``, ``Cristian``/``Christian``,
-  ``Yohana``/``Johanna``). Each tier must give ONE participant; two is ambiguous and stops there.
+  match for Spanish/English spellings (``Yoana``/``Johanna``, ``Cristofer``/``Christopher``). Each tier must give ONE participant; two is ambiguous and stops there.
 
 Standard library only: ``rapidfuzz`` is not in Hermes' venv and a guild has at most 500 channels.
 """
