@@ -43,21 +43,8 @@ class FakeVoiceReceiver:
         self._secret_key = bytes(conn.secret_key)
         self._dave_session = conn.dave_session
         self._bot_ssrc = conn.ssrc
-        self._install_speaking_hook(conn)
         conn.add_socket_listener(self._on_packet)
         self._running = True
-
-    def _install_speaking_hook(self, conn: Any) -> None:
-        original_hook = conn.hook
-
-        async def wrapped_hook(ws: Any, msg: Any) -> None:
-            if isinstance(msg, dict) and msg.get("op") == 5:
-                data = msg.get("d", {})
-                if data.get("ssrc") and data.get("user_id"):
-                    self.map_ssrc(int(data["ssrc"]), int(data["user_id"]))
-            if original_hook:
-                await original_hook(ws, msg)
-        conn.hook = wrapped_hook
 
     def stop(self) -> None:
         self._running = False
@@ -248,6 +235,7 @@ class FakeVoiceChannel(FakeTextChannel):
 
     async def connect(self, **kw: Any) -> FakeVoiceClient:
         self.connects += 1
+        self.connect_kwargs = kw
         self.vc = FakeVoiceClient(self)
         return self.vc
 

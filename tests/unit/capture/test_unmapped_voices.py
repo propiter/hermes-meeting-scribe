@@ -16,7 +16,7 @@ from .fakes import FakeCodec, FakeConn, FakeDave, FakeVoiceReceiver, build_rtp_p
 
 pytest.importorskip("nacl")
 
-A, B, C = 101, 102, 103
+A, B, C, D = 101, 102, 103, 104
 
 
 class Clock:
@@ -124,27 +124,29 @@ def test_dave_candidates_include_the_group_even_before_presence(clock):
 
 def test_clients_connect_user_ids_become_key_candidates(clock):
     """The production pattern: people already in the call when the bot connects get no SPEAKING;
-    op 11 lists them (no SSRC), and their DAVE key proves which SSRC is theirs."""
-    import asyncio
+    op 11 (recorded by the scribe's voice client during the handshake) lists them, and their DAVE
+    key proves which SSRC is theirs. Ops after start() arrive through the listener."""
+    from collections import deque
 
-    dave = FakeDave([C])
-    dave.get_user_ids = lambda: []  # no group info, and C not in the member list yet
-    rx = make(clock, dave=dave, present=())
-    seen: list = []
-    conn = rx._vc._connection
-
-    async def deliver():
-        await conn.hook(None, {"op": 11, "d": {"user_ids": [str(C)]}})
-        await conn.hook(None, {"op": 5, "d": {"ssrc": 900, "user_id": str(A)}})
-        seen.append(True)
-
-    asyncio.run(deliver())
-    assert seen and rx._ssrc_to_user[900] == A  # Hermes' SPEAKING mapping still runs
+    dave = FakeDave([C, D])
+    dave.get_user_ids = lambda: []  # no group info, and nobody in the member list yet
+    cls = scribe_receiver_class(FakeVoiceReceiver)
+    vc = SimpleNamespace(_connection=FakeConn(dave=dave), channel=SimpleNamespace(members=[]),
+                         user=SimpleNamespace(id=9999), voice_op_listener=None,
+                         voice_ops=deque([(11, {"user_ids": [str(C)]})]))
+    rx = cls(vc, clock=clock, codec=FakeCodec())
+    rx.decoder_factory = FakeCodec
+    rx.start()
+    assert vc.voice_op_listener == rx.note_voice_op
     talk_dave(rx, clock, 700, C, 3)
-    assert list(rx.drain()) == [C]
-    assert rx.voice_report().identified[700] == (C, "dave")
-    asyncio.run(conn.hook(None, {"op": 13, "d": {"user_id": str(C)}}))
+    assert list(rx.drain()) == [C] and rx.voice_report().identified[700] == (C, "dave")
+    vc.voice_op_listener(12, {"user_id": str(D)})
+    talk_dave(rx, clock, 701, D, 3)
+    assert list(rx.drain()) == [D]
+    vc.voice_op_listener(13, {"user_id": str(C)})
     assert C not in rx._voice_clients
+    rx.stop()
+    assert vc.voice_op_listener is None
 
 
 def test_late_speaking_replays_retained_dave_audio(clock):

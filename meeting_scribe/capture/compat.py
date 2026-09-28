@@ -20,8 +20,7 @@ DECODER_SEAMS = ("ssrc not in self._decoders", "self._decoders[ssrc].decode(")
 
 # (owner label, attribute, kind) — kind: "method" (callable on the class), "attr" (instance attr
 # set in __init__), "coro" (async method).
-_RECEIVER = (("start", "method"), ("stop", "method"), ("map_ssrc", "method"), ("_on_packet", "method"),
-             ("_install_speaking_hook", "method"))
+_RECEIVER = (("start", "method"), ("stop", "method"), ("map_ssrc", "method"), ("_on_packet", "method"))
 _RECEIVER_ATTRS = ("_lock", "_buffers", "_decoders", "_ssrc_to_user", "_dave_session", "_secret_key", "_vc")
 _DAVE = (("decrypt", "method"), ("get_user_ids", "method"))
 _ADAPTER = (("leave_voice_channel", "coro"), ("get_user_voice_channel", "coro"), ("_resolve_channel", "coro"),
@@ -109,11 +108,27 @@ def _check_dave(dave: Any, problems: list[str], checked: list[str]) -> None:
         problems.append("davey.MediaType.audio missing")
 
 
+def _check_voice_client(vc_cls: type, conn_cls: Optional[type], problems: list[str], checked: list[str]) -> None:
+    """The scribe connects with its own ``VoiceClient`` subclass (``voice_client.py``) to see op 11:
+    it overrides ``create_connection_state`` and passes ``hook=`` to ``VoiceConnectionState``."""
+    _check_methods("VoiceClient", vc_cls, (("create_connection_state", "method"),), problems, checked)
+    checked.append("VoiceConnectionState.__init__(voice_client, *, hook)")
+    try:
+        if conn_cls is not None and "hook" not in inspect.signature(conn_cls.__init__).parameters:
+            problems.append(f"VoiceConnectionState.__init__ takes no hook: {inspect.signature(conn_cls.__init__)}")
+    except (TypeError, ValueError) as exc:
+        problems.append(f"VoiceConnectionState.__init__ not introspectable: {exc}")
+
+
 def probe(receiver_cls: Optional[type], adapter_cls: Optional[type], conn_cls: Optional[type],
-          check_auth: Optional[Callable[..., Any]], dave: Any = None) -> CompatResult:
+          check_auth: Optional[Callable[..., Any]], dave: Any = None,
+          voice_client_cls: Optional[type] = None) -> CompatResult:
+    """``voice_client_cls``: discord.py's ``VoiceClient``, checked when given (``probe_hermes``)."""
     problems: list[str] = []
     checked: list[str] = []
     _check_dave(dave, problems, checked)
+    if voice_client_cls is not None:
+        _check_voice_client(voice_client_cls, conn_cls, problems, checked)
     for label, cls, fn in (("VoiceReceiver", receiver_cls, _check_receiver),
                            ("DiscordAdapter", adapter_cls, None), ("VoiceConnectionState", conn_cls, None)):
         if cls is None:
@@ -140,18 +155,20 @@ def probe_hermes() -> CompatResult:
     except Exception as exc:  # any import failure means capture cannot work
         return CompatResult(False, (f"Hermes Discord adapter not importable: {type(exc).__name__}: {exc}",), ())
     try:
+        from discord import VoiceClient
         from discord.voice_state import VoiceConnectionState
     except Exception as exc:  # discord.py missing or restructured
         conn: Optional[type] = None
+        vc_cls: Optional[type] = None
         extra = (f"discord.voice_state.VoiceConnectionState not importable: {type(exc).__name__}: {exc}",)
     else:
-        conn, extra = VoiceConnectionState, ()
+        conn, vc_cls, extra = VoiceConnectionState, VoiceClient, ()
     try:
         import davey  # type: ignore[import-not-found]
     except ImportError:  # no DAVE support installed: discord.py then negotiates voice without E2EE
         davey = None
     res = probe(getattr(mod, "VoiceReceiver", None), getattr(mod, "DiscordAdapter", None), conn,
-                getattr(mod, "_component_check_auth", None), davey)
+                getattr(mod, "_component_check_auth", None), davey, vc_cls)
     if not extra:
         return res
     return CompatResult(False, extra + tuple(p for p in res.problems if "VoiceConnectionState not" not in p),

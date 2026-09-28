@@ -24,6 +24,7 @@ from ..i18n import t
 from ..spaces import GuildUnassigned
 from .compat import CompatResult, probe
 from .receiver import scribe_receiver_class
+from .voice_client import scribe_voice_client_class
 from .session import Busy, RecordingSession, SessionDeps, Writer
 from .tracks import TrackWriter
 
@@ -35,14 +36,25 @@ _CHANNEL_MENTION = re.compile(r"^<#([0-9]+)>$")
 def compat_for_adapter(adapter: Any) -> CompatResult:
     """Probe the classes of the adapter module actually loaded in this gateway."""
     mod = sys.modules.get(type(adapter).__module__)
+    conn, vc_cls = _voice_classes()
+    return probe(getattr(mod, "VoiceReceiver", None), type(adapter), conn, getattr(mod, "_component_check_auth", None),
+                 voice_client_cls=vc_cls)
+
+
+def _voice_classes() -> tuple[Optional[type], Optional[type]]:
+    """discord.py's ``VoiceConnectionState`` and ``VoiceClient`` (``None``s when unimportable)."""
     try:
+        from discord import VoiceClient
         from discord.voice_state import VoiceConnectionState
     except Exception as exc:  # discord.py missing/restructured: report instead of crashing
         log.warning("meeting-scribe: discord.voice_state unavailable: %s", exc)
-        conn: Optional[type] = None
-    else:
-        conn = VoiceConnectionState
-    return probe(getattr(mod, "VoiceReceiver", None), type(adapter), conn, getattr(mod, "_component_check_auth", None))
+        return None, None
+    return VoiceConnectionState, VoiceClient
+
+
+def _voice_client_class() -> Optional[type]:
+    conn, vc_cls = _voice_classes()
+    return scribe_voice_client_class(vc_cls, conn) if conn is not None and vc_cls is not None else None
 
 
 def default_writer(ff: Optional[Ffmpeg], path: Any, t0: float, kbps: int) -> Writer:
@@ -87,6 +99,7 @@ class CaptureManager:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._compat_result: Optional[CompatResult] = None
         self._receiver_cls: Optional[type] = None
+        self._voice_client_cls: Optional[type] = None
         self._sessions: dict[int, RecordingSession] = {}
         self._starting: set[int] = set()
         self.on_session_end: list[Callable[[RecordingSession], None]] = []
@@ -102,6 +115,7 @@ class CaptureManager:
         self._compat_result = self._compat(adapter)
         base = getattr(sys.modules.get(type(adapter).__module__), "VoiceReceiver", None)
         self._receiver_cls = scribe_receiver_class(base) if self._compat_result.ok and base else None
+        self._voice_client_cls = _voice_client_class() if self._receiver_cls is not None else None
         if not self._compat_result.ok:
             log.warning("meeting-scribe: live capture disabled: %s", self._compat_result.summary())
         return self._compat_result
@@ -259,7 +273,7 @@ class CaptureManager:
                 raise GuildUnassigned(f"Discord server {gid} belongs to no space")
             kbps = self._settings().audio_bitrate_kbps  # machine-wide
             deps = SessionDeps(service=self._service(), settings=lambda: self.settings_for(space),
-                               receiver_cls=self._receiver_cls,
+                               receiver_cls=self._receiver_cls, voice_client_cls=self._voice_client_cls,
                                writer_factory=lambda path, t0: self._writer_factory(ff, path, t0, kbps),
                                clock=self._clock, tick=self._tick, space=space)
             session = RecordingSession(self.adapter, channel, deps, started_by=started_by)

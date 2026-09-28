@@ -148,6 +148,42 @@ def test_real_voice_receiver_without_speaking_keeps_audio_until_identified():
     rx.stop()
 
 
+def test_real_voice_websocket_hands_clients_connect_to_the_scribe_receiver():
+    """discord.py's real voice websocket, built as it is on connect (``hook=`` from the connection
+    state of the scribe's voice client): op 11 received during the handshake, before the receiver
+    exists, reaches it at start(); op 13 afterwards goes through the listener (DESIGN §4.1)."""
+    import asyncio
+
+    import discord
+    from discord.gateway import DiscordVoiceWebSocket
+    from discord.voice_state import VoiceConnectionState
+
+    from meeting_scribe.capture.receiver import scribe_receiver_class
+    from meeting_scribe.capture.voice_client import scribe_voice_client_class
+
+    cls = scribe_voice_client_class(discord.VoiceClient, VoiceConnectionState)
+    vc = cls.__new__(cls)
+    state = vc.create_connection_state()
+    vc._connection = state
+    state.secret_key, state.ssrc = list(bytes(range(32))), 1
+    vc.channel, vc._state = SimpleNamespace(members=[]), SimpleNamespace(user=SimpleNamespace(id=9999))
+
+    async def handshake():
+        ws = DiscordVoiceWebSocket(None, asyncio.get_running_loop(), hook=state.hook)
+        ws._connection = state
+        await ws.received_message({"op": 11, "d": {"user_ids": ["42", "43"]}})
+        return ws
+
+    ws = asyncio.run(handshake())
+    state.add_socket_listener = state.remove_socket_listener = lambda fn: None
+    rx = scribe_receiver_class(adapter_mod.VoiceReceiver)(vc, clock=lambda: 0.0)
+    rx.start()  # Hermes wraps state.hook for SPEAKING; op 11 is already known
+    assert rx._voice_clients == {42, 43}
+    asyncio.run(ws.received_message({"op": 13, "d": {"user_id": "43"}}))
+    assert rx._voice_clients == {42}
+    rx.stop()
+
+
 def test_factory_on_real_bot_registers_dynamic_items(manager):
     asyncio.run(_factory_on_real_bot(manager))
 

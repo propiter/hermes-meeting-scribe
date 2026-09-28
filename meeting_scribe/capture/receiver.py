@@ -223,29 +223,21 @@ def scribe_receiver_class(base: type) -> type:
             self._voice_clients: set[int] = set()  # users op 11/12 says have media in the call
 
         # -- voice gateway opcodes ----------------------------------------------------------------
-        def _install_speaking_hook(self, conn: Any) -> None:
-            """After Hermes wraps the voice websocket hook for SPEAKING (op 5), wrap it once more to
-            see CLIENTS_CONNECT (op 11, ``user_ids`` already in the call when we connect),
-            CLIENT_CONNECT (op 12) and CLIENT_DISCONNECT (op 13). discord.py hands every JSON voice
-            message to that hook. They carry user ids, never SSRCs: they widen the DAVE key
-            candidates; the SSRC is still proven by the key (DESIGN §4.1)."""
-            super()._install_speaking_hook(conn)
-            hermes_hook = conn.hook
-            receiver = self
-
-            async def hook(ws: Any, msg: Any) -> None:
-                if isinstance(msg, dict):
-                    receiver.note_voice_op(msg.get("op"), msg.get("d") or {})
-                await hermes_hook(ws, msg)
-
-            conn.hook = hook
-            live = getattr(conn, "ws", None)
-            if live is not None and getattr(live, "_hook", None) is hermes_hook:
-                live._hook = hook
-
-        def note_voice_op(self, op: Any, data: Any) -> None:
-            if not isinstance(data, dict):
+        def start(self) -> None:
+            """Also follow CLIENTS_CONNECT/CLIENT_CONNECT/CLIENT_DISCONNECT (ops 11/12/13) that the
+            scribe's voice client (``voice_client.py``) recorded from the handshake on: op 11 lists
+            the ``user_ids`` already in the call, the people Discord often sends no SPEAKING for.
+            They carry user ids, never SSRCs: they widen the DAVE key candidates; the SSRC is still
+            proven by the key (DESIGN §4.1)."""
+            super().start()
+            backlog = getattr(self._vc, "voice_ops", None)
+            if backlog is None:  # a plain discord.py client: voice states alone name the candidates
                 return
+            self._vc.voice_op_listener = self.note_voice_op
+            for op, data in list(backlog):
+                self.note_voice_op(op, data)
+
+        def note_voice_op(self, op: int, data: dict[str, Any]) -> None:
             if op == 11:
                 ids = {int(u) for u in data.get("user_ids") or () if str(u).isdigit()}
                 log.info("meeting-scribe: voice CLIENTS_CONNECT: %d user(s) already in the call: %s",
@@ -509,6 +501,8 @@ def scribe_receiver_class(base: type) -> type:
                 return VoiceReport(dict(self._identified), dict(self._labels), dict(self._resolved), undecided)
 
         def stop(self) -> None:
+            if getattr(self._vc, "voice_op_listener", None) == self.note_voice_op:
+                self._vc.voice_op_listener = None
             super().stop()
             with self._lock:  # the report (identified/labels/undecided counts) survives the stop
                 for p in self._pending.values():

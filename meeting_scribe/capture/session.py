@@ -65,6 +65,7 @@ class SessionDeps:
     settings: Callable[[], Settings]
     receiver_cls: type
     writer_factory: Callable[[Any, float], Writer]
+    voice_client_cls: Optional[type] = None  # voice_client.py: sees op 11 from the handshake on
     clock: Callable[[], float] = time.monotonic  # timeline clock; display times come from ``now``
     now: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
     tick: float = 0.5
@@ -161,7 +162,10 @@ class RecordingSession:
             existing = self.adapter._voice_clients.get(self.guild_id) or getattr(self.guild, "voice_client", None)
             if existing is not None and existing.is_connected():
                 raise Busy(t("capture.busy", self.lang))
-            self.vc = await self.channel.connect()
+            if self.deps.voice_client_cls is None:
+                self.vc = await self.channel.connect()
+            else:
+                self.vc = await self.channel.connect(cls=self.deps.voice_client_cls)
             mute_playback(self.vc)
             self.adapter._voice_clients[self.guild_id] = self.vc
             try:

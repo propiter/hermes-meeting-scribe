@@ -249,6 +249,20 @@ async def test_only_a_bot_heard_counts_as_nobody(world):
 
 
 # -- voices without SPEAKING / missing audio (DESIGN §4.1) ---------------------------------------
+async def test_connects_with_the_scribe_voice_client_when_available(world):
+    from dataclasses import replace
+
+    marker = type("ScribeVoiceClient", (), {})
+    s = RecordingSession(world["adapter"], world["voice"], replace(world["deps"](), voice_client_cls=marker),
+                         started_by="42")
+    await s.start()
+    assert world["voice"].connect_kwargs == {"cls": marker}
+    await s.stop("stopped")
+    s = await started(world)
+    assert world["voice"].connect_kwargs == {}
+    await s.stop("stopped")
+
+
 async def test_receiver_learns_who_is_in_the_channel_and_who_is_muted(world):
     world["ana"].voice.self_mute = True
     s = await started(world)
