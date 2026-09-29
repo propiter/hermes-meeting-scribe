@@ -212,7 +212,7 @@ async def test_rule_removed_later_keeps_the_meeting_private(env):
 
 
 async def test_rule_made_private_after_publishing_withdraws_public_copies(env):
-    env.cfg["meeting_routes"] = []
+    env.cfg.update({"meeting_routes": [], "delivery_tasks_placement": "projects"})
     env.chat.threads_ok = True  # the voice chat holds the notes AND a thread with the unrouted tasks
     await deliver(env)
     assert env.orion.ordered() and env.chat.ordered()  # normal: voice chat + project threads
@@ -246,7 +246,7 @@ async def test_unusable_normal_rule_also_waits(env):
 
 # -- normal rules --------------------------------------------------------------------------------------
 async def test_normal_rule_only_moves_the_notes(env):
-    env.cfg["meeting_routes"] = ["category:Board = design-meetings"]
+    env.cfg.update({"meeting_routes": ["category:Board = design-meetings"], "delivery_tasks_placement": "projects"})
     await deliver(env)
     assert SUMMARY_WORD in texts(env.design.ordered()) and inside(env) == []
     assert env.chat.ordered() == []  # not the voice chat

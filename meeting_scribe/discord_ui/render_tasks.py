@@ -47,6 +47,7 @@ class TaskView:
     route: Route
     refs: Mapping[str, str] = field(default_factory=dict)  # sink -> "t_42" / "ENG-7"
     sharing: Optional[Sharing] = None
+    moved: bool = False  # a person pinned it to ``route.channel_id`` with 📁 (a manual move)
 
 
 @dataclass(frozen=True)

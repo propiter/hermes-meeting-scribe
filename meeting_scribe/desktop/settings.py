@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Optional
 
 from .. import doctor, llm_config, privacy
-from ..config import (DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, space_keys,
+from ..config import (DESTINATION_KEYS, LEGACY_KEYS, RETIRED_KEYS, SPEC, Settings, canonical_key, config_schema, space_keys,
                       validate_value)
 from ..llm_config import redact
 from ..storage.repo import Repository
@@ -52,7 +52,8 @@ class SettingsStore:
         return Settings.load(self._lookup, space, overrides)
 
     def origin(self, key: str) -> str:
-        for name in (key, LEGACY_KEYS.get(key)):
+        retired = [old for old, (new, _) in RETIRED_KEYS.items() if new == key]  # read in its place
+        for name in (key, LEGACY_KEYS.get(key), *retired):
             if name and self._lookup(name, _MISSING) not in (_MISSING, None):
                 return "configured"
         return "default"

@@ -21,6 +21,10 @@ from .domain.text import is_ascii_digits
 Getter = Callable[..., Any]
 PRIMARY_COMMAND = "meeting"
 MODES = ("approve", "auto", "off")
+# Where a meeting's task cards go (DESIGN §16.1). ``meeting``: with the summary, one place per meeting;
+# ``projects``: a thread per meeting in each project's channel; ``projects_inline``: straight in it.
+TASKS_MEETING, TASKS_PROJECTS, TASKS_PROJECTS_INLINE = "meeting", "projects", "projects_inline"
+TASK_PLACEMENTS = (TASKS_MEETING, TASKS_PROJECTS, TASKS_PROJECTS_INLINE)
 _ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _CHANNEL_MENTION_RE = re.compile(r"^<#([0-9]+)>$")
 _NAME_MAX = 100  # Discord caps channel and server names at 100 characters
@@ -99,7 +103,7 @@ SPEC: dict[str, Opt] = {
     "delivery_auto_channel_names": Opt("list", AUTO_CHANNEL_NAMES, "delivery"),
     "delivery_fallback_channel": Opt("str", "", "delivery", format=_CH),
     "delivery_discord_thread": Opt("bool", True, "delivery"),
-    "delivery_project_threads": Opt("bool", True, "delivery"),
+    "delivery_tasks_placement": Opt("str", TASKS_MEETING, "delivery", choices=TASK_PLACEMENTS),
     "delivery_dm_assignees": Opt("bool", True, "delivery"),
     "delivery_discord_transcript": Opt("bool", True, "delivery"),
     "delivery_mention_participants": Opt("bool", True, "delivery"),
@@ -164,6 +168,13 @@ LEGACY_KEYS: dict[str, str] = {
 }
 _BY_LEGACY = {v: k for k, v in LEGACY_KEYS.items()}
 _MISSING = object()
+# Settings replaced by another one with different values: ``{old key: (new key, old value -> new value)}``.
+# An old value still in config.yaml (or a space override) is read when the new key is unset, and
+# ``Settings.warnings`` says how to write it the new way.
+RETIRED_KEYS: dict[str, tuple[str, Callable[[bool], str]]] = {
+    "delivery_project_threads": ("delivery_tasks_placement",
+                                 lambda threads: TASKS_PROJECTS if threads else TASKS_PROJECTS_INLINE),
+}
 
 
 def raw_value(getter: Getter, key: str, space: str = "",
@@ -176,6 +187,31 @@ def raw_value(getter: Getter, key: str, space: str = "",
     if raw is _MISSING and key in LEGACY_KEYS:
         raw = getter(LEGACY_KEYS[key], _MISSING)  # value saved by a pre-0.2 version (nested)
     return raw, key
+
+
+def retired_value(getter: Getter, key: str, space: str = "",
+                  overrides: Mapping[str, Any] = {}) -> Optional[tuple[str, Any, str]]:  # noqa: B006 - read only
+    """``(old key, value it stands for or None when unreadable, where)`` when a setting ``key`` replaced
+    is still stored (the space's override first, then the global value); ``None`` otherwise."""
+    for old, (new, convert) in RETIRED_KEYS.items():
+        if new != key:
+            continue
+        for raw, where in ((overrides.get(old), f"space {space}: {old}"), (getter(old, None), old)):
+            if raw is None:
+                continue
+            try:
+                return old, convert(_coerce(Opt("bool", True, ""), raw)), where
+            except ValueError:
+                return old, None, where
+    return None
+
+
+def retired_hint(key: str) -> str:
+    """What to write instead of a retired setting (``""``: ``key`` is not one)."""
+    if key not in RETIRED_KEYS:
+        return ""
+    new, _ = RETIRED_KEYS[key]
+    return f"{key} was replaced by {new} (one of: {', '.join(SPEC[new].choices)})"
 
 
 def canonical_key(key: str) -> str:
@@ -299,7 +335,7 @@ class Settings:
     pipeline_workers: int
     pipeline_max_transcriptions: int
     delivery_discord_thread: bool
-    delivery_project_threads: bool
+    delivery_tasks_placement: str
     delivery_dm_assignees: bool
     delivery_discord_transcript: bool
     delivery_mention_participants: bool
@@ -330,6 +366,11 @@ class Settings:
         warnings: list[str] = []
         for key, opt in SPEC.items():
             raw, where = raw_value(getter, key, space, overrides or {})
+            old = retired_value(getter, key, space, overrides or {}) if raw is None or raw is _MISSING else None
+            if old is not None:  # e.g. delivery_project_threads, kept by an older version
+                raw, where = old[1], old[2]
+                warnings.append(f"{where} is retired; read as {key}={raw or opt.default}. Save {key} "
+                                "(config set or the Settings page) to make it explicit")
             try:
                 values[key] = opt.default if raw is None or raw is _MISSING else _coerce(opt, raw)
             except (ValueError, TypeError):

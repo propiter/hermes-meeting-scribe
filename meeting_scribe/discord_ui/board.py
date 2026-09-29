@@ -56,7 +56,8 @@ def build_board(repo: Any, settings: Settings, meeting: Meeting, notes: Notes,
     ctx = RouteContext(channel_map=settings.project_channel_map(), min_score=settings.project_match_min_score,
                        ignore_prefixes=settings.channel_name_ignore_prefixes, learned=lambda project: repo.project_channel(meeting.space, project))
     refs = _refs(repo, meeting.id)
-    views = tuple(TaskView(item, route_item(item, meeting, channels, ctx), refs.get(item.id, {}))
+    moved = repo.moved_items(meeting.id)
+    views = tuple(TaskView(item, route_item(item, meeting, channels, ctx), refs.get(item.id, {}), moved=item.id in moved)
                   for item in items_of(repo, meeting, notes))
     return Board(meeting, views, tuple(channels))
 

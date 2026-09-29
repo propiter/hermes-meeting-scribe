@@ -73,7 +73,7 @@ def env(tmp_path, meeting, notes):
     bot.user(11)
     bot.user(10, dms_open=False)
     adapter = FakeAdapter(bot)
-    cfg: dict = {}
+    cfg: dict = {"delivery_tasks_placement": "projects"}  # the per-project layout these tests pin
     state = {"loop": None}
 
     def make():

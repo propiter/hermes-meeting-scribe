@@ -142,7 +142,7 @@ async def test_messages_that_cannot_be_deleted_or_emptied_are_retried_and_report
     from meeting_scribe.discord_ui.withdraw import PENDING_KV
     from .fakes import FakeMessage
 
-    env.cfg.update({"meeting_routes": [], "delivery_project_threads": False})
+    env.cfg.update({"meeting_routes": [], "delivery_tasks_placement": "projects_inline"})
     await run_deliver(env)
     orion = [m.id for m in env.orion.ordered()]
     real_delete, real_edit = FakeMessage.delete, FakeMessage.edit
@@ -169,7 +169,7 @@ async def test_messages_that_cannot_be_deleted_or_emptied_are_retried_and_report
 
 
 async def test_rule_to_an_unusable_channel_withdraws_public_task_messages(env):
-    env.cfg.update({"meeting_routes": [], "delivery_project_threads": False})
+    env.cfg.update({"meeting_routes": [], "delivery_tasks_placement": "projects_inline"})
     await run_deliver(env)
     assert QUOTE in texts(env.orion.ordered())
     env.cfg["meeting_routes"] = ["Leadership = 799:private"]

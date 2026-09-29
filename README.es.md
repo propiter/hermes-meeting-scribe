@@ -317,7 +317,7 @@ advertencia.
 | `delivery_auto_channel_names` | list | `[general, meetings, meeting-notes, notes, reuniones, notas]` | Si no hay canal: el canal de sistema del servidor, si no el primero de estos nombres donde el bot pueda escribir. |
 | `delivery_fallback_channel` | str | `""` | Id o nombre del canal para tareas sin canal de proyecto (vacío = el canal de notas). |
 | `delivery_discord_thread` | bool | `true` | Publicar las tareas sin proyecto en un hilo bajo el resumen cuando se pueda. |
-| `delivery_project_threads` | bool | `true` | Publicar cada tarea en un hilo del canal de su proyecto. |
+| `delivery_tasks_placement` | str | `meeting` | meeting: todo junto con las notas (resumen, transcripción y todas las tareas, marcadas por proyecto). projects: cada tarea en un hilo del canal de su proyecto. projects_inline: directo en el canal de su proyecto. Los responsables reciben su DM igual. (`meeting` / `projects` / `projects_inline`) |
 | `delivery_dm_assignees` | bool | `true` | Enviar a cada responsable sus tareas por DM tras publicar. |
 | `delivery_discord_transcript` | bool | `true` | Adjuntar la transcripción completa (archivo Markdown) a las notas. |
 | `delivery_mention_participants` | bool | `true` | El primer mensaje de las notas menciona con @ a quienes estuvieron en la reunión (una vez, al publicarlas por primera vez; en un canal privado solo a quienes pueden verlo). Nunca @everyone, @here ni roles. |

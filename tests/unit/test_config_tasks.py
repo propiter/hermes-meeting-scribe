@@ -7,7 +7,7 @@ from meeting_scribe.config import Settings, settings_from_mapping
 def test_new_task_delivery_defaults():
     s = Settings.defaults()
     assert s.delivery_dm_assignees is True          # DMs are on unless disabled
-    assert s.delivery_project_threads is True
+    assert s.delivery_tasks_placement == "meeting"  # everything in one place unless asked otherwise
     assert s.project_channels == ()
     assert s.project_match_min_score == 0.8
     assert s.channel_name_ignore_prefixes == ()

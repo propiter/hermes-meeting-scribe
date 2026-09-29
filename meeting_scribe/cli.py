@@ -16,7 +16,8 @@ from typing import Any, Callable, Optional, Protocol
 from . import cli_google, cli_routes, cli_speakers, cli_spaces, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
 from .commands import status_headline
-from .config import DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, validate_value
+from .config import (DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, retired_hint,
+                     validate_value)
 from .domain.models import MeetingState, Stage
 from .i18n import t
 from .pipeline.service import MeetingService
@@ -376,7 +377,7 @@ def _config_set(args: argparse.Namespace, rt: CliRuntime) -> int:
     try:
         key = canonical_key(args.key)
     except KeyError:
-        _print(f"unknown key {args.key}")
+        _print(retired_hint(args.key) or f"unknown key {args.key}")
         return 2
     space = (getattr(args, "space", None) or "").strip()
     try:
@@ -403,7 +404,7 @@ def _config_get(args: argparse.Namespace, rt: CliRuntime) -> int:
         try:
             key = canonical_key(key)
         except KeyError:
-            _print(f"unknown key {key}")
+            _print(retired_hint(key) or f"unknown key {key}")
             return 2
         if space is not None:
             _print(_fmt(rt.settings(space).as_dict()[key]))

@@ -133,6 +133,18 @@ class Messages:
             await msg.edit(content=spec.content, view=self.views.view(spec.buttons), **extra)
         return msg
 
+    async def delete_thread(self, thread_id: Any) -> bool:
+        """Delete a thread or forum post the bot opened; ``False`` when Discord refuses (it needs Manage
+        Threads): the thread stays, empty of our tasks, and is only logged."""
+        try:
+            await (await self.channel(thread_id)).delete()
+            return True
+        except Exception as exc:
+            if is_missing(exc):
+                return True
+            log.info("meeting-scribe: could not delete thread %s: %s", thread_id, exc)
+            return False
+
     async def delete(self, channel_id: Any, message_id: Any, *, notice: str = "") -> bool:
         """Delete a message; if Discord refuses, disarm it (``notice``, no buttons). ``False`` = left behind."""
         try:

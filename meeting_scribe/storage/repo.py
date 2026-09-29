@@ -478,6 +478,12 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
                 " project_key=excluded.project_key, updated_at=excluded.updated_at",
                 (meeting_id, item_id, project, project_key, time.time()))
 
+    def moved_items(self, meeting_id: str) -> set[str]:
+        """Ids of the tasks a person pinned to a channel with 📁 (``set_item_override``)."""
+        rows = self._x("SELECT item_id FROM item_overrides WHERE meeting_id=? AND project_key IS NOT NULL"
+                       " AND project_key != ''", (meeting_id,))
+        return {str(r["item_id"]) for r in rows.fetchall()}
+
     def update_action_item(self, meeting_id: str, item: ActionItem) -> None:
         """Replace an item's data (e.g. a 📁 move) without touching its human decision (status)."""
         self._x("UPDATE action_items SET data=? WHERE meeting_id=? AND id=?",

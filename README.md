@@ -310,7 +310,7 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `delivery_auto_channel_names` | list | `[general, meetings, meeting-notes, notes, reuniones, notas]` | When no channel is set: the server's system channel, else the first of these channel names the bot can post in. |
 | `delivery_fallback_channel` | str | `""` | Channel id or name for tasks that match no project channel (empty = the notes channel). |
 | `delivery_discord_thread` | bool | `true` | Post tasks without project in a thread under the summary when possible. |
-| `delivery_project_threads` | bool | `true` | Post each task in a thread of its project's channel. |
+| `delivery_tasks_placement` | str | `meeting` | meeting: everything together with the notes (summary, transcript and every task, labelled by project). projects: each task in a thread of its project's channel. projects_inline: straight in its project's channel. Assignees get their DM either way. (`meeting` / `projects` / `projects_inline`) |
 | `delivery_dm_assignees` | bool | `true` | Send each assignee their tasks by DM after delivery. |
 | `delivery_discord_transcript` | bool | `true` | Attach the full transcript (Markdown file) to the notes. |
 | `delivery_mention_participants` | bool | `true` | The first message of the notes @mentions the people who were in the meeting (once, when the notes are first posted; in a private channel only those who can see it). Never @everyone, @here or roles. |

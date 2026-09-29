@@ -219,12 +219,18 @@ config_schema:
     label: Use a notes thread
     description: Post tasks without project in a thread under the summary when possible.
     group: delivery
-  delivery_project_threads:
-    type: bool
-    default: true
-    label: Project threads
-    description: Post each task in a thread of its project's channel.
+  delivery_tasks_placement:
+    type: str
+    default: meeting
+    label: Where tasks are posted
+    description: 'meeting: everything together with the notes (summary, transcript and every task, labelled
+      by project). projects: each task in a thread of its project''s channel. projects_inline: straight
+      in its project''s channel. Assignees get their DM either way.'
     group: delivery
+    choices:
+    - meeting
+    - projects
+    - projects_inline
   delivery_dm_assignees:
     type: bool
     default: true
