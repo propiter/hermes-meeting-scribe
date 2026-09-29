@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from meeting_scribe import doctor
 from meeting_scribe.config import settings_from_mapping
 from meeting_scribe.doctor import (
@@ -162,6 +164,22 @@ def test_delivery_check_reports_waiting_meetings_and_bad_names(tmp_path):
     repo.kv_set(WAITING_KV + "m1", "waiting for a Discord channel: set one with `config set`")
     res = check_delivery(e)
     assert res.status == "warn" and "1 meeting(s) waiting" in res.detail and "config set" in res.detail
+    repo.close()
+
+
+@pytest.mark.parametrize("placement, words", [("meeting", "every task goes with the notes"),
+                                              ("projects", "in a thread per meeting"),
+                                              ("projects_inline", "straight into their project's channel")])
+def test_delivery_check_explains_where_tasks_are_posted(tmp_path, placement, words):
+    from meeting_scribe.doctor import check_delivery
+    from meeting_scribe.storage.repo import Repository
+
+    repo = Repository(tmp_path / "db.sqlite")
+    e = env(tmp_path, delivery_tasks_placement=placement)
+    e.service = lambda: SimpleNamespace(repo=repo, waiting_destination=lambda: {})
+    res = check_delivery(e)
+    assert res.status == "ok" and f"delivery_tasks_placement={placement}" in res.detail and words in res.detail
+    assert "each assignee also gets a DM" in res.detail
     repo.close()
 
 

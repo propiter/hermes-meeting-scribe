@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
 from .audio.ffmpeg import FfmpegNotFound, capabilities, resolve_ffmpeg
-from .config import Settings
+from .config import TASKS_MEETING, TASKS_PROJECTS, TASKS_PROJECTS_INLINE, Settings
 from .i18n import t
 
 MIN_FREE_GB = 2.0
@@ -229,6 +229,7 @@ def check_delivery(env: Any) -> Check:
         problems += [w for w in rep.get("warnings") or () if isinstance(w, str) and w]
     if not parts:
         parts.append("nothing delivered yet (channels are resolved on the first delivery)")
+    parts.append(tasks_placement_line(s))
     route_parts, route_problems = routes_summary(s, svc.repo)
     parts += route_parts
     problems += route_problems
@@ -249,6 +250,19 @@ def check_delivery(env: Any) -> Check:
     if problems:
         return Check.warn("; ".join(parts + problems))
     return Check.ok("; ".join(parts))
+
+
+def tasks_placement_line(s: Settings) -> str:
+    """Where the tasks of a (non-private) meeting are posted, in plain words (DESIGN §16.1)."""
+    dm = "each assignee also gets a DM" if s.delivery_dm_assignees else "no assignee DMs (delivery_dm_assignees=false)"
+    where = {
+        TASKS_MEETING: "every task goes with the notes (one place per meeting; 📁 Move takes one to a project channel)",
+        TASKS_PROJECTS: "tasks go to their project's channel, in a thread per meeting",
+        TASKS_PROJECTS_INLINE: "tasks go straight into their project's channel",
+    }[s.delivery_tasks_placement]
+    return (f"tasks: delivery_tasks_placement={s.delivery_tasks_placement}: {where}; {dm}; private and "
+            "direct-message meetings keep their own rules; a change applies to new deliveries and to "
+            "`reprocess <id> --from deliver`")
 
 
 def withdraw_problems(repo: Any) -> list[str]:
