@@ -414,6 +414,7 @@
   "routes.setup_more": "Another rule? [y/N]: ",
   "cfg.delivery_mention_participants.label": "Mention participants",
   "cfg.delivery_mention_participants.help": "The first message of the notes @mentions the people who were in the meeting (once, when the notes are first posted; in a private channel only those who can see it). Never @everyone, @here or roles.",
+  "speakers.suggestion": "Is this {name}?",
   "speakers.none": "No unidentified participant tracks in this meeting.",
   "speakers.one_person_each": "Each unidentified track is one Discord voice connection: one person.",
   "speakers.lines": "{count} line(s)",

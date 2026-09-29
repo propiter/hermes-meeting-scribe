@@ -39,6 +39,9 @@ def track_line(track: Any, lang: str) -> str:
     span = (f"{fmt_ts(track.first)}–{fmt_ts(track.last)}" if track.first is not None
             else t("speakers.no_lines", lang))
     owner = f" → {track.name} ({track.owner})" if track.owner else ""
+    if track.suggested_user:
+        owner += " · " + t("speakers.suggestion", lang, name=track.suggestion_name or track.suggested_user)
+        owner += f" ({track.suggestion_reason})"
     return f"{track.label}: {t('speakers.lines', lang, count=track.lines)}, {span}{owner}"
 
 

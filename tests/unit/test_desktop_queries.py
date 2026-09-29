@@ -111,7 +111,8 @@ def test_detail_notes_tasks_sinks_and_redacted_job(repo, tmp_path, meeting, note
     tracks = Library(repo, tmp_path).detail(m.id)["meeting"]["speaker_tracks"]
     assert tracks["people"] == [{"id": "43", "name": "Luis"}]
     assert tracks["tracks"] == [{"label": "unidentified-1", "name": "Participante sin identificar", "lines": 0,
-                                 "first": None, "last": None, "owner": None}]
+                                 "first": None, "last": None, "owner": None, "suggested_user": None,
+                                 "suggestion_name": "", "suggestion_reason": ""}]
 
 
 def test_detail_survives_missing_or_damaged_notes(repo, tmp_path, meeting):

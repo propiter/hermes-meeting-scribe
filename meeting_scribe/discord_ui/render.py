@@ -18,7 +18,7 @@ from ..i18n import t
 MESSAGE_LIMIT = 2000
 EMBED_LIMIT = 4096
 ACTIONS = ("ok", "lin", "no", "prj", "allk", "alll", "psel", "mine", "pg", "tsel", "shp", "shd", "sha", "shc")
-TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc|spk|ssel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc|spk|ssel|scfm):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _TEMPLATE_RE = re.compile(f"^{TEMPLATE}$")
 _TOKEN_RE = re.compile(r"<[@#][!&]?\d+>|\S+|\s+")
 
@@ -143,6 +143,9 @@ def render_header(meeting: Meeting, notes: Notes, lang: str, participants: str =
 def speaker_buttons(meeting: Meeting, lang: str) -> tuple[ButtonSpec, ...]:
     """"Who is <unidentified participant>?" — one per track still unassigned (DESIGN §4.1), at most 5
     (one row); who may press it is decided on click (``auth.check_speaker``)."""
-    return tuple(ButtonSpec(t("ui.btn_assign", lang, name=s.name)[:80], custom_id("spk", meeting.id, s.user_id),
+    names = {s.user_id: s.name for s in meeting.speakers}
+    return tuple(ButtonSpec(t("speakers.suggestion" if s.suggested_user else "ui.btn_assign", lang,
+                              name=names.get(s.suggested_user, s.name))[:80],
+                            custom_id("scfm" if s.suggested_user else "spk", meeting.id, s.user_id),
                             "secondary", 1, "👤")
                  for s in meeting.speakers if is_unidentified(s.user_id))[:5]

@@ -439,6 +439,10 @@ class RecordingSession:
         if self.receiver is None:
             return
         report = self.receiver.voice_report()
+        for label, (uid, reason) in report.inferred.items():
+            if label in self._speakers and label not in report.owners():
+                self._speakers[label] = replace(self._speakers[label], suggested_user=str(uid),
+                                                suggestion_reason=reason)
         for label, uid in report.owners().items():
             if label in self._speakers and self._speaker_for(uid) is not None:
                 self._label_owners[label] = str(uid)

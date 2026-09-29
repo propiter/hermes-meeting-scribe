@@ -226,6 +226,10 @@ class ButtonActions:
             await self._share(interaction, action, meeting_id, item_id)
             return
         if action in SPEAKER_ACTIONS:
+            if action == "scfm":
+                meeting = await asyncio.to_thread(self._service().require, meeting_id)
+                suggestion = next((s.suggested_user for s in meeting.speakers if s.user_id == item_id), None)
+                values = [suggestion] if suggestion else []
             await (self._offer_speakers(interaction, meeting_id, item_id) if action == "spk"
                    else self._assign_speaker(interaction, meeting_id, item_id, list(values or ())))
             return

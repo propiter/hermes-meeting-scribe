@@ -193,10 +193,11 @@ class VoiceReport:
     undecided: dict[int, int]  # ssrc -> packets that could be neither attributed nor decoded
     inferred: dict[str, tuple[int, str]] = field(default_factory=dict)  # label -> (user, "sole")
     contradicted: dict[int, tuple[int, int]] = field(default_factory=dict)  # ssrc -> (inferred, SPEAKING)
+    authoritative: dict[str, int] = field(default_factory=dict)  # complete membership, at final drain only
 
     def owners(self) -> dict[str, int]:
         """Owner of each unidentified track that has one: SPEAKING first, then the inference."""
-        out = {label: uid for label, (uid, _how) in self.inferred.items()}
+        out = dict(self.authoritative)
         out.update(self.resolved)
         return out
 
@@ -279,6 +280,10 @@ def scribe_receiver_class(base: type) -> type:
             self._contradicted: dict[int, tuple[int, int]] = {}  # ssrc -> (inferred user, SPEAKING user)
             self._voice_clients: set[int] = set()  # users op 11/12 says have media in the call
             self._candidates_grew = False  # a new DAVE key candidate: retry the retained frames
+            self._membership_complete = False
+            self._membership_consistent = True
+            self._connection_changes: list[float] = []
+            self._authoritative: dict[str, int] = {}
 
         # -- voice gateway opcodes ----------------------------------------------------------------
         def start(self) -> None:
@@ -287,8 +292,9 @@ def scribe_receiver_class(base: type) -> type:
             the ``user_ids`` already in the call, the people Discord often sends no SPEAKING for.
             They carry user ids, never SSRCs: they widen the DAVE key candidates; the SSRC is still
             proven by the key (DESIGN §4.1)."""
-            super().start()
             backlog = getattr(self._vc, "voice_ops", None)
+            self._membership_complete = bool(getattr(self._vc, "voice_membership_complete", False))
+            super().start()
             if backlog is None:  # a plain discord.py client: voice states alone name the candidates
                 return
             self._vc.voice_op_listener = self.note_voice_op
@@ -310,6 +316,7 @@ def scribe_receiver_class(base: type) -> type:
             elif op in (12, 13) and str(data.get("user_id") or "").isdigit():
                 uid = int(data["user_id"])
                 with self._lock:
+                    self._connection_changes.append(self._clock())
                     if op == 12:  # a NEW connection: a mapping from before it is a previous connection's
                         self._candidates_grew |= uid not in self._voice_clients
                         self._voice_clients.add(uid)
@@ -330,6 +337,8 @@ def scribe_receiver_class(base: type) -> type:
                     for u in present - self._present:
                         self._joined[u] = next(self._order)
                         self._joined_at[u] = self._clock()
+                if present != self._voice_clients:
+                    self._membership_consistent = False
                 in_call = present | self._voice_clients
                 for p in self._pending.values():
                     if p.owner is None and p.recent:  # it sent audio since the last snapshot
@@ -657,6 +666,13 @@ def scribe_receiver_class(base: type) -> type:
                     self._stream_unidentified(label, frame)
             with self._lock:
                 self._infer()
+                self._authoritative = {}
+                if (final and self._membership_complete and self._membership_consistent
+                        and getattr(self._vc, "voice_membership_complete", False)):
+                    for p in self._pending.values():
+                        suggestion = self._inferred.get(p.label)
+                        if suggestion and not any(p.first <= t <= p.last for t in self._connection_changes):
+                            self._authoritative[p.label] = suggestion[0]
 
         # -- drain (event-loop thread) -----------------------------------------------------------
         def drain(self, *, final: bool = False) -> dict[int, Frames]:
@@ -688,7 +704,7 @@ def scribe_receiver_class(base: type) -> type:
             with self._lock:
                 undecided = {s: p.packets for s, p in self._pending.items() if p.label is None and p.owner is None}
                 return VoiceReport(dict(self._identified), dict(self._labels), dict(self._resolved), undecided,
-                                   dict(self._inferred), dict(self._contradicted))
+                                   dict(self._inferred), dict(self._contradicted), dict(self._authoritative))
 
         def stop(self) -> None:
             if getattr(self._vc, "voice_op_listener", None) == self.note_voice_op:

@@ -99,7 +99,7 @@ def test_real_meeting_never_gives_a_voice_to_the_wrong_person_and_names_the_unid
     # B2: Ana's voice is kept whole in its own track and inferred to be hers — the only person in the
     # call without a voice once Beto's was known (Carla joined long after it started talking)
     assert rep.unidentified == {"unidentified-1": S_ANA}
-    assert rep.inferred == {"unidentified-1": (ANA, "sole")} and rep.owners() == {"unidentified-1": ANA}
+    assert rep.inferred == {"unidentified-1": (ANA, "sole")} and rep.owners() == {}
     assert call.unidentified["unidentified-1"][0][0] == pytest.approx(1000.0)
     assert ANA not in call.out  # never mixed into a person's track by a guess
     # the label line says whether the frames were DAVE, how many candidates there were and who
@@ -202,7 +202,7 @@ def test_a_short_voice_is_labelled_at_the_close(clock):
     rx.drain(final=True)
     un = rx.drain_unidentified()
     assert len(un["unidentified-1"]) == 4
-    assert rx.voice_report().owners() == {"unidentified-1": A}
+    assert rx.voice_report().owners() == {}  # presence alone is a suggestion, even at the close
 
 
 # -- the same sequence through the recording session (red on the version that failed) --------------
@@ -269,7 +269,8 @@ async def test_session_real_meeting_with_the_voice_state_mute_flags(world):
     assert all(carla_bytes not in audio for name, audio in written.items() if name != "44.ogg")  # B1
     assert carla_bytes in written["44.ogg"]
     tracks = {p.name for p in (world["service"].root / s.meeting.id / "tracks").iterdir()}
-    assert "42.ogg" in tracks and "unidentified-1.ogg" not in tracks  # B2: Ana's voice is Ana's
-    speakers = {sp.user_id: sp.name for sp in world["service"].finished[0][1]}
-    assert "unidentified-1" not in speakers and speakers["42"] == "Ana"
-    assert s.missing_audio == ()
+    assert "unidentified-1.ogg" in tracks  # no handshake observer: Ana is only a suggestion
+    speakers = {sp.user_id: sp for sp in world["service"].finished[0][1]}
+    assert speakers["unidentified-1"].suggested_user == "42"
+    assert speakers["42"].name == "Ana"
+    assert s.missing_audio == ()  # the stale mute flag never accumulated sixty unmuted seconds

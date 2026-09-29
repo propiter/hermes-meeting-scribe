@@ -45,10 +45,14 @@ class Track:
     first: Optional[float]  # seconds since the meeting started, from the transcript
     last: Optional[float]
     owner: Optional[str] = None  # the user id it was assigned to
+    suggested_user: Optional[str] = None
+    suggestion_name: str = ""
+    suggestion_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {"label": self.label, "name": self.name, "lines": self.lines, "first": self.first,
-                "last": self.last, "owner": self.owner}
+                "last": self.last, "owner": self.owner, "suggested_user": self.suggested_user,
+                "suggestion_name": self.suggestion_name, "suggestion_reason": self.suggestion_reason}
 
 
 @dataclass(frozen=True)
@@ -94,6 +98,11 @@ def tracks(repo: Any, folder: Any, meeting: Meeting) -> list[Track]:
            for label in names if is_unidentified(label) and label not in done]
     out += [Track(label, names.get(rec["user"], rec["user"]), int(rec["lines"]), rec["first"], rec["last"],
                   str(rec["user"])) for label, rec in done.items()]
+    speakers = {s.user_id: s for s in meeting.speakers}
+    out = [replace(tr, suggested_user=speakers[tr.label].suggested_user,
+                   suggestion_name=names.get(speakers[tr.label].suggested_user, ""),
+                   suggestion_reason=speakers[tr.label].suggestion_reason)
+           if tr.label in speakers and not tr.owner else tr for tr in out]
     return sorted(out, key=lambda tr: int(tr.label[len(UNIDENTIFIED_PREFIX):]))
 
 

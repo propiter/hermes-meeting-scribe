@@ -167,6 +167,7 @@ export const LOCALES = {
       assignedTo: (label, name) => `${label} → ${name}`,
       assign: 'Assign to…',
       confirm: 'Assign',
+      suggestion: name => `Is this ${name}?`,
       failed: e => `Could not assign it: ${e}`
     },
     audio: {
@@ -414,6 +415,7 @@ export const LOCALES = {
       assignedTo: (label, name) => `${label} → ${name}`,
       assign: 'Asignar a…',
       confirm: 'Asignar',
+      suggestion: name => `¿Es ${name}?`,
       failed: e => `No se pudo asignar: ${e}`
     },
     audio: {
@@ -1189,12 +1191,12 @@ function SpeakerTracks({ meeting: m, commandId, onSubmitted, onFinished }) {
   const running = cmd.data && ['queued', 'running'].includes(cmd.data.state) && cmd.data.action === 'assign_speaker'
   if (!info.tracks.length) return null
   const open = info.tracks.filter(tr => !tr.owner)
-  const submit = async label => {
+  const submit = async (label, user = choice[label]) => {
     setError('')
     setBusy(true)
     const rid = newRequestId()
     try {
-      await rest(`/v1/meetings/${encodeURIComponent(m.id)}/commands`, { method: 'POST', body: { request_id: rid, action: 'assign_speaker', label, user: choice[label], confirm: true } })
+      await rest(`/v1/meetings/${encodeURIComponent(m.id)}/commands`, { method: 'POST', body: { request_id: rid, action: 'assign_speaker', label, user, confirm: true } })
       onSubmitted(rid)
     } catch (e) {
       setError(parseError(e).message)
@@ -1207,6 +1209,9 @@ function SpeakerTracks({ meeting: m, commandId, onSubmitted, onFinished }) {
     h('p', null, t('speakers.help')),
     h('ul', { className: 'ms-stack-sm' }, info.tracks.map(tr => h('li', { key: tr.label, className: 'ms-inline', 'data-track': tr.label },
       h('span', null, tr.owner ? t('speakers.assignedTo', tr.label, tr.name) : tr.name, ' · ', t('speakers.lines', tr.lines), ' · ', trackSpan(tr, t)),
+      !tr.owner && tr.suggested_user ? h(Button, { type: 'button', variant: 'secondary', size: 'sm',
+        disabled: busy || running, title: tr.suggestion_reason,
+        onClick: () => submit(tr.label, tr.suggested_user) }, t('speakers.suggestion', tr.suggestion_name || tr.suggested_user)) : null,
       tr.owner || !info.people.length ? null : h(Fragment, null,
         h(Select, { value: choice[tr.label] || '', onValueChange: v => setChoice(c => ({ ...c, [tr.label]: v })) },
           h(SelectTrigger, { size: 'sm', 'aria-label': t('speakers.assign') }, h(SelectValue, { placeholder: t('speakers.assign') })),

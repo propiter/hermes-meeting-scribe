@@ -156,6 +156,8 @@ class Speaker:
     # Other names the person goes by on the platform (Discord username, global name, server nickname
     # — whichever differ from ``name``): a task owner said as "Sebas" still finds "Sebastián Ortega".
     aliases: tuple[str, ...] = ()
+    suggested_user: Optional[str] = None
+    suggestion_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -354,7 +356,8 @@ class Meeting:
         data["ended_at"] = datetime.fromisoformat(data["ended_at"]) if data.get("ended_at") else None
         data["speakers"] = tuple(Speaker(str(s["user_id"]), str(s["name"]), bool(s.get("is_bot")),
                                          str(s.get("google_user") or ""),
-                                         tuple(str(a) for a in s.get("aliases") or ()))
+                                         tuple(str(a) for a in s.get("aliases") or ()),
+                                         s.get("suggested_user"), str(s.get("suggestion_reason") or ""))
                                  for s in data.get("speakers") or ())
         data["missing_audio"] = tuple(str(u) for u in data.get("missing_audio") or ())
         known = set(cls.__dataclass_fields__)

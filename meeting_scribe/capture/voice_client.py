@@ -24,12 +24,24 @@ def scribe_voice_client_class(base: type, state_cls: type) -> type:
         def create_connection_state(self) -> Any:
             self.voice_ops: deque[tuple[int, dict[str, Any]]] = deque(maxlen=BACKLOG)
             self.voice_op_listener: Optional[Callable[[int, dict[str, Any]], None]] = None
+            self.voice_membership_complete = False
+            self._membership_ws: Any = None
+            self._membership_gap = False
             return state_cls(self, hook=self._record_voice_op)
 
         async def _record_voice_op(self, ws: Any, msg: Any) -> None:
             if not isinstance(msg, dict) or msg.get("op") not in VOICE_OPS or not isinstance(msg.get("d"), dict):
                 return
             op, data = int(msg["op"]), dict(msg["d"])
+            if self._membership_ws is not None and self._membership_ws is not ws:
+                self._membership_gap = True  # a reconnect may have lost membership events
+            self._membership_ws = ws
+            if self.voice_op_listener is None and len(self.voice_ops) == BACKLOG:
+                self._membership_gap = True
+            if op == 11 and not self.voice_ops and not self._membership_gap:
+                self.voice_membership_complete = True
+            if self._membership_gap:
+                self.voice_membership_complete = False
             self.voice_ops.append((op, data))
             if self.voice_op_listener is not None:
                 self.voice_op_listener(op, data)

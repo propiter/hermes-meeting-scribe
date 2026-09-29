@@ -414,6 +414,7 @@
   "routes.setup_more": "¿Otra regla? [s/N]: ",
   "cfg.delivery_mention_participants.label": "Mencionar a los participantes",
   "cfg.delivery_mention_participants.help": "El primer mensaje de las notas menciona con @ a quienes estuvieron en la reunión (una vez, al publicarlas por primera vez; en un canal privado solo a quienes pueden verlo). Nunca @everyone, @here ni roles.",
+  "speakers.suggestion": "¿Es {name}?",
   "speakers.none": "No hay pistas de participantes sin identificar en esta reunión.",
   "speakers.one_person_each": "Cada pista sin identificar es una conexión de voz de Discord: una persona.",
   "speakers.lines": "{count} línea(s)",
