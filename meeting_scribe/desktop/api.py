@@ -433,15 +433,18 @@ def get_settings(request: Request, lang: str = "en", space: str = SpaceParam) ->
 @router.put("/v1/settings/{key}")
 def put_setting(request: Request, key: str, body: dict[str, Any] = Body(...), space: str = SpaceParam) -> dict[str, Any]:
     """``{"value": ...}``; validated exactly like ``hermes meeting-scribe config set``. With ``?space=``
-    it writes that space's override (``"value": null`` removes it); machine-wide keys refuse (400)."""
+    it writes that space's override; machine-wide keys refuse (400). ``"value": null`` removes the value
+    (like ``config unset``/``space unset``), also under a retired key an older version wrote."""
     if "value" not in body:
         raise HTTPException(400, "value is required")
-    from .settings import set_setting, set_space_setting
+    from .settings import set_setting, set_space_setting, unset_setting
 
     with _ctx(request) as c:
         try:
             if space:
                 return set_space_setting(SEAMS["settings_store"](), c["repo"], _space(c, space), key, body["value"])
+            if body["value"] is None:
+                return unset_setting(SEAMS["settings_store"](), c["repo"], key)
             return set_setting(SEAMS["settings_store"](), c["repo"], key, body["value"])
         except KeyError as exc:
             raise HTTPException(400, f"unknown setting {key}") from exc

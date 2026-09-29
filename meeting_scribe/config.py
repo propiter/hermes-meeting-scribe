@@ -217,6 +217,16 @@ def stored_names(key: str) -> tuple[str, ...]:
     return (key, *((LEGACY_KEYS[key],) if key in LEGACY_KEYS else ()), *retired)
 
 
+def names_to_clear(key: str) -> tuple[str, tuple[str, ...]]:
+    """``(name to show, stored names to remove)`` when ``key`` is unset: a current setting clears itself,
+    its pre-0.2 spelling and the retired key it replaced (else that old value would keep being read); a
+    retired key clears only itself. ``KeyError`` when ``key`` is neither."""
+    if key in RETIRED_KEYS:
+        return key, (key,)
+    name = canonical_key(key)
+    return name, stored_names(name)
+
+
 def retired_hint(key: str) -> str:
     """What to write instead of a retired setting (``""``: ``key`` is not one)."""
     if key not in RETIRED_KEYS:

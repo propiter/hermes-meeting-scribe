@@ -15,8 +15,8 @@ from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Optional
 
 from .. import doctor, llm_config, privacy
-from ..config import (DESTINATION_KEYS, SPEC, Settings, canonical_key, config_schema, space_keys, stored_names,
-                      validate_value)
+from ..config import (DESTINATION_KEYS, SPEC, Settings, canonical_key, config_schema, names_to_clear, space_keys,
+                      stored_names, validate_value)
 from ..llm_config import redact
 from ..storage.repo import Repository
 from ..storage.spaces import SpaceRow
@@ -101,12 +101,23 @@ def set_setting(store: SettingsStore, repo: Optional[Repository], key: str, raw:
     return {"key": key, "value": value, "scope": "global", "requeued": _nudge(repo, key)}
 
 
+def unset_setting(store: SettingsStore, repo: Optional[Repository], key: str) -> dict[str, Any]:
+    """Remove the global value of ``key`` under every name it is stored (its pre-0.2 spelling, the
+    retired key it replaced — ``config.names_to_clear``): the default applies again. KeyError unknown
+    key, PermissionError managed install/key."""
+    name, names = names_to_clear(key)
+    for stored in names:
+        if store._lookup(stored, _MISSING) not in (_MISSING, None):
+            store.write(stored, None)
+    return {"key": name, "value": None, "scope": "global", "requeued": _nudge(repo, name)}
+
+
 def set_space_setting(store: SettingsStore, repo: Repository, slug: str, key: str, raw: Any) -> dict[str, Any]:
     """``slug``'s override of ``key`` (``raw=None`` clears it, the global value applies again), validated
     like ``hermes meeting-scribe space set``; a machine-wide key is a ``SpaceError`` (400)."""
     from ..spaces import Spaces
 
-    key, value = Spaces(lambda: repo, store._lookup).set_override(slug, canonical_key(key), raw)
+    key, value = Spaces(lambda: repo, store._lookup).set_override(slug, key, raw)
     return {"key": key, "value": value, "scope": "space", "space": slug, "requeued": _nudge(repo, key)}
 
 

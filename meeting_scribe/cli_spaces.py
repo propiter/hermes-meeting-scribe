@@ -12,7 +12,7 @@ import json
 import sys
 from typing import Any, Callable, Optional
 
-from .config import SPEC, canonical_key, retired_hint
+from .config import RETIRED_KEYS, SPEC, canonical_key, retired_hint
 from .i18n import t
 from .spaces import Space
 
@@ -233,8 +233,10 @@ def _set(args: argparse.Namespace, rt: Any) -> int:
 
 
 def _unset(args: argparse.Namespace, rt: Any) -> int:
+    """Also removes an override of a retired key (e.g. ``delivery_project_threads`` kept by an older
+    version), which ``set`` refuses."""
     lang = rt.settings().ui_language
-    key = check_space_key(args.key, lang)
-    rt.spaces().set_override(args.slug, key, None)
+    key = args.key if args.key in RETIRED_KEYS else check_space_key(args.key, lang)
+    key = rt.spaces().unset_override(args.slug, key)
     _print(t("space.cli_override_unset", lang, slug=args.slug, key=key))
     return 0

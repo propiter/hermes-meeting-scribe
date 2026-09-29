@@ -346,6 +346,18 @@ class Runtime:
     def set_config(self, key: str, value: Any) -> None:
         self.host.set_config(key, value)
 
+    def unset_config(self, key: str) -> str:
+        """Remove the global value of ``key`` under every name it is stored (``config.names_to_clear``);
+        returns the name removed. Only names actually present are written."""
+        from .config import names_to_clear
+
+        name, names = names_to_clear(key)
+        missing = object()
+        for stored in names:
+            if self.host.get_config(stored, missing) not in (missing, None):
+                self.host.set_config(stored, None)
+        return name
+
     def config_origin(self, key: str) -> str:
         """``configured`` when the user set ``key`` (flat, legacy or retired spelling), else ``default``."""
         from .config import stored_names

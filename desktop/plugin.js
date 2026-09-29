@@ -283,7 +283,7 @@ export const LOCALES = {
       invalidNumber: 'Enter a number.', invalidInteger: 'Enter a whole number.',
       min: n => `Must be at least ${n}.`, max: n => `Must be at most ${n}.`,
       requeued: n => (n === 1 ? '1 waiting meeting will be published again.' : `${n} waiting meetings will be published again.`),
-      sections: 'Sections'
+      sections: 'Sections', useDefault: 'Use default'
     },
     projects: {
       title: 'Project channels',
@@ -536,7 +536,7 @@ export const LOCALES = {
       invalidNumber: 'Escribe un número.', invalidInteger: 'Escribe un número entero.',
       min: n => `Debe ser al menos ${n}.`, max: n => `Debe ser como mucho ${n}.`,
       requeued: n => (n === 1 ? '1 reunión en espera se volverá a publicar.' : `${n} reuniones en espera se volverán a publicar.`),
-      sections: 'Secciones'
+      sections: 'Secciones', useDefault: 'Usar el predeterminado'
     },
     projects: {
       title: 'Canales por proyecto',
@@ -1789,8 +1789,8 @@ export function SettingField({ field, current, onSaved }) {
   useEffect(() => { setDraft(toDraft(field, current.value)) }, [JSON.stringify(current.value)])
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial)
 
-  const save = async value => {
-    const checked = validateDraft(field, value, t)
+  const save = async (value, { reset = false } = {}) => {
+    const checked = reset ? { value: null } : validateDraft(field, value, t)
     if (checked.error) { setError(checked.error); return }
     setError('')
     setState('saving')
@@ -1836,6 +1836,8 @@ export function SettingField({ field, current, onSaved }) {
     h('div', { className: 'ms-field-control' },
       control,
       needsButton && dirty ? h(Button, { type: 'button', size: 'sm', disabled: state === 'saving', onClick: () => save(draft) }, state === 'saving' ? t('common.saving') : t('common.save')) : null,
+      // a stored value (also one an older version kept under a retired name) can go back to the default
+      origin !== 'default' && !dirty ? h(Button, { type: 'button', variant: 'ghost', size: 'sm', disabled: state === 'saving', onClick: () => save(null, { reset: true }) }, t('settings.useDefault')) : null,
       state === 'saved' && !dirty && needsButton ? h('span', { className: 'ms-saved', role: 'status' }, h(Codicon, { name: 'check', size: '0.75rem' }), t('common.saved')) : null),
     error ? h('p', { className: 'ms-error', role: 'alert' }, error) : null,
     note ? h('p', { className: 'ms-hint', role: 'status' }, note) : null)

@@ -36,6 +36,8 @@ class CliRuntime(Protocol):
 
     def set_config(self, key: str, value: Any) -> None: ...
 
+    def unset_config(self, key: str) -> str: ...
+
     def doctor_env(self) -> Any: ...
 
 
@@ -94,6 +96,10 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     se.add_argument("key", choices=[*SPEC, *LEGACY_KEYS.values(), *RETIRED_KEYS], metavar="KEY")  # retired: a hint
     se.add_argument("value")
     add_space_arg(se)
+    un = cf_sub.add_parser("unset", help="Remove a global value (the default applies again), or with --space that "
+                                         "space's override; also removes a retired setting")
+    un.add_argument("key", choices=[*SPEC, *LEGACY_KEYS.values(), *RETIRED_KEYS], metavar="KEY")
+    add_space_arg(un)
     cl = cf_sub.add_parser("list", help="Every setting with its effective value and where it comes from")
     cl.add_argument("--json", action="store_true")
     cl.add_argument("--group", help="Only one group (see `config schema`)")
@@ -371,6 +377,8 @@ def _config(args: argparse.Namespace, rt: CliRuntime) -> int:
         return 0
     if command == "set":
         return _config_set(args, rt)
+    if command == "unset":
+        return _config_unset(args, rt)
     if command == "list":
         return _config_list(args, rt)
     return _config_get(args, rt)
@@ -397,6 +405,28 @@ def _config_set(args: argparse.Namespace, rt: CliRuntime) -> int:
         return 2
     if key in ("google_meet_enabled", "google_meet_discord_channel", "delivery_discord_channel"):
         _warn_meet_channel(rt, space or None)
+    if key in DESTINATION_KEYS:
+        _nudge_waiting(rt)
+    return 0
+
+
+def _config_unset(args: argparse.Namespace, rt: CliRuntime) -> int:
+    """Remove a stored value under every name it may be kept (its pre-0.2 spelling, the retired key it
+    replaced): afterwards the default (or, with ``--space``, the global value) applies."""
+    space = (getattr(args, "space", None) or "").strip()
+    lang = rt.settings().ui_language
+    try:
+        if space:
+            space = selected(args, rt, action=True) or ""
+            key = args.key if args.key in RETIRED_KEYS else cli_spaces.check_space_key(args.key, lang)
+            key = rt.spaces().unset_override(space, key)
+            _print(t("space.cli_override_unset", lang, slug=space, key=key))
+        else:
+            key = rt.unset_config(args.key)
+            _print(t("cli.config_unset", lang, key=key))
+    except ValueError as exc:
+        _print(str(exc))
+        return 2
     if key in DESTINATION_KEYS:
         _nudge_waiting(rt)
     return 0

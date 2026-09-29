@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .config import SPEC, Getter, Settings, canonical_key, validate_value
+from .config import RETIRED_KEYS, SPEC, Getter, Settings, canonical_key, names_to_clear, validate_value
 from .filelock import file_lock
 from .storage.spaces import SpaceRow
 
@@ -196,8 +196,23 @@ class Spaces:
             raise SpaceError(f"server {guild_id} is not in space {slug!r}")
         return self.require(space.slug)
 
+    def unset_override(self, slug: str, key: str) -> str:
+        """Remove ``slug``'s override of ``key`` (any spelling it may be stored under, see
+        ``config.names_to_clear``), including an override of a retired key an older version wrote.
+        Returns the name removed."""
+        name, names = names_to_clear(key)
+        target = RETIRED_KEYS[name][0] if name in RETIRED_KEYS else name
+        if SPEC[target].scope != "space":
+            raise SpaceError(f"{name} is a machine-wide setting; it cannot differ per space")
+        slug = self.require(check_slug(slug)).slug
+        for stored in names:
+            self.repo.set_space_override(slug, stored, None)
+        return name
+
     def set_override(self, slug: str, key: str, raw: Any) -> tuple[str, Any]:
         """Validate with the global rules and store ``slug``'s override; ``raw=None`` clears it."""
+        if raw is None:
+            return self.unset_override(slug, key), None
         key = canonical_key(key)
         if SPEC[key].scope != "space":
             raise SpaceError(f"{key} is a machine-wide setting; it cannot differ per space")

@@ -147,6 +147,7 @@
   "cfg.transcribe_model.label": "Whisper model",
   "cfg.ui_language.help": "Language of bot messages.",
   "cfg.ui_language.label": "Bot language",
+  "cli.config_unset": "{key} removed: the default value applies again.",
   "cli.exported": "Exported to {path}",
   "cli.llm_config_path": "stored in Hermes' config.yaml under {path}",
   "cli.llm_default": "{keys}: using the default value (Hermes keeps no explicit copy of a default).",

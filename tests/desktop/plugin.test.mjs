@@ -457,6 +457,16 @@ test('settings: where tasks are posted is a plain-language choice, all together 
   }
 })
 
+test('settings: a stored value (even under a retired name) can go back to the default', opts, async () => {
+  const { createElement } = await import('react')
+  const field = { key: 'delivery_tasks_placement', type: 'str', group: 'delivery', label: 'Dónde se publican las tareas',
+    help: 'h', default: 'meeting', choices: ['meeting', 'projects', 'projects_inline'], storage: 'plugin' }
+  let html = await render(createElement(mod.SettingField, { field, current: { value: 'projects_inline', origin: 'configured' } }), {}, 'es')
+  assert.match(html, /Usar el predeterminado/)
+  html = await render(createElement(mod.SettingField, { field, current: { value: 'meeting', origin: 'default' } }), {}, 'en')
+  assert.doesNotMatch(html, /Use default/)
+})
+
 test('project–channel editor renders one validated row per association', opts, async () => {
   const { createElement } = await import('react')
   const html = await render(createElement(mod.ProjectChannelsEditor, { value: ['Proyecto Alfa=111111111111111111', 'Proyecto Beta=222222222222222222'] }), {}, 'es')
