@@ -362,12 +362,14 @@ class ButtonActions:
         svc = self._service()
         meeting = await asyncio.to_thread(svc.require, meeting_id)
         track = next((tr for tr in await asyncio.to_thread(svc.speaker_tracks, meeting) if tr.label == label), None)
-        if track is None or track.owner:
+        if track is None or (track.owner and not self.is_owner(interaction)):
             await interaction.followup.send(t("speakers.already", self.lang, label=label,
                                               name=track.name if track else label), ephemeral=True)
             return
         span = f"{fmt_ts(track.first)}–{fmt_ts(track.last)}" if track.first is not None else t("speakers.no_lines", self.lang)
         options = [(s.user_id, s.name) for s in candidates(meeting)][:SELECT_LIMIT]
+        if self.is_owner(interaction):
+            options = [("unassigned", t("capture.unidentified", self.lang)), *options][:SELECT_LIMIT]
         await interaction.followup.send(t("speakers.pick", self.lang, name=track.name, lines=track.lines, span=span),
                                         view=self._speaker_view(meeting_id, label, options), ephemeral=True)
 
@@ -377,7 +379,8 @@ class ButtonActions:
         try:
             if not values:
                 raise UserMessage(t("ui.no_selection", self.lang))
-            done = await asyncio.to_thread(self._service().assign_speaker, meeting_id, label, values[0])
+            done = await asyncio.to_thread(self._service().assign_speaker, meeting_id, label, values[0],
+                                           actor=self._uid(interaction), admin=self.is_owner(interaction))
             reply = (t("speakers.assigned", self.lang, label=label, name=done.name, lines=done.lines, tasks=done.tasks)
                      if done.changed else t("speakers.already", self.lang, label=label, name=done.name))
             if done.redeliver:

@@ -144,8 +144,11 @@ def speaker_buttons(meeting: Meeting, lang: str) -> tuple[ButtonSpec, ...]:
     """"Who is <unidentified participant>?" — one per track still unassigned (DESIGN §4.1), at most 5
     (one row); who may press it is decided on click (``auth.check_speaker``)."""
     names = {s.user_id: s.name for s in meeting.speakers}
-    return tuple(ButtonSpec(t("speakers.suggestion" if s.suggested_user else "ui.btn_assign", lang,
+    assigned = tuple(ButtonSpec(t("speakers.correct", lang, name=names.get(uid, uid))[:80],
+                                 custom_id("spk", meeting.id, label), "secondary", 1, "👤")
+                     for label, uid in getattr(meeting, "speaker_assignments", {}).items())
+    return (assigned + tuple(ButtonSpec(t("speakers.suggestion" if s.suggested_user else "ui.btn_assign", lang,
                               name=names.get(s.suggested_user, s.name))[:80],
                             custom_id("scfm" if s.suggested_user else "spk", meeting.id, s.user_id),
                             "secondary", 1, "👤")
-                 for s in meeting.speakers if is_unidentified(s.user_id))[:5]
+                 for s in meeting.speakers if is_unidentified(s.user_id)))[:5]

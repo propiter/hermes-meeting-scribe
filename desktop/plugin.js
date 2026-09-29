@@ -168,6 +168,7 @@ export const LOCALES = {
       assign: 'Assign to…',
       confirm: 'Assign',
       suggestion: name => `Is this ${name}?`,
+      undo: 'Unidentified participant (undo)', audit: 'Identity changes', 
       failed: e => `Could not assign it: ${e}`
     },
     audio: {
@@ -416,6 +417,7 @@ export const LOCALES = {
       assign: 'Asignar a…',
       confirm: 'Asignar',
       suggestion: name => `¿Es ${name}?`,
+      undo: 'Participante sin identificar (deshacer)', audit: 'Cambios de identidad', 
       failed: e => `No se pudo asignar: ${e}`
     },
     audio: {
@@ -1212,12 +1214,17 @@ function SpeakerTracks({ meeting: m, commandId, onSubmitted, onFinished }) {
       !tr.owner && tr.suggested_user ? h(Button, { type: 'button', variant: 'secondary', size: 'sm',
         disabled: busy || running, title: tr.suggestion_reason,
         onClick: () => submit(tr.label, tr.suggested_user) }, t('speakers.suggestion', tr.suggestion_name || tr.suggested_user)) : null,
-      tr.owner || !info.people.length ? null : h(Fragment, null,
+      !info.people.length ? null : h(Fragment, null,
         h(Select, { value: choice[tr.label] || '', onValueChange: v => setChoice(c => ({ ...c, [tr.label]: v })) },
           h(SelectTrigger, { size: 'sm', 'aria-label': t('speakers.assign') }, h(SelectValue, { placeholder: t('speakers.assign') })),
-          h(SelectContent, null, info.people.map(p => h(SelectItem, { key: p.id, value: p.id }, p.name)))),
+          h(SelectContent, null,
+            h(SelectItem, { value: 'unassigned' }, t('speakers.undo')),
+            info.people.map(p => h(SelectItem, { key: p.id, value: p.id }, p.name)))),
         h(Button, { type: 'button', variant: 'secondary', size: 'sm', disabled: busy || running || !choice[tr.label], onClick: () => submit(tr.label) },
           h(Codicon, { name: running ? 'loading~spin' : 'person', size: '0.8rem' }), t('speakers.confirm')))))),
+    (info.audit || []).length ? h('details', null, h('summary', null, t('speakers.audit')),
+      h('ul', null, info.audit.map(row => h('li', { key: row.id },
+        `${row.at} · ${row.actor} · ${row.label}: ${row.previous_user || '—'} → ${row.next_user || '—'}`)))) : null,
     failed ? h('p', { className: 'ms-error' }, t('speakers.failed', cmd.data.error || '')) : null,
     error ? h('p', { className: 'ms-error', role: 'alert' }, error) : null)
 }

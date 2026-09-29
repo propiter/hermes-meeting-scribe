@@ -91,6 +91,10 @@ BASELINE = baseline.BASELINE_VERSION
 _MIGRATIONS: tuple[str, ...] = (  # schema changes after the baseline, in order (BASELINE + 1, ...)
     # 101: a person link's Google account (``users/<id>``), set only by an admin (DESIGN §19.3)
     "ALTER TABLE links ADD COLUMN google_user TEXT;",
+    """CREATE TABLE speaker_audit (
+      id INTEGER PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      label TEXT NOT NULL, actor TEXT NOT NULL, previous_user TEXT, next_user TEXT, at TEXT NOT NULL);
+    """,
 )
 SCHEMA_VERSION = BASELINE + len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
@@ -389,6 +393,15 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
         self._tx([("INSERT INTO speakers (meeting_id, user_id, name, is_bot) VALUES (?,?,?,?)"
                    " ON CONFLICT(meeting_id, user_id) DO UPDATE SET name=excluded.name",
                    (meeting_id, s.user_id, s.name, int(s.is_bot))) for s in speakers])
+
+    def audit_speaker(self, meeting_id: str, label: str, actor: str, previous: Optional[str],
+                      target: Optional[str], at: str) -> None:
+        self._x("INSERT INTO speaker_audit(meeting_id,label,actor,previous_user,next_user,at) VALUES(?,?,?,?,?,?)",
+                (meeting_id, label, actor, previous, target, at))
+
+    def speaker_history(self, meeting_id: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._x("SELECT * FROM speaker_audit WHERE meeting_id=? ORDER BY id",
+                                        (meeting_id,)).fetchall()]
 
     def delete_speaker(self, meeting_id: str, user_id: str) -> None:
         self._x("DELETE FROM speakers WHERE meeting_id=? AND user_id=?", (meeting_id, user_id))

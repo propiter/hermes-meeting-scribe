@@ -179,6 +179,7 @@ class Utterance:
     text: str
     words: tuple[Word, ...] = ()
     confidence: float = 0.0
+    track_id: Optional[str] = None  # immutable source track, survives speaker corrections
 
     def __post_init__(self) -> None:
         if self.t1 < self.t0:
@@ -188,6 +189,8 @@ class Utterance:
         d: dict[str, Any] = {"t0": round(self.t0, 3), "t1": round(self.t1, 3), "speaker_id": self.speaker_id,
                              "speaker": self.speaker, "text": self.text,
                              "confidence": round(self.confidence, 4)}
+        if self.track_id:
+            d["track_id"] = self.track_id
         if self.words:
             d["words"] = [asdict(w) for w in self.words]
         return d
@@ -198,7 +201,7 @@ class Utterance:
                    speaker=str(d.get("speaker") or d["speaker_id"]), text=str(d["text"]),
                    words=tuple(Word(float(w["t0"]), float(w["t1"]), str(w["text"]), float(w.get("p", 1.0)))
                                for w in d.get("words") or ()),
-                   confidence=float(d.get("confidence", 0.0)))
+                   confidence=float(d.get("confidence", 0.0)), track_id=d.get("track_id"))
 
 
 class ActionStatus(str, Enum):
@@ -223,6 +226,7 @@ class ActionItem:
     status: ActionStatus = ActionStatus.PENDING
     project_key: Optional[str] = None   # resolved candidate key (DESIGN §16: per-task routing)
     project_hint: Optional[str] = None  # the name as spoken when it is not a known candidate
+    owner_track_id: Optional[str] = None  # identity edit provenance, never derived from owner alone
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "project_confidence", min(1.0, max(0.0, float(self.project_confidence))))
@@ -238,7 +242,7 @@ class ActionItem:
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "ActionItem":
         kw = {k: d.get(k) for k in ("owner_speaker_id", "owner_name", "due", "project", "t0", "project_key",
-                                    "project_hint")}
+                                    "project_hint", "owner_track_id")}
         return cls(id=str(d["id"]), title=str(d["title"]), description=str(d.get("description") or ""),
                    project_confidence=float(d.get("project_confidence") or 0.0),
                    quote=str(d.get("quote") or ""),
@@ -315,6 +319,7 @@ class Meeting:
     # User ids of people who were in the call (unmuted, > 1 min) but whose voice was never captured
     # (DESIGN §4.1): every surface that shows the notes says so.
     missing_audio: tuple[str, ...] = ()
+    speaker_assignments: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name in ("started_at", "ended_at"):

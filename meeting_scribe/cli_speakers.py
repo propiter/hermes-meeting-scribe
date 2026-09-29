@@ -27,7 +27,7 @@ def add_parser(sub: Any) -> None:
     asg = ss.add_parser("assign", help="Give an unidentified track to a participant (re-publishes in place)")
     asg.add_argument("meeting_id")
     asg.add_argument("label", metavar="unidentified-N")
-    asg.add_argument("who", metavar="PARTICIPANT", help="A participant's name, user id or @id")
+    asg.add_argument("who", metavar="PARTICIPANT", help="A participant's name, user id, @id, or unassigned to undo")
     add_space_arg(asg)
 
 
@@ -68,7 +68,7 @@ def dispatch(args: argparse.Namespace, rt: Any) -> int:
                 _print("  " + track_line(tr, lang))
         return 0
     try:
-        done = service.assign_speaker(meeting.id, args.label, args.who)
+        done = service.assign_speaker(meeting.id, args.label, args.who, actor="cli", admin=True)
     except AssignError as exc:
         _print(error_text(exc, lang))
         return 2 if exc.code in ("unknown_person", "not_unidentified", "unknown_track") else 1

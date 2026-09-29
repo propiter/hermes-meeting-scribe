@@ -136,6 +136,9 @@ class Stages:
         folder = self.folder(meeting)
         cb = (lambda track, frac: self.progress(meeting.id, track, frac)) if self.progress else None
         utterances = self.transcriber.transcribe(meeting, folder, cb)
+        from ..domain.models import is_unidentified
+
+        utterances = [replace(u, track_id=u.speaker_id) if is_unidentified(u.speaker_id) else u for u in utterances]
         assigned = assignments(self.repo, meeting.id)  # tracks given to their owner after the meeting
         if assigned:
             utterances = sorted(relabel(utterances, assigned, {s.user_id: s.name for s in meeting.speakers}),

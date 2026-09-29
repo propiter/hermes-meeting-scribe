@@ -276,6 +276,7 @@ class Library:
 
         folder = Layout(lambda: self.root).meeting_folder(meeting)
         return {"tracks": [tr.to_dict() for tr in tracks(self.repo, folder, meeting)],
+                "audit": self.repo.speaker_history(meeting.id),
                 "people": [{"id": s.user_id, "name": s.name} for s in candidates(meeting)]}
 
     def tasks(self, mid: str) -> list[dict[str, Any]]:

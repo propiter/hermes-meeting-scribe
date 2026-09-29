@@ -157,7 +157,7 @@ def _refuse_assign(meeting: Any, label: str, user: str) -> None:
 
     if meeting.state == MeetingState.RECORDING:
         raise ValueError("meeting is still recording")
-    if user not in {s.user_id for s in candidates(meeting)}:
+    if user != "unassigned" and user not in {s.user_id for s in candidates(meeting)}:
         raise ValueError("that person is not a participant of this meeting")
 
 
@@ -201,7 +201,7 @@ def execute_one(service: Any) -> bool:
         if body["action"] == "prepare_audio":
             service.prepare_audio(meeting.id)
         elif body["action"] == "assign_speaker":
-            service.assign_speaker(meeting.id, body["label"], body["user"])
+            service.assign_speaker(meeting.id, body["label"], body["user"], actor="desktop", admin=True)
         else:
             _refuse_busy(repo, meeting)
             service.reprocess(meeting.id, Stage(body["stage"]))

@@ -35,7 +35,7 @@ class Svc:
     def speaker_tracks(self, meeting):
         return [Track(LABEL, "Unidentified participant", 138, 2.5, 1250.0, self.owner)]
 
-    def assign_speaker(self, mid, label, who):
+    def assign_speaker(self, mid, label, who, **auth):
         self.calls.append((mid, label, who))
         if who == "77":
             raise AssignError("unknown_person", who)
@@ -67,7 +67,10 @@ async def test_a_participant_or_an_owner_gets_the_picker_without_bots_or_tracks(
     i = FakeInteraction(user)
     await env.acts.handle(i, "spk", MID, LABEL)
     view = i.followup.sent[0]["view"]
-    assert view == ("speakers", MID, LABEL, (("10", "Ana"), ("12", "Luis")))
+    options = (("10", "Ana"), ("12", "Luis"))
+    if user == OWNER:
+        options = (("unassigned", "Unidentified participant"), *options)
+    assert view == ("speakers", MID, LABEL, options)
     assert "138 line(s), 00:02–20:50" in i.replies() and i.followup.sent[0]["ephemeral"]
 
 

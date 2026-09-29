@@ -67,6 +67,17 @@ def test_assignment_refresh_never_arms_dm_move_or_runs_external_sinks(world):
     assert service.repo.kv_get(KV_MOVE_FROM_DM + mid) is None
 
 
+def test_correction_after_retranscription_keeps_original_track(world):
+    service, runner, _, mid = world
+    service.assign_speaker(mid, LABEL, "11")
+    drain(runner)
+    service.reprocess(mid, Stage.TRANSCRIBE)
+    drain(runner)
+    service.assign_speaker(mid, LABEL, "10", actor="cli", admin=True)
+    drain(runner)
+    assert [u.track_id for u in read_transcript(service.folder(service.require(mid)))] == [None, LABEL, LABEL]
+
+
 def test_tracks_show_interval_and_lines(world):
     service, _, _, mid = world
     [track] = service.speaker_tracks(service.require(mid))
@@ -97,6 +108,29 @@ def test_assign_renames_transcript_tasks_speakers_and_redelivers_in_place(world)
     assert (track.owner, track.name, track.lines, track.first) == ("11", "Luis", 2, 2.5)
 
 
+def test_owner_can_correct_then_undo_without_touching_other_lines_or_tasks(world):
+    service, runner, sink, mid = world
+    service.assign_speaker(mid, LABEL, "11", actor="10")
+    drain(runner)
+    service.assign_speaker(mid, LABEL, "10", actor="owner:1", admin=True)
+    drain(runner)
+    folder = service.folder(service.require(mid))
+    assert [u.speaker_id for u in read_transcript(folder)] == ["10", "10", "10"]
+    assert [u.track_id for u in read_transcript(folder)] == [None, LABEL, LABEL]
+    service.assign_speaker(mid, LABEL, "unassigned", actor="desktop", admin=True)
+    drain(runner)
+    assert [u.speaker_id for u in read_transcript(folder)] == ["10", LABEL, LABEL]
+    assert service.repo.get_action_item(mid, "a1").owner_speaker_id == LABEL
+    assert service.repo.get_action_item(mid, "a2").owner_speaker_id == "10"
+    assert assignments(service.repo, mid) == {}
+    history = service.repo.speaker_history(mid)
+    assert [(r["actor"], r["previous_user"], r["next_user"]) for r in history] == [
+        ("10", None, "11"), ("owner:1", "11", "10"), ("desktop", "10", None)]
+    assert all(r["at"] for r in history)
+    with pytest.raises(AssignError, match="owner_required"):
+        service.assign_speaker(mid, LABEL, "11", actor="10")
+
+
 def test_assign_is_idempotent_and_never_moves_a_track_twice(world):
     service, runner, sink, mid = world
     service.assign_speaker(mid, LABEL, "@11")
@@ -105,7 +139,7 @@ def test_assign_is_idempotent_and_never_moves_a_track_twice(world):
     assert not again.changed and not again.redeliver and len(sink.calls) == 2
     with pytest.raises(AssignError) as err:
         service.assign_speaker(mid, LABEL, "Ana")
-    assert err.value.code == "already_assigned"
+    assert err.value.code == "owner_required"
 
 
 @pytest.mark.parametrize(("label", "who", "code"), [

@@ -29,7 +29,8 @@ def fake_service(repo, calls, fail=None):
         if fail:
             raise fail
         calls.append((mid, "prepare_audio"))
-    def assign_speaker(mid, label, user):
+    def assign_speaker(mid, label, user, *, actor, admin):
+        assert actor == "desktop" and admin is True
         calls.append((mid, label, user))
     return SimpleNamespace(repo=repo, reprocess=reprocess, prepare_audio=prepare_audio, assign_speaker=assign_speaker,
                            require=lambda mid: repo.get_meeting(mid))

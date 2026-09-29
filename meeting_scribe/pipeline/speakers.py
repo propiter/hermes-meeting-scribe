@@ -73,14 +73,19 @@ def _records(repo: Any, meeting_id: str) -> dict[str, dict[str, Any]]:
 
 def assignments(repo: Any, meeting_id: str) -> dict[str, str]:
     """``{"unidentified-N": user id}`` of the tracks assigned after the meeting."""
-    return {label: str(rec["user"]) for label, rec in _records(repo, meeting_id).items()}
+    return {label: str(rec["user"]) for label, rec in _records(repo, meeting_id).items() if rec.get("user")}
 
 
 def relabel(utterances: Sequence[Utterance], mapping: Mapping[str, str],
             names: Mapping[str, str]) -> list[Utterance]:
     """The lines of each assigned track under its owner (the transcriber names them by track file)."""
-    return [replace(u, speaker_id=mapping[u.speaker_id], speaker=names.get(mapping[u.speaker_id], u.speaker))
-            if u.speaker_id in mapping else u for u in utterances]
+    out = []
+    for u in utterances:
+        source = u.track_id or u.speaker_id
+        if source in mapping:
+            u = replace(u, speaker_id=mapping[source], speaker=names.get(mapping[source], u.speaker), track_id=source)
+        out.append(u)
+    return out
 
 
 def candidates(meeting: Meeting) -> list[Speaker]:
@@ -96,8 +101,8 @@ def tracks(repo: Any, folder: Any, meeting: Meeting) -> list[Track]:
     names = {s.user_id: s.name for s in meeting.speakers}
     out = [Track(label, names.get(label, label), *_span([u for u in utts if u.speaker_id == label]))
            for label in names if is_unidentified(label) and label not in done]
-    out += [Track(label, names.get(rec["user"], rec["user"]), int(rec["lines"]), rec["first"], rec["last"],
-                  str(rec["user"])) for label, rec in done.items()]
+    out += [Track(label, names.get(rec.get("user"), rec.get("name", label)), int(rec["lines"]), rec["first"], rec["last"],
+                  rec.get("user")) for label, rec in done.items()]
     speakers = {s.user_id: s for s in meeting.speakers}
     out = [replace(tr, suggested_user=speakers[tr.label].suggested_user,
                    suggestion_name=names.get(speakers[tr.label].suggested_user, ""),
@@ -124,8 +129,23 @@ def resolve(meeting: Meeting, who: str) -> Speaker:
     return by_id[key]
 
 
-def assign(service: Any, meeting_id: str, label: str, who: str) -> Assigned:
-    """Give ``label``'s voice to ``who``; see the module docstring."""
+def assign(service: Any, meeting_id: str, label: str, who: str, *, actor: str = "local",
+           admin: bool = False) -> Assigned:
+    """First assignment by participants; corrections and undo require an authenticated operator."""
+    from ..filelock import file_lock
+
+    meeting = service.require(meeting_id)
+    with file_lock(service.folder(meeting) / ".speaker-edit.lock"):
+        previous = service.repo.hold_job(meeting.id)
+        if previous is None:
+            raise AssignError("busy")
+        try:
+            return _assign(service, meeting.id, label, who, actor=actor, admin=admin)
+        finally:
+            service.repo.unhold_job(meeting.id, previous)
+
+
+def _assign(service: Any, meeting_id: str, label: str, who: str, *, actor: str, admin: bool) -> Assigned:
     repo = service.repo
     meeting = service.require(meeting_id)
     if not is_unidentified(label):
@@ -135,21 +155,35 @@ def assign(service: Any, meeting_id: str, label: str, who: str) -> Assigned:
     job = repo.get_job(meeting.id)
     if job is not None and job.state == "running":
         raise AssignError("busy")
-    person = resolve(meeting, who)
-    done = assignments(repo, meeting.id)
-    if label in done:
-        if done[label] != person.user_id:
-            raise AssignError("already_assigned", done[label])
-        return Assigned(label, person.user_id, person.name, 0, 0, False, False)
-    if label not in {s.user_id for s in meeting.speakers}:
+    from ..i18n import t
+
+    lang = meeting.language or service.settings(meeting.space).ui_language
+    records = _records(repo, meeting.id)
+    old = records.get(label)
+    undo = who == "unassigned"
+    if undo and not admin:
+        raise AssignError("owner_required")
+    name = (old or {}).get("name") or next((s.name for s in meeting.speakers if s.user_id == label),
+                                            t("capture.unidentified", lang))
+    person = Speaker(label, name) if undo else resolve(meeting, who)
+    target = None if undo else person.user_id
+    if old is not None:
+        if old.get("user") == target:
+            return Assigned(label, person.user_id, person.name, 0, 0, False, False)
+        if not admin:
+            raise AssignError("owner_required")
+        if not old.get("provenance"):
+            raise AssignError("provenance_missing")
+    elif label not in {s.user_id for s in meeting.speakers}:
         raise AssignError("unknown_track", label)
     folder = service.folder(meeting)
     utts = read_transcript(folder)
-    moved, first, last = _span([u for u in utts if u.speaker_id == label])
-    record = {"user": person.user_id, "lines": moved, "first": first, "last": last}
+    moved, first, last = _span([u for u in utts if (u.track_id or u.speaker_id) == label])
+    record = {"user": target, "lines": moved, "first": first, "last": last, "name": name, "provenance": True}
     repo.kv_set(ASSIGNED_KV + meeting.id, json.dumps({**_records(repo, meeting.id), label: record}, sort_keys=True))
-    lang = meeting.language or service.settings(meeting.space).ui_language
-    meeting = replace(meeting, speakers=tuple(s for s in meeting.speakers if s.user_id != label),
+    meeting = replace(meeting, speaker_assignments=assignments(repo, meeting.id),
+                      speakers=tuple(s for s in meeting.speakers if s.user_id != label) +
+                      ((person,) if undo else ()),
                       missing_audio=tuple(u for u in meeting.missing_audio if u != person.user_id))
     if moved:
         utts = relabel(utts, {label: person.user_id}, {person.user_id: person.name})
@@ -157,7 +191,10 @@ def assign(service: Any, meeting_id: str, label: str, who: str) -> Assigned:
         write_transcript_md(folder, meeting, utts, lang)
         repo.replace_utterances(meeting.id, utts)
     tasks = _reassign_tasks(repo, folder, meeting, label, person, lang)
-    repo.delete_speaker(meeting.id, label)
+    if not undo:
+        repo.delete_speaker(meeting.id, label)
+    repo.audit_speaker(meeting.id, label, actor, (old or {}).get("user"), target,
+                       service.clock.now().isoformat())
     service.runner.stages.persist(meeting)
     redeliver = meeting.state in (MeetingState.DONE, MeetingState.FAILED) and read_notes(folder) is not None
     if redeliver:
@@ -173,14 +210,14 @@ def _reassign_tasks(repo: Any, folder: Any, meeting: Meeting, label: str, person
         return 0
 
     def mine(item: ActionItem) -> ActionItem:
-        return (replace(item, owner_speaker_id=person.user_id, owner_name=person.name)
-                if item.owner_speaker_id == label else item)
+        return (replace(item, owner_speaker_id=person.user_id, owner_name=person.name, owner_track_id=label)
+                if (item.owner_track_id or item.owner_speaker_id) == label else item)
 
-    count = sum(1 for a in notes.action_items if a.owner_speaker_id == label)
+    count = sum(1 for a in notes.action_items if (a.owner_track_id or a.owner_speaker_id) == label)
     if not count:
         return 0
     write_notes(folder, meeting, replace(notes, action_items=tuple(mine(a) for a in notes.action_items)), lang)
     for item in repo.list_action_items(meeting.id):
-        if item.owner_speaker_id == label:
+        if (item.owner_track_id or item.owner_speaker_id) == label:
             repo.update_action_item(meeting.id, mine(item))
     return count

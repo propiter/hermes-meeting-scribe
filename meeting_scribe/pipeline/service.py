@@ -279,11 +279,11 @@ class MeetingService:
 
         return tracks(self.repo, self.folder(meeting), meeting)
 
-    def assign_speaker(self, meeting_id: str, label: str, who: str) -> Any:
+    def assign_speaker(self, meeting_id: str, label: str, who: str, *, actor: str = "local", admin: bool = False) -> Any:
         """Give an unidentified track to a participant (see :mod:`.speakers`)."""
         from .speakers import assign
 
-        return assign(self, meeting_id, label, who)
+        return assign(self, meeting_id, label, who, actor=actor, admin=admin)
 
     # -- action items -------------------------------------------------------------------------
     def _sink(self, name: str, meeting: Meeting) -> Any:
