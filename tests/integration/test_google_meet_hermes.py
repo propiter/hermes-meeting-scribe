@@ -13,6 +13,7 @@ import json
 import shutil
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,11 +26,14 @@ yaml = pytest.importorskip("yaml")
 from meeting_scribe.domain.models import ActionItem, MeetingState, Notes  # noqa: E402
 from meeting_scribe.google.oauth import write_private_json  # noqa: E402
 from tests.unit.discord_ui.fakes import FakeAdapter, FakeBot  # noqa: E402
-from tests.unit.gmeet.fake_meet import FakeMeet  # noqa: E402
+from tests.unit.gmeet.fake_meet import START, FakeMeet  # noqa: E402
 from tests.unit.gmeet.fakes import CLIENT_JSON, FakeTransport, jresp  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 IGNORE = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".pytest_cache", "*.pyc", "tests")
+
+# The fixture conference has fixed dates: search from just before it, never from the real clock.
+FIXTURE_WINDOW = datetime.fromisoformat(START.replace("Z", "+00:00")) - timedelta(hours=1)
 
 
 class DeterministicAnalyzer:
@@ -107,7 +111,7 @@ def test_meet_conference_is_imported_processed_and_delivered_with_transcript(man
     try:
         svc = rt.service()
         svc.runner.stages.analyzer = DeterministicAnalyzer()
-        report = rt.meet_importer().sync(ended_after=rt.meet_importer().window_start(days=3))
+        report = rt.meet_importer().sync(ended_after=FIXTURE_WINDOW)
         assert report.errors == [] and len(report.imported) == 1, report.as_dict()
         mid = report.imported[0]
         assert svc.repo.get_meeting(mid).state is MeetingState.TRANSCRIBED
@@ -124,7 +128,7 @@ def test_meet_conference_is_imported_processed_and_delivered_with_transcript(man
         body = files[0].fp.read().decode("utf-8")
         assert "Ana Example:** Hola, revisemos el lanzamiento." in body and "Guest Two:**" in body
         # idempotent: a second sync imports nothing, a redelivery attaches nothing new
-        again = rt.meet_importer().sync(ended_after=rt.meet_importer().window_start(days=3))
+        again = rt.meet_importer().sync(ended_after=FIXTURE_WINDOW)
         assert again.imported == [] and again.already == 1
         svc.reprocess(mid, __import__("meeting_scribe.domain.models", fromlist=["Stage"]).Stage.DELIVER)
         while svc.runner.run_once():
