@@ -30,7 +30,7 @@ from ..domain.models import (
 from ..domain.ports import Clock
 from ..storage.owner import owner_alive, owner_dead, process_owner_id
 from ..storage.repo import Repository
-from .stages import SINKS_DONE_KV, StageDeferred, Stages
+from .stages import REPUBLISH_KV, SINKS_DONE_KV, StageDeferred, Stages
 
 log = logging.getLogger(__name__)
 Spawner = Callable[..., threading.Thread]
@@ -155,6 +155,20 @@ class PipelineRunner:
         self._wake.set()
         return stage
 
+    def republish_identity(self, meeting_id: str) -> None:
+        """Refresh existing publication after an identity edit; never authorize a legacy DM move."""
+        meeting = self._meeting(meeting_id)
+        previous = self.repo.hold_job(meeting_id)
+        if previous is None:
+            raise ValueError("meeting is being processed right now")
+        try:
+            self.repo.kv_set(REPUBLISH_KV + meeting_id, "1")
+            self.stages.persist(meeting.with_state(rewind_target(Stage.DELIVER), rewind=True))
+        except BaseException:
+            self.repo.unhold_job(meeting_id, previous)
+            raise
+        self.enqueue(meeting_id, Stage.DELIVER)
+
     def reprocess(self, meeting_id: str, stage: Stage) -> Stage:
         """Rewind and queue; returns the stage actually used (see :func:`effective_stage`)."""
         meeting = self._meeting(meeting_id)
@@ -167,6 +181,7 @@ class PipelineRunner:
             raise ValueError("meeting is being processed right now")
         stage = effective_stage(meeting, stage)
         try:
+            self.repo.kv_set(REPUBLISH_KV + meeting_id, None)
             # Only an explicit re-delivery may move notes an older version posted in a DM (DESIGN §19).
             self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, "1" if stage is Stage.DELIVER else None)
             self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)  # an explicit re-delivery runs every sink
@@ -368,6 +383,7 @@ class PipelineRunner:
         self.repo.kv_set(_DEFER_KV + meeting_id, None)
         self.repo.kv_set(WAITING_KV + meeting_id, None)
         self.repo.kv_set(SINKS_DONE_KV + meeting_id, None)
+        self.repo.kv_set(REPUBLISH_KV + meeting_id, None)
         self.repo.complete_job(job_id)
         self._emit(meeting_id, "done", self.stages.last_results.pop(meeting_id, []))
 

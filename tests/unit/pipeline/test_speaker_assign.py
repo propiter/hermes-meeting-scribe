@@ -42,6 +42,7 @@ class Analyzer:
 def world(prepo, layout, settings, clock, meeting):
     runner, _, _, sinks = build(prepo, layout, settings, clock, transcriber=TrackTranscriber())
     runner.stages.analyzer = Analyzer()
+    sinks[0].republish = sinks[0].deliver  # this fake models an editable publication sink
     service = MeetingService(prepo, layout, runner, settings, clock=clock, item_sinks=lambda: {},
                              catalogs=lambda: runner.stages.catalogs())
     live = service.begin_recording(replace(meeting, state=MeetingState.RECORDING, ended_at=None,
@@ -50,6 +51,20 @@ def world(prepo, layout, settings, clock, meeting):
     service.finish_recording(live.id, missing_audio=("11",))
     drain(runner)
     return service, runner, sinks[0], live.id
+
+
+def test_assignment_refresh_never_arms_dm_move_or_runs_external_sinks(world):
+    from meeting_scribe.domain.models import KV_MOVE_FROM_DM
+    from .conftest import RecordingSink
+
+    service, runner, publication, mid = world
+    external = RecordingSink(name="external")
+    runner.stages.sinks = lambda: [publication, external]
+    service.assign_speaker(mid, LABEL, "11")
+    assert service.repo.kv_get(KV_MOVE_FROM_DM + mid) is None
+    drain(runner)
+    assert len(publication.calls) == 2 and external.calls == []
+    assert service.repo.kv_get(KV_MOVE_FROM_DM + mid) is None
 
 
 def test_tracks_show_interval_and_lines(world):

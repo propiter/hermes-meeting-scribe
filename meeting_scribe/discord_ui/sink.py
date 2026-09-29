@@ -75,11 +75,18 @@ class DiscordNotesSink:
         return self._space_guilds(meeting.space)
 
     # -- pipeline thread -----------------------------------------------------------------------
+    def republish(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
+        return self._deliver(meeting, notes, identity=True)
+
     def deliver(self, meeting: Meeting, notes: Notes, folder: Path) -> SinkResult:
+        return self._deliver(meeting, notes, identity=False)
+
+    def _deliver(self, meeting: Meeting, notes: Notes, *, identity: bool) -> SinkResult:
         adapter, loop = self._adapter(), self._loop()
         if adapter is None or loop is None or loop.is_closed():
             return SinkResult(SINK, False, errors=("discord not connected yet; will retry",), deferred=True)
-        fut = asyncio.run_coroutine_threadsafe(self.publish(meeting, notes), loop)
+        operation = self.republish_identity(meeting, notes) if identity else self.publish(meeting, notes)
+        fut = asyncio.run_coroutine_threadsafe(operation, loop)
         try:
             url = fut.result(self._timeout)
         except DestinationPending as exc:  # nothing to post to yet: wait, never spend attempts
@@ -176,6 +183,11 @@ class DiscordNotesSink:
         if lock is None:
             lock = self._locks[meeting_id] = asyncio.Lock()
         return lock
+
+    async def republish_identity(self, meeting: Meeting, notes: Notes) -> str:
+        async with self._lock(meeting.id):
+            return await self._publisher(meeting).publish(meeting, notes, send_dms=False,
+                                                           attach_transcript=True, identity_refresh=True)
 
     async def publish(self, meeting: Meeting, notes: Notes) -> str:
         async with self._lock(meeting.id):

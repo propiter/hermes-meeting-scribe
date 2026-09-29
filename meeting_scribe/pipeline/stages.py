@@ -35,6 +35,7 @@ ProgressCb = Callable[[str, str, float], None]  # meeting_id, track, fraction
 
 
 log = logging.getLogger(__name__)
+REPUBLISH_KV = "pipeline.republish_identity."
 SINKS_DONE_KV = "pipeline.sinks_done."  # meeting id -> {"notes": sha256, "sinks": [...]} (review M4)
 
 
@@ -182,7 +183,13 @@ class Stages:
                     continue
                 if name in done:  # delivered this same content in an earlier try of this job
                     continue
-                result = sink.deliver(meeting, notes, folder)
+                if self.repo.kv_get(REPUBLISH_KV + meeting.id):
+                    publish = getattr(sink, "republish", None)
+                    if publish is None:  # external task sinks are not recreated by identity corrections
+                        continue
+                else:
+                    publish = sink.deliver
+                result = publish(meeting, notes, folder)
                 results.append(result)
                 if result.ok and not result.errors and not result.deferred:
                     done.add(name)

@@ -161,7 +161,7 @@ def assign(service: Any, meeting_id: str, label: str, who: str) -> Assigned:
     service.runner.stages.persist(meeting)
     redeliver = meeting.state in (MeetingState.DONE, MeetingState.FAILED) and read_notes(folder) is not None
     if redeliver:
-        service.reprocess(meeting.id, Stage.DELIVER)
+        service.runner.republish_identity(meeting.id)
     log.info("meeting-scribe %s: %s assigned to %s (%s): %d line(s), %d task(s)%s", meeting.id, label,
              person.name, person.user_id, moved, tasks, "; re-delivering" if redeliver else "")
     return Assigned(label, person.user_id, person.name, moved, tasks, True, redeliver)

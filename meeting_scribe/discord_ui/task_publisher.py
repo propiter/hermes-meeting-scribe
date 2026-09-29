@@ -708,17 +708,30 @@ class TaskPublisher:
         return None
 
     async def publish(self, meeting: Meeting, notes: Notes, *, send_dms: bool, attach_transcript: bool = False,
-                      move_from_dm: bool = False) -> str:
+                      move_from_dm: bool = False, identity_refresh: bool = False) -> str:
         """``attach_transcript`` marks the pipeline's DELIVER; ``move_from_dm`` an explicit
         ``reprocess --from deliver`` (the only way a meeting leaves a DM). A move is finished — DM
         messages deleted — only by a DELIVER, after everything new was posted. A direct-messages
         meeting (DESIGN §19.3) takes its own path and never touches a channel."""
         if await self.is_dm(meeting):
-            return (await DmDelivery(self).publish(meeting, notes, deliver=attach_transcript)).url
+            return (await DmDelivery(self).publish(meeting, notes, deliver=attach_transcript and not identity_refresh)).url
         ptrs = Pointers(self.repo, meeting.id)
+        if identity_refresh:
+            if await ptrs.load(MOVE_SUFFIX):
+                raise DestinationPending("identity refresh waits for the explicit DM move to finish")
+            existing = await ptrs.load("notes")
+            if not existing:
+                return ""  # identity correction is not permission to start a new publication
+            legacy_dm = await self._dm_of(existing)
+            if legacy_dm is not None:
+                specs = render_header(meeting, notes, self.o.lang)
+                for mid, spec in zip(existing.get("messages") or (), specs):
+                    await self.msgs.edit(legacy_dm, mid, spec=spec)
+                return str(existing.get("url") or "")  # no new DM delivery or legacy migration
         if await self.is_private(meeting):  # anything posted before it became private leaves public places
             await withdraw_public(self, ptrs, await self.private_place(meeting, ptrs))
-        move = await self._dm_state(meeting, ptrs, move_from_dm=move_from_dm and attach_transcript)
+        move = (None if identity_refresh else
+                await self._dm_state(meeting, ptrs, move_from_dm=move_from_dm and attach_transcript))
         chat = await self._move_target(meeting, move, ptrs, deliver=attach_transcript) if move else None
         if move is not None and chat is None:
             move = None
@@ -773,7 +786,7 @@ class TaskPublisher:
             if uid not in assignees:
                 await self.dm(board, uid, ptrs, send=False)
         await self.index(board, chat, threads, dm_failed, ptrs)
-        if attach_transcript:
+        if attach_transcript and not identity_refresh:
             alive = {v.item.id for v in board.views}
             if move is not None:
                 await self._finish_move(meeting, move, ptrs, alive=alive)
