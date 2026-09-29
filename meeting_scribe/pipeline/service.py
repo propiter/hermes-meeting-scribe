@@ -272,6 +272,19 @@ class MeetingService:
         self.runner.reprocess(meeting.id, stage)
         return self.repo.get_meeting(meeting.id) or meeting
 
+    # -- unidentified tracks (DESIGN §4.1) ---------------------------------------------------------
+    def speaker_tracks(self, meeting: Meeting) -> list[Any]:
+        """The meeting's "unidentified participant" tracks: interval, lines, owner once assigned."""
+        from .speakers import tracks
+
+        return tracks(self.repo, self.folder(meeting), meeting)
+
+    def assign_speaker(self, meeting_id: str, label: str, who: str) -> Any:
+        """Give an unidentified track to a participant (see :mod:`.speakers`)."""
+        from .speakers import assign
+
+        return assign(self, meeting_id, label, who)
+
     # -- action items -------------------------------------------------------------------------
     def _sink(self, name: str, meeting: Meeting) -> Any:
         sink = self._item_sinks().get(name)

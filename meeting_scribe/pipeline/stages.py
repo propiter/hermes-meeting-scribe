@@ -28,6 +28,7 @@ from ..storage.artifacts import (
 )
 from ..storage.layout import Layout
 from ..storage.repo import Repository
+from .speakers import assignments, relabel
 
 Archiver = Callable[[Meeting, Path], Optional[Path]]
 ProgressCb = Callable[[str, str, float], None]  # meeting_id, track, fraction
@@ -134,6 +135,10 @@ class Stages:
         folder = self.folder(meeting)
         cb = (lambda track, frac: self.progress(meeting.id, track, frac)) if self.progress else None
         utterances = self.transcriber.transcribe(meeting, folder, cb)
+        assigned = assignments(self.repo, meeting.id)  # tracks given to their owner after the meeting
+        if assigned:
+            utterances = sorted(relabel(utterances, assigned, {s.user_id: s.name for s in meeting.speakers}),
+                                key=lambda u: (u.t0, u.speaker_id))
         if not utterances:
             raise EmptyRecording("the transcription found no speech")
         write_transcript(folder, utterances)

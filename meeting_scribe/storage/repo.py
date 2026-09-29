@@ -390,6 +390,9 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
                    " ON CONFLICT(meeting_id, user_id) DO UPDATE SET name=excluded.name",
                    (meeting_id, s.user_id, s.name, int(s.is_bot))) for s in speakers])
 
+    def delete_speaker(self, meeting_id: str, user_id: str) -> None:
+        self._x("DELETE FROM speakers WHERE meeting_id=? AND user_id=?", (meeting_id, user_id))
+
     # -- utterances + FTS -----------------------------------------------------------------------
     def replace_utterances(self, meeting_id: str, utterances: Sequence[Utterance]) -> None:
         with self._lock:

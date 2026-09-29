@@ -130,6 +130,15 @@ KV_MOVE_FROM_DM = "discord.move_from_dm."
 KV_DM_NOTES = "discord.dm_notes."
 
 
+UNIDENTIFIED_PREFIX = "unidentified-"  # the speaker id of an "unidentified participant" track (DESIGN §4.1)
+
+
+def is_unidentified(user_id: Optional[str]) -> bool:
+    """A track whose owner was never proven: one SSRC, i.e. one Discord connection, i.e. one person."""
+    rest = str(user_id or "")[len(UNIDENTIFIED_PREFIX):]
+    return str(user_id or "").startswith(UNIDENTIFIED_PREFIX) and is_ascii_digits(rest)
+
+
 def is_discord_user_id(user_id: Optional[str]) -> bool:
     """Discord snowflakes are digits; imported speakers (``gmeet:<id>``) are not mentionable/DMable."""
     return bool(user_id) and is_ascii_digits(str(user_id))
