@@ -40,7 +40,7 @@ SHARE_ACTIONS = frozenset({"shd", "shp", "sha", "shc"})
 OPEN_ACTIONS = frozenset({"mine", "pg"})
 MEETING_OWNER_ONLY = frozenset({"allk"})
 MEETING_ACTIONS = frozenset({"allk", "alll", "psel"})
-SPEAKER_ACTIONS = frozenset({"spk", "ssel", "scfm"})
+SPEAKER_ACTIONS = frozenset({"spk", "ssel", "scfm", "sme"})
 
 
 @dataclass(frozen=True)

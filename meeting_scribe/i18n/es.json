@@ -436,6 +436,9 @@
   "speakers.error_recording": "La reunión todavía se está grabando.",
   "speakers.error_busy": "La reunión se está procesando ahora mismo; inténtalo cuando termine la etapa.",
   "ui.btn_assign": "¿Quién es {name}?",
+  "speakers.its_me": "Soy yo",
+  "speakers.is_it_you": "¿{name} es tu voz? ({lines} línea(s), {span}) Si eres tú, pulsa «Soy yo». Si es de otra persona, pide a un propietario que la asigne.",
+  "speakers.error_self_only": "Solo puedes marcar una voz como tuya. Para asignarla a otra persona, pídeselo a un propietario.",
   "speakers.pick": "¿Quién era {name}? ({lines} línea(s), {span}) Elige al participante:",
   "speakers.only_participants": "Solo alguien que estuvo en la reunión, o un propietario, puede hacer esto."
 }

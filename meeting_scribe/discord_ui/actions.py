@@ -230,6 +230,10 @@ class ButtonActions:
                 meeting = await asyncio.to_thread(self._service().require, meeting_id)
                 suggestion = next((s.suggested_user for s in meeting.speakers if s.user_id == item_id), None)
                 values = [suggestion] if suggestion else []
+                if not self.is_owner(interaction) and suggestion != self._uid(interaction):
+                    action = "spk"  # someone else's suggested voice: a participant can only claim their own
+            elif action == "sme":  # "that voice is me": always the clicker, whatever the message says
+                values = [self._uid(interaction)]
             await (self._offer_speakers(interaction, meeting_id, item_id) if action == "spk"
                    else self._assign_speaker(interaction, meeting_id, item_id, list(values or ())))
             return
@@ -367,9 +371,13 @@ class ButtonActions:
                                               name=track.name if track else label), ephemeral=True)
             return
         span = f"{fmt_ts(track.first)}–{fmt_ts(track.last)}" if track.first is not None else t("speakers.no_lines", self.lang)
-        options = [(s.user_id, s.name) for s in candidates(meeting)][:SELECT_LIMIT]
-        if self.is_owner(interaction):
-            options = [("unassigned", t("capture.unidentified", self.lang)), *options][:SELECT_LIMIT]
+        if not self.is_owner(interaction):  # a participant can only say "that voice is me" (DESIGN §4.1)
+            me = ButtonSpec(t("speakers.its_me", self.lang), custom_id("sme", meeting_id, label), "primary", 0, "🙋")
+            await interaction.followup.send(t("speakers.is_it_you", self.lang, name=track.name, lines=track.lines,
+                                              span=span), view=self._buttons_view([me]), ephemeral=True)
+            return
+        options = [("unassigned", t("capture.unidentified", self.lang)),
+                   *((s.user_id, s.name) for s in candidates(meeting))][:SELECT_LIMIT]
         await interaction.followup.send(t("speakers.pick", self.lang, name=track.name, lines=track.lines, span=span),
                                         view=self._speaker_view(meeting_id, label, options), ephemeral=True)
 

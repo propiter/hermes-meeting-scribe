@@ -60,7 +60,7 @@ def test_assignment_refresh_never_arms_dm_move_or_runs_external_sinks(world):
     service, runner, publication, mid = world
     external = RecordingSink(name="external")
     runner.stages.sinks = lambda: [publication, external]
-    service.assign_speaker(mid, LABEL, "11")
+    service.assign_speaker(mid, LABEL, "11", actor="11")
     assert service.repo.kv_get(KV_MOVE_FROM_DM + mid) is None
     drain(runner)
     assert len(publication.calls) == 2 and external.calls == []
@@ -69,7 +69,7 @@ def test_assignment_refresh_never_arms_dm_move_or_runs_external_sinks(world):
 
 def test_correction_after_retranscription_keeps_original_track(world):
     service, runner, _, mid = world
-    service.assign_speaker(mid, LABEL, "11")
+    service.assign_speaker(mid, LABEL, "11", actor="11")
     drain(runner)
     service.reprocess(mid, Stage.TRANSCRIBE)
     drain(runner)
@@ -80,7 +80,7 @@ def test_correction_after_retranscription_keeps_original_track(world):
 
 def test_reanalysis_retains_task_provenance_for_later_corrections(world):
     service, runner, _, mid = world
-    service.assign_speaker(mid, LABEL, "11")
+    service.assign_speaker(mid, LABEL, "11", actor="11")
     drain(runner)
     runner.stages.analyzer.analyze = lambda *args: Notes(
         meeting_title="Informe semanal", tldr="t", summary="s", language="es",
@@ -100,7 +100,7 @@ def test_tracks_show_interval_and_lines(world):
 def test_assign_renames_transcript_tasks_speakers_and_redelivers_in_place(world):
     service, runner, sink, mid = world
     assert service.require(mid).state is MeetingState.DONE and len(sink.calls) == 1
-    done = service.assign_speaker(mid, LABEL, "Luis")
+    done = service.assign_speaker(mid, LABEL, "Luis", actor="11")
     assert (done.user_id, done.lines, done.tasks, done.changed, done.redeliver) == ("11", 2, 1, True, True)
     meeting = service.require(mid)
     folder = service.folder(meeting)
@@ -123,7 +123,7 @@ def test_assign_renames_transcript_tasks_speakers_and_redelivers_in_place(world)
 
 def test_owner_can_correct_then_undo_without_touching_other_lines_or_tasks(world):
     service, runner, sink, mid = world
-    service.assign_speaker(mid, LABEL, "11", actor="10")
+    service.assign_speaker(mid, LABEL, "11", actor="11")
     drain(runner)
     service.assign_speaker(mid, LABEL, "10", actor="owner:1", admin=True)
     drain(runner)
@@ -138,7 +138,7 @@ def test_owner_can_correct_then_undo_without_touching_other_lines_or_tasks(world
     assert assignments(service.repo, mid) == {}
     history = service.repo.speaker_history(mid)
     assert [(r["actor"], r["previous_user"], r["next_user"]) for r in history] == [
-        ("10", None, "11"), ("owner:1", "11", "10"), ("desktop", "10", None)]
+        ("11", None, "11"), ("owner:1", "11", "10"), ("desktop", "10", None)]
     assert all(r["at"] for r in history)
     with pytest.raises(AssignError, match="owner_required"):
         service.assign_speaker(mid, LABEL, "11", actor="10")
@@ -146,9 +146,9 @@ def test_owner_can_correct_then_undo_without_touching_other_lines_or_tasks(world
 
 def test_assign_is_idempotent_and_never_moves_a_track_twice(world):
     service, runner, sink, mid = world
-    service.assign_speaker(mid, LABEL, "@11")
+    service.assign_speaker(mid, LABEL, "@11", actor="11")
     drain(runner)
-    again = service.assign_speaker(mid, LABEL, "11")
+    again = service.assign_speaker(mid, LABEL, "11", actor="11")
     assert not again.changed and not again.redeliver and len(sink.calls) == 2
     with pytest.raises(AssignError) as err:
         service.assign_speaker(mid, LABEL, "Ana")
@@ -168,7 +168,7 @@ def test_assign_refuses_what_is_not_a_track_or_a_participant(world, label, who, 
 
 def test_a_reprocess_from_transcribe_keeps_the_assignment(world):
     service, runner, _, mid = world
-    service.assign_speaker(mid, LABEL, "<@11>")
+    service.assign_speaker(mid, LABEL, "<@11>", actor="11")
     drain(runner)
     service.reprocess(mid, Stage.TRANSCRIBE)
     drain(runner)
@@ -189,3 +189,20 @@ def test_cli_speaker_list_and_assign(world, capsys):
     assert code == 0 and "ya estaba asignada" in out
     code, out = run(rt, ["speaker", "list", mid, "--json"], capsys)
     assert json.loads(out)[0]["owner"] == "11"
+
+
+def test_a_participant_can_only_claim_a_voice_as_their_own(world):
+    service, runner, _, mid = world
+    with pytest.raises(AssignError) as err:
+        service.assign_speaker(mid, LABEL, "11", actor="10")  # Ana says the voice was Luis
+    assert err.value.code == "self_only"
+    assert service.repo.speaker_history(mid) == [] and assignments(service.repo, mid) == {}
+    done = service.assign_speaker(mid, LABEL, "10", actor="10")  # "that voice is me"
+    assert done.user_id == "10" and done.changed
+
+
+def test_an_operator_may_give_a_voice_to_someone_else(world):
+    service, _, _, mid = world
+    done = service.assign_speaker(mid, LABEL, "11", actor="owner:1", admin=True)
+    assert done.user_id == "11"
+    assert [(r["actor"], r["next_user"]) for r in service.repo.speaker_history(mid)] == [("owner:1", "11")]

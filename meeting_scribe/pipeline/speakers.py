@@ -2,8 +2,9 @@
 
 Each ``unidentified-N`` is ONE SSRC, i.e. one Discord voice connection, i.e. one person whose voice
 the bot could not prove (no SPEAKING, no DAVE key). Presence is only a suggestion unless capture
-has complete authoritative membership. An authorized participant can make the first assignment;
-operators can correct or undo it, using preserved source-track provenance and an audit trail.
+has complete authoritative membership. A participant can only claim a free track as their own ("that
+voice is me"); giving it to someone else, correcting or undoing it is for operators (owners, the CLI,
+the Desktop), using preserved source-track provenance and an audit trail.
 
 Assigning rewrites what the meeting says, never the audio: transcript lines (``transcript.jsonl``,
 ``transcript.md``, the index), the tasks owned by the track, the speaker list and ``missing_audio``.
@@ -132,7 +133,9 @@ def resolve(meeting: Meeting, who: str) -> Speaker:
 
 def assign(service: Any, meeting_id: str, label: str, who: str, *, actor: str = "local",
            admin: bool = False) -> Assigned:
-    """First assignment by participants; corrections and undo require an authenticated operator."""
+    """A participant (``admin=False``, ``actor`` = their user id) may only give a free track to
+    themselves ("that voice is me"); giving it to someone else, correcting or undoing requires an
+    authenticated operator (an owner, the CLI, the Desktop). Every change is audited."""
     from ..filelock import file_lock
 
     meeting = service.require(meeting_id)
@@ -177,6 +180,8 @@ def _assign(service: Any, meeting_id: str, label: str, who: str, *, actor: str, 
             raise AssignError("provenance_missing")
     elif label not in {s.user_id for s in meeting.speakers}:
         raise AssignError("unknown_track", label)
+    elif not admin and person.user_id != str(actor):  # a participant may only say "that voice is me"
+        raise AssignError("self_only")
     folder = service.folder(meeting)
     utts = read_transcript(folder)
     moved, first, last = _span([u for u in utts if (u.track_id or u.speaker_id) == label])

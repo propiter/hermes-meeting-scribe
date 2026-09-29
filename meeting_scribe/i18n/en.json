@@ -436,6 +436,9 @@
   "speakers.error_recording": "The meeting is still being recorded.",
   "speakers.error_busy": "The meeting is being processed right now; try again when the stage finishes.",
   "ui.btn_assign": "Who is {name}?",
+  "speakers.its_me": "That's me",
+  "speakers.is_it_you": "Is {name} your voice? ({lines} line(s), {span}) If it is, press “That's me”. If it is someone else's, ask an owner to assign it.",
+  "speakers.error_self_only": "You can only mark a voice as your own. To give it to someone else, ask an owner.",
   "speakers.pick": "Who was {name}? ({lines} line(s), {span}) Choose the participant:",
   "speakers.only_participants": "Only someone who was in the meeting, or an owner, can do this."
 }

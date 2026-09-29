@@ -22,6 +22,7 @@ MID, LABEL = "k3v7q2ab", "unidentified-1"
 class Svc:
     def __init__(self):
         self.calls = []
+        self.auth = []
         self.owner = None
         self.repo = SimpleNamespace(get_action_item=lambda mid, iid: None)
         self.meeting = SimpleNamespace(id=MID, speakers=(Speaker("10", "Ana"), Speaker("12", "Luis"),
@@ -37,6 +38,7 @@ class Svc:
 
     def assign_speaker(self, mid, label, who, **auth):
         self.calls.append((mid, label, who))
+        self.auth.append(auth)
         if who == "77":
             raise AssignError("unknown_person", who)
         return Assigned(label, who, "Luis", 138, 3, True, True)
@@ -47,7 +49,7 @@ def env():
     svc, sink = Svc(), Sink()
     acts = ButtonActions(service=lambda: svc, settings=lambda space=None: settings_from_mapping({}),
                          owners=lambda space=None: (str(OWNER),), check_auth=lambda i: True, sink=lambda: sink,
-                         project_view=lambda *a: None, move_view=lambda *a: None,
+                         project_view=lambda *a: None, move_view=lambda *a: None, buttons_view=lambda specs: list(specs),
                          speaker_view=lambda mid, label, opts: ("speakers", mid, label, tuple(opts)))
     return SimpleNamespace(svc=svc, sink=sink, acts=acts)
 
@@ -62,16 +64,42 @@ def test_the_notes_header_offers_one_button_per_open_track(meeting):
     assert speaker_buttons(meeting, "es") == ()
 
 
-@pytest.mark.parametrize("user", [ANA, OWNER])
-async def test_a_participant_or_an_owner_gets_the_picker_without_bots_or_tracks(env, user):
-    i = FakeInteraction(user)
+async def test_an_owner_gets_the_picker_without_bots_or_tracks(env):
+    i = FakeInteraction(OWNER)
     await env.acts.handle(i, "spk", MID, LABEL)
     view = i.followup.sent[0]["view"]
-    options = (("10", "Ana"), ("12", "Luis"))
-    if user == OWNER:
-        options = (("unassigned", "Unidentified participant"), *options)
-    assert view == ("speakers", MID, LABEL, options)
+    assert view == ("speakers", MID, LABEL, (("unassigned", "Unidentified participant"), ("10", "Ana"), ("12", "Luis")))
     assert "138 line(s), 00:02–20:50" in i.replies() and i.followup.sent[0]["ephemeral"]
+
+
+async def test_a_participant_is_only_offered_that_s_me(env):
+    i = FakeInteraction(ANA)
+    await env.acts.handle(i, "spk", MID, LABEL)
+    [button] = i.followup.sent[0]["view"]
+    assert button.custom_id == f"mscribe:sme:{MID}:{LABEL}" and button.label == "That's me"
+    assert "ask an owner" in i.replies() and i.followup.sent[0]["ephemeral"]
+    es = FakeInteraction(ANA)
+    env.acts._settings = lambda space=None: settings_from_mapping({"ui_language": "es"})
+    await env.acts.handle(es, "spk", MID, LABEL)
+    assert es.followup.sent[0]["view"][0].label == "Soy yo"
+
+
+async def test_that_s_me_assigns_the_clicker_whatever_the_values(env):
+    i = FakeInteraction(ANA, values=["12"])  # a forged value is ignored
+    await env.acts.handle(i, "sme", MID, LABEL)
+    assert env.svc.calls == [(MID, LABEL, "10")] and env.svc.auth[-1] == {"actor": "10", "admin": False}
+
+
+async def test_a_participant_confirming_someone_else_s_suggestion_gets_that_s_me_instead(env):
+    env.svc.meeting.speakers = (*env.svc.meeting.speakers[:2],
+                                Speaker(LABEL, "Unidentified participant", suggested_user="12"),
+                                env.svc.meeting.speakers[3])
+    i = FakeInteraction(ANA)
+    await env.acts.handle(i, "scfm", MID, LABEL)
+    assert env.svc.calls == [] and i.followup.sent[0]["view"][0].custom_id.startswith("mscribe:sme:")
+    luis = FakeInteraction(LUIS)
+    await env.acts.handle(luis, "scfm", MID, LABEL)
+    assert env.svc.calls == [(MID, LABEL, "12")]
 
 
 async def test_someone_who_was_not_there_cannot_name_a_voice(env):
@@ -82,12 +110,12 @@ async def test_someone_who_was_not_there_cannot_name_a_voice(env):
 
 
 async def test_picking_runs_the_assignment_and_reports_it(env):
-    i = FakeInteraction(ANA, values=["12"])
+    i = FakeInteraction(OWNER, values=["12"])
     await env.acts.handle(i, "ssel", MID, LABEL)
-    assert env.svc.calls == [(MID, LABEL, "12")]
+    assert env.svc.calls == [(MID, LABEL, "12")] and env.svc.auth[-1]["admin"] is True
     assert "unidentified-1 is now Luis: 138 transcript line(s) and 3 task(s) moved." in i.replies()
     assert "updated in place" in i.replies()
-    bad = FakeInteraction(ANA, values=["77"])
+    bad = FakeInteraction(OWNER, values=["77"])
     await env.acts.handle(bad, "ssel", MID, LABEL)
     assert "is not one of this meeting's participants" in bad.replies()
 
@@ -126,4 +154,4 @@ async def test_private_and_dm_meetings_keep_their_gates(env):
     own = FakeInteraction(ANA, dm=True)
     own.channel, own.channel_id = SimpleNamespace(id=900, parent_id=None), 900
     await env.acts.handle(own, "spk", MID, LABEL)
-    assert own.followup.sent[0]["view"][0] == "speakers"
+    assert own.followup.sent[0]["view"][0].custom_id.startswith("mscribe:sme:")

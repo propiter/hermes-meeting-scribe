@@ -82,7 +82,7 @@ def test_it_stays_pending_while_the_delivery_keeps_failing(failed):
 def test_a_published_meeting_is_still_edited_in_place(prepo, layout, settings, clock, meeting):
     sink = Publication(name="discord")
     service, runner, mid = _world(prepo, layout, settings, clock, meeting, sink)
-    done = service.assign_speaker(mid, LABEL, "11")
+    done = service.assign_speaker(mid, LABEL, "11", actor="11")
     assert (done.redeliver, done.deliver) == (True, False)
     drain(runner)
     assert service.require(mid).state is MeetingState.DONE and sink.republished == 1 and len(sink.calls) == 1
@@ -100,7 +100,7 @@ def test_a_meeting_that_failed_only_at_archive_is_edited_in_place(prepo, layout,
     service, runner, mid = _world(prepo, layout, settings, clock, meeting, sink)
     assert service.require(mid).state is MeetingState.FAILED
     assert service.repo.get_job(mid).failed_stage is Stage.ARCHIVE and sink.published
-    done = service.assign_speaker(mid, LABEL, "11")
+    done = service.assign_speaker(mid, LABEL, "11", actor="11")
     assert (done.redeliver, done.deliver) == (True, False)
 
 
