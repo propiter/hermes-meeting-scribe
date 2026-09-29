@@ -309,3 +309,13 @@ async def test_model_text_never_notifies_anyone(env):
     for m in sent:  # …but never allowed to ping 66 (or any role / @everyone)
         rule = m.sent_kwargs.get("allowed_mentions")
         assert rule is not None and "66" not in rule["users"] and rule["roles"] is False and rule["everyone"] is False
+
+
+@pytest.mark.parametrize("placement", ["meeting", "projects", "projects_inline"])
+async def test_private_meeting_ignores_the_task_placement(env, placement):
+    """delivery_tasks_placement never takes a private meeting's tasks out of its channel (DESIGN §16.1)."""
+    env.cfg["delivery_tasks_placement"] = placement
+    await deliver(env)
+    assert outside(env) == [] and env.bot.users[11].dm.ordered() == []
+    assert all(t in texts(inside(env)) for t in ("Landing page", "Contract review", "Budget"))
+    assert "mscribe:shp:k3v7q2ab:a1" in task_msg(env, "Landing page").view  # sharing stays manual

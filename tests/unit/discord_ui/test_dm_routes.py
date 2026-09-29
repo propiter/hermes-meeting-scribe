@@ -304,3 +304,12 @@ def test_a_dm_rule_is_private_for_every_other_sink_before_any_delivery(env):
     s = settings_from_mapping(env.cfg)
     assert privacy.record(env.svc.repo, env.meeting.id) is None
     assert privacy.is_private(env.svc.repo, s, env.meeting) and privacy.is_dm(env.svc.repo, s, env.meeting)
+
+
+@pytest.mark.parametrize("placement", ["meeting", "projects", "projects_inline"])
+async def test_direct_messages_meeting_ignores_the_task_placement(env, placement):
+    """delivery_tasks_placement never puts a direct-messages meeting in a channel (DESIGN §16.1)."""
+    env.cfg["delivery_tasks_placement"] = placement
+    res = await deliver(env)
+    assert res.ok, res.errors
+    assert in_channels(env) == [] and "Landing page" in texts(env.luis.dm.ordered())
