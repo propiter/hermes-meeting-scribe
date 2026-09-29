@@ -264,7 +264,8 @@ def scribe_receiver_class(base: type) -> type:
             # Ordering of joins and mappings (a counter, not the clock): a mapping older than the
             # member's last join belongs to a previous connection (a rejoin gets a new SSRC).
             self._order = itertools.count(1)
-            self._joined: dict[int, int] = {}
+            self._joined: dict[int, int] = {}  # user -> order of their last join (voice state, op 11/12)
+            self._left: dict[int, int] = {}  # user -> order of their last CLIENT_DISCONNECT (op 13)
             self._joined_at: dict[int, float] = {}  # clock of each join seen (voice state, op 12)
             self._mapped_at: dict[int, int] = {}
             self._pending: dict[int, _Pending] = {}
@@ -301,18 +302,22 @@ def scribe_receiver_class(base: type) -> type:
                          len(ids), sorted(ids))
                 with self._lock:
                     if self._present is not None or self._voice_clients:  # not the handshake's own list
-                        self._joined_at.update((u, self._clock()) for u in ids - self._voice_clients)
+                        for u in ids - self._voice_clients:
+                            self._joined[u] = next(self._order)
+                            self._joined_at[u] = self._clock()
                     self._candidates_grew |= not ids <= self._voice_clients
                     self._voice_clients |= ids
             elif op in (12, 13) and str(data.get("user_id") or "").isdigit():
                 uid = int(data["user_id"])
                 with self._lock:
-                    if op == 12:
+                    if op == 12:  # a NEW connection: a mapping from before it is a previous connection's
                         self._candidates_grew |= uid not in self._voice_clients
                         self._voice_clients.add(uid)
+                        self._joined[uid] = next(self._order)
                         self._joined_at[uid] = self._clock()
-                    else:
+                    else:  # that connection is gone: its SSRC no longer proves a voice of theirs
                         self._voice_clients.discard(uid)
+                        self._left[uid] = next(self._order)
 
         # -- presence (event-loop thread) -------------------------------------------------------
         def update_presence(self, user_ids: Iterable[int]) -> None:
@@ -500,9 +505,10 @@ def scribe_receiver_class(base: type) -> type:
 
         def _owners(self) -> set[int]:
             """Caller holds ``_lock``. Users whose current connection has a PROVEN SSRC (SPEAKING or a
-            DAVE key); a mapping older than their last join belongs to a previous connection."""
+            DAVE key); a mapping older than their last join (voice state, op 11/12) or their last
+            CLIENT_DISCONNECT (op 13) belongs to a previous connection and proves nothing now."""
             mapped = {int(u) for s, u in self._ssrc_to_user.items()
-                      if u and self._mapped_at.get(s, 0) >= self._joined.get(int(u), 0)}
+                      if u and self._mapped_at.get(s, 0) >= max(self._joined.get(int(u), 0), self._left.get(int(u), 0))}
             return mapped | {q.owner for q in self._pending.values() if q.owner is not None}
 
         def _candidates(self, p: _Pending, owners: set[int]) -> set[int]:
