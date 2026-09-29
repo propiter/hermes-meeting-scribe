@@ -125,6 +125,8 @@ async def share_project(pub: "TaskPublisher", board: Board, item_id: str, ptrs: 
         raise ChannelUnavailable(f"channel {s.target} is not a channel of the meeting's server")
     spec = render_shared_task(board.meeting, view, pub.o.lang, mention=_shown(pub, channel, view))
     ptr = await ptrs.load(COPY + item_id)
+    if ptr:  # only the first copy may notify the assignee; a re-post (moved, deleted by hand) never does (§19.4)
+        spec = replace(spec, mentions=())
     if is_forum(channel):
         new = await _forum_copy(pub, channel, view, spec, ptr, s.target, ptrs)
     else:

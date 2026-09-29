@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any, Callable, Optional, Sequence
 
 from .. import privacy
@@ -56,6 +57,7 @@ from .withdraw import HISTORY_LIMIT
 log = logging.getLogger(__name__)
 POST_NAME_LIMIT = 100  # Discord caps thread (forum post) names at 100 characters
 MOVE_SUFFIX = "dm_move"  # a move out of a DM in progress: {from, channel, key, attach, old: {suffix: ptr}}
+PINGED_PREFIX = "pinged:"  # + item id: the task's first publication happened (and whom it notified)
 LEFTOVER_SUFFIX = "dm_leftover"  # DM messages a finished move kept (no confirmed replacement): {from, old, why}
 
 
@@ -480,17 +482,25 @@ class TaskPublisher:
                            mention=self.shown(channel, view.sharing is not None)(owner))
 
     async def place_task(self, meeting: Meeting, view: TaskView, target: Any, ptrs: Pointers, placement: str) -> dict:
+        """Post or edit the task's message. Only the task's FIRST publication may notify its assignee: a
+        re-post (placement switch, re-delivery, 📁 move, a message deleted by hand) never pings again
+        (DESIGN §19.4). ``pinged:<item>`` outlives the task pointer (a withdrawal drops that one)."""
         suffix = f"task:{view.item.id}"
         ptr = await ptrs.load(suffix)
+        first = ptr is None and await ptrs.load(f"{PINGED_PREFIX}{view.item.id}") is None
         private = view.sharing is not None
         # a message left behind in a project channel by a meeting that became private must not keep its text
         notice = (t("share.moved_private", self.o.lang) if private else
                   t("tasks.moved_notice", self.o.lang, title=view.item.title,
                     channel=f"<#{self.placed_channel(view, private, placement) or target.id}>"))
-        placed = await self.msgs.edit_or_send(ptr, target, spec=self._task_spec(meeting, view, target),
-                                              moved_notice=notice)
+        spec = self._task_spec(meeting, view, target)
+        if not first:
+            spec = replace(spec, mentions=())
+        placed = await self.msgs.edit_or_send(ptr, target, spec=spec, moved_notice=notice)
         new = {**placed, "target": self.task_target(view, private, placement)}
         await ptrs.save(suffix, new, placed.get("url", ""))
+        if first:
+            await ptrs.save(f"{PINGED_PREFIX}{view.item.id}", {"users": list(spec.mentions)})
         return new
 
     async def edit_task(self, meeting: Meeting, view: TaskView, ptrs: Pointers) -> bool:
