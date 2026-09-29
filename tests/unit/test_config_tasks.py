@@ -75,3 +75,12 @@ def test_placement_is_validated_and_the_retired_key_explains_its_replacement():
         validate_value("delivery_project_threads", "true")
     assert "delivery_tasks_placement" in retired_hint("delivery_project_threads")
     assert retired_hint("kanban_mode") == ""
+
+
+def test_a_space_override_of_the_retired_key_beats_the_global_placement():
+    s = settings_from_mapping({"delivery_tasks_placement": "meeting"}, space="team",
+                              overrides={"delivery_project_threads": True})
+    assert s.delivery_tasks_placement == "projects"
+    s = settings_from_mapping({"delivery_project_threads": True}, space="team",
+                              overrides={"delivery_tasks_placement": "meeting"})
+    assert s.delivery_tasks_placement == "meeting" and not s.warnings

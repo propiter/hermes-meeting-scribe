@@ -202,3 +202,12 @@ def test_config_set_of_the_retired_project_threads_key_names_its_replacement(rt,
     assert code == 2 and "delivery_tasks_placement" in out and "projects_inline" in out
     code, _ = run(rt, ["config", "set", "delivery_tasks_placement", "projects"], capsys)
     assert code == 0 and rt.settings().delivery_tasks_placement == "projects"
+
+
+def test_a_space_override_of_the_retired_key_shows_as_the_space_value(rt, capsys):
+    rt.repo().set_space_override("main", "delivery_project_threads", False)
+    code, out = run(rt, ["config", "list", "--space", "main", "--json"], capsys)
+    row = next(r for r in json.loads(out)["settings"] if r["key"] == "delivery_tasks_placement")
+    assert code == 0 and row == {**row, "value": "projects_inline", "origin": "space"}
+    code, out = run(rt, ["space", "set", "main", "delivery_project_threads", "true"], capsys)
+    assert code != 0 and "delivery_tasks_placement" in out

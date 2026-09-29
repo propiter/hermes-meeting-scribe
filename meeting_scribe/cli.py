@@ -16,8 +16,8 @@ from typing import Any, Callable, Optional, Protocol
 from . import cli_google, cli_routes, cli_speakers, cli_spaces, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
 from .commands import status_headline
-from .config import (DESTINATION_KEYS, LEGACY_KEYS, RETIRED_KEYS, SPEC, TASK_PLACEMENTS, Settings, canonical_key, config_schema, retired_hint,
-                     validate_value)
+from .config import (DESTINATION_KEYS, LEGACY_KEYS, RETIRED_KEYS, SPEC, TASK_PLACEMENTS, Settings, canonical_key,
+                     config_schema, retired_hint, stored_names, validate_value)
 from .domain.models import MeetingState, Stage
 from .i18n import t
 from .pipeline.service import MeetingService
@@ -464,7 +464,7 @@ def config_rows(rt: CliRuntime, space: Optional[str] = None) -> list[dict[str, A
         value = getattr(settings, key)
         if key in invalid:
             origin = "invalid"
-        elif key in overrides:
+        elif any(overrides.get(name) is not None for name in stored_names(key)):
             origin = "space"
         elif callable(origin_of):
             origin = origin_of(key)

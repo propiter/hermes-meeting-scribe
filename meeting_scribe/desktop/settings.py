@@ -82,8 +82,8 @@ def settings_view(store: SettingsStore, lang: str, space: Optional[SpaceRow] = N
     values = {}
     for key in SPEC:
         value = getattr(settings, key)
-        origin = ("invalid" if key in invalid else "space" if SPEC[key].scope == "space" and overrides.get(key) is not None
-                  else store.origin(key))
+        in_space = SPEC[key].scope == "space" and any(overrides.get(n) is not None for n in stored_names(key))
+        origin = "invalid" if key in invalid else "space" if in_space else store.origin(key)
         values[key] = {"value": list(value) if isinstance(value, tuple) else value, "origin": origin}
     return {"schema": config_schema(lang), "values": values, "warnings": list(settings.warnings),
             "global": [k for k, o in SPEC.items() if o.scope == "global"], "space": list(space_keys()),

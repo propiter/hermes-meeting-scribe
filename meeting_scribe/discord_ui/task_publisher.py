@@ -3,11 +3,13 @@
 Layout per delivery:
 
 * meeting chat: the summary (``notes`` pointer, as in 0.1) and, last, the task index with the one
-  "📋 My tasks" button (``index`` pointer). Tasks without a project channel go to the meeting chat
-  too (into a thread under the summary when ``delivery_discord_thread`` and the channel allows it).
-* each project channel: an anchor message + a thread (``thread:<channel>`` pointer; directly in the
-  channel when ``delivery_project_threads`` is off or the thread cannot be created), then ONE
-  message per task with its own buttons (``task:<item>`` pointer holding the routed ``target``).
+  "📋 My tasks" button (``index`` pointer). With ``delivery_tasks_placement=meeting`` (default,
+  DESIGN §16.1) EVERY task goes here, else the tasks without a project channel (into a thread under
+  the summary when ``delivery_discord_thread`` and the channel allows it).
+* each project channel (``projects``/``projects_inline``, or a task moved with 📁): an anchor message
+  + a thread (``thread:<channel>`` pointer; directly in the channel with ``projects_inline`` or when the
+  thread cannot be created), then ONE message per task with its own buttons (``task:<item>`` pointer
+  holding its ``target``). An anchor no task of the meeting uses any more is deleted with its thread.
 * assignee DMs (``delivery_dm_assignees``, default on): one panel per assignee (``dm:<user>``),
   with a link to the meeting's notes. A closed DM (50007) is logged and listed in the index; it
   never fails the delivery.

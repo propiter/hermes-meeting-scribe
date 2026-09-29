@@ -12,7 +12,7 @@ import json
 import sys
 from typing import Any, Callable, Optional
 
-from .config import SPEC, canonical_key
+from .config import SPEC, canonical_key, retired_hint
 from .i18n import t
 from .spaces import Space
 
@@ -218,7 +218,7 @@ def check_space_key(key: str, lang: str) -> str:
     try:
         name = canonical_key(key)
     except KeyError as exc:
-        raise CliExit(f"unknown key {key}") from exc
+        raise CliExit(retired_hint(key) or f"unknown key {key}") from exc
     if SPEC[name].scope != "space":
         raise CliExit(t("space.cli_global_key", lang, key=name))
     return name

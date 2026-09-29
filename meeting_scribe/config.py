@@ -179,31 +179,35 @@ RETIRED_KEYS: dict[str, tuple[str, Callable[[bool], str]]] = {
 
 def raw_value(getter: Getter, key: str, space: str = "",
               overrides: Mapping[str, Any] = {}) -> tuple[Any, str]:  # noqa: B006 - read only
-    """``(stored value or _MISSING, where it came from)``: the space's override first, then the global
-    value (flat, else its pre-0.2 dotted spelling)."""
-    if SPEC[key].scope == "space" and overrides.get(key) is not None:
-        return overrides[key], f"space {space}: {key}"
+    """``(stored value or _MISSING, where it came from)``, most specific first: the space's override
+    (then its override of a retired key ``key`` replaced), then the global value (flat, its pre-0.2
+    dotted spelling, then a retired key). A retired value is returned already converted; ``where``
+    names the retired key so the caller can warn."""
+    retired = [(old, convert) for old, (new, convert) in RETIRED_KEYS.items() if new == key]
+    if SPEC[key].scope == "space":
+        if overrides.get(key) is not None:
+            return overrides[key], f"space {space}: {key}"
+        for old, convert in retired:
+            if overrides.get(old) is not None:
+                return _retired(convert, overrides[old]), f"space {space}: {old}"
     raw = getter(key, _MISSING)
     if raw is _MISSING and key in LEGACY_KEYS:
         raw = getter(LEGACY_KEYS[key], _MISSING)  # value saved by a pre-0.2 version (nested)
+    if raw is None or raw is _MISSING:
+        for old, convert in retired:
+            value = getter(old, None)
+            if value is not None:
+                return _retired(convert, value), old
     return raw, key
 
 
-def retired_value(getter: Getter, key: str, space: str = "",
-                  overrides: Mapping[str, Any] = {}) -> Optional[tuple[str, Any, str]]:  # noqa: B006 - read only
-    """``(old key, value it stands for or None when unreadable, where)`` when a setting ``key`` replaced
-    is still stored (the space's override first, then the global value); ``None`` otherwise."""
-    for old, (new, convert) in RETIRED_KEYS.items():
-        if new != key:
-            continue
-        for raw, where in ((overrides.get(old), f"space {space}: {old}"), (getter(old, None), old)):
-            if raw is None:
-                continue
-            try:
-                return old, convert(_coerce(Opt("bool", True, ""), raw)), where
-            except ValueError:
-                return old, None, where
-    return None
+def _retired(convert: Callable[[bool], str], raw: Any) -> Any:
+    """A retired boolean converted to its replacement's value; an unreadable one stays as written (it is
+    then reported invalid and the default applies)."""
+    try:
+        return convert(_coerce(Opt("bool", True, ""), raw))
+    except ValueError:
+        return raw
 
 
 def stored_names(key: str) -> tuple[str, ...]:
@@ -373,16 +377,15 @@ class Settings:
         warnings: list[str] = []
         for key, opt in SPEC.items():
             raw, where = raw_value(getter, key, space, overrides or {})
-            old = retired_value(getter, key, space, overrides or {}) if raw is None or raw is _MISSING else None
-            if old is not None:  # e.g. delivery_project_threads, kept by an older version
-                raw, where = old[1], old[2]
-                warnings.append(f"{where} is retired; read as {key}={raw or opt.default}. Save {key} "
-                                "(config set or the Settings page) to make it explicit")
             try:
                 values[key] = opt.default if raw is None or raw is _MISSING else _coerce(opt, raw)
             except (ValueError, TypeError):
                 warnings.append(f"{where}=invalid; using {opt.yaml_default!r}")
                 values[key] = opt.default
+                continue
+            if where.rsplit(": ", 1)[-1] in RETIRED_KEYS:  # e.g. delivery_project_threads, kept by an older version
+                warnings.append(f"{where} is retired; read as {key}={values[key]}. Save {key} "
+                                "(config set or the Settings page) to make it explicit")
         values["commands_aliases"] = _normalize_aliases(values["commands_aliases"])
         from .routes import load_routes
 
