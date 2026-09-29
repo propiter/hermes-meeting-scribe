@@ -206,6 +206,13 @@ def retired_value(getter: Getter, key: str, space: str = "",
     return None
 
 
+def stored_names(key: str) -> tuple[str, ...]:
+    """Every name ``key``'s value may be stored under: itself, its pre-0.2 spelling and a retired key it
+    replaced (``config list`` / the Settings page show such a value as ``configured``)."""
+    retired = tuple(old for old, (new, _) in RETIRED_KEYS.items() if new == key)
+    return (key, *((LEGACY_KEYS[key],) if key in LEGACY_KEYS else ()), *retired)
+
+
 def retired_hint(key: str) -> str:
     """What to write instead of a retired setting (``""``: ``key`` is not one)."""
     if key not in RETIRED_KEYS:

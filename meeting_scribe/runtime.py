@@ -343,12 +343,12 @@ class Runtime:
         self.host.set_config(key, value)
 
     def config_origin(self, key: str) -> str:
-        """``configured`` when the user set ``key`` (flat or legacy spelling), else ``default``."""
-        from .config import LEGACY_KEYS
+        """``configured`` when the user set ``key`` (flat, legacy or retired spelling), else ``default``."""
+        from .config import stored_names
 
         missing = object()
-        for name in (key, LEGACY_KEYS.get(key)):
-            if name and self.host.get_config(name, missing) not in (missing, None):
+        for name in stored_names(key):
+            if self.host.get_config(name, missing) not in (missing, None):
                 return "configured"
         return "default"
 

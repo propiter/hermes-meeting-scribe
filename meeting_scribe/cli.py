@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional, Protocol
 from . import cli_google, cli_routes, cli_speakers, cli_spaces, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
 from .commands import status_headline
-from .config import (DESTINATION_KEYS, LEGACY_KEYS, SPEC, Settings, canonical_key, config_schema, retired_hint,
+from .config import (DESTINATION_KEYS, LEGACY_KEYS, RETIRED_KEYS, SPEC, Settings, canonical_key, config_schema, retired_hint,
                      validate_value)
 from .domain.models import MeetingState, Stage
 from .i18n import t
@@ -89,7 +89,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     g.add_argument("key", nargs="?")
     add_space_arg(g)
     se = cf_sub.add_parser("set", help="Set a global value, or with --space that space's override")
-    se.add_argument("key", choices=[*SPEC, *LEGACY_KEYS.values()], metavar="KEY")
+    se.add_argument("key", choices=[*SPEC, *LEGACY_KEYS.values(), *RETIRED_KEYS], metavar="KEY")  # retired: a hint
     se.add_argument("value")
     add_space_arg(se)
     cl = cf_sub.add_parser("list", help="Every setting with its effective value and where it comes from")

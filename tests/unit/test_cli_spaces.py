@@ -195,3 +195,10 @@ def test_config_list_shows_a_forum_and_its_warnings(rt, capsys):
     rows = {r["key"]: r for r in json.loads(out)["settings"]}
     assert rows["delivery_discord_channel"]["resolved"]["kind"] == "forum"
     assert "requires a tag" in rows["project_channels"]["resolved"]["warnings"][0]
+
+
+def test_config_set_of_the_retired_project_threads_key_names_its_replacement(rt, capsys):
+    code, out = run(rt, ["config", "set", "delivery_project_threads", "false"], capsys)
+    assert code == 2 and "delivery_tasks_placement" in out and "projects_inline" in out
+    code, _ = run(rt, ["config", "set", "delivery_tasks_placement", "projects"], capsys)
+    assert code == 0 and rt.settings().delivery_tasks_placement == "projects"

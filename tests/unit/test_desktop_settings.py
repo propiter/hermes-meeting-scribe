@@ -114,3 +114,9 @@ def test_dashboard_doctor_runs_every_check_without_runtime(tmp_path):
     crashed = [c for c in out["checks"] if "Error" in c["detail"] and c["status"] == "fail"]
     assert crashed == [], crashed
     env.repo.close()
+
+
+def test_a_retired_key_still_stored_shows_as_configured_with_its_translated_value():
+    view = ds.settings_view(MemSettings({"delivery_project_threads": False}).store(), "en")
+    assert view["values"]["delivery_tasks_placement"] == {"value": "projects_inline", "origin": "configured"}
+    assert any("delivery_project_threads is retired" in w for w in view["warnings"])
