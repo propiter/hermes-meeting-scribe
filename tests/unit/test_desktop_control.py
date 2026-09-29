@@ -29,7 +29,9 @@ def fake_service(repo, calls, fail=None):
         if fail:
             raise fail
         calls.append((mid, "prepare_audio"))
-    return SimpleNamespace(repo=repo, reprocess=reprocess, prepare_audio=prepare_audio,
+    def assign_speaker(mid, label, user):
+        calls.append((mid, label, user))
+    return SimpleNamespace(repo=repo, reprocess=reprocess, prepare_audio=prepare_audio, assign_speaker=assign_speaker,
                            require=lambda mid: repo.get_meeting(mid))
 
 
@@ -61,8 +63,13 @@ def test_submit_is_idempotent_and_execution_is_gateway_side(repo, meeting):
     ("ok", {"action": "reprocess"}),
     ("ok", {"action": "prepare_audio", "stage": "analyze"}),
     ("ok", {"action": "prepare_audio", "path": "/etc/passwd"}),
+    ("ok", {"action": "assign_speaker", "label": "10", "user": "11"}),
+    ("ok", {"action": "assign_speaker", "label": "unidentified-x", "user": "11"}),
+    ("ok", {"action": "assign_speaker", "label": "unidentified-1", "user": "11; rm"}),
+    ("ok", {"action": "assign_speaker", "label": "unidentified-1", "user": "99"}),  # not a participant
+    ("ok", {"action": "assign_speaker", "label": "unidentified-1"}),
 ])
-def test_submit_rejects_anything_but_the_two_commands(repo, meeting, rid, body):
+def test_submit_rejects_anything_but_the_known_commands(repo, meeting, rid, body):
     with pytest.raises(ValueError):
         Commands(repo).submit(rid, meeting.id, body)
 
@@ -227,3 +234,12 @@ def test_prepare_audio_is_queued_and_run_by_the_gateway_even_for_a_finished_meet
     calls = []
     assert execute_one(fake_service(repo, calls)) is True
     assert calls == [(meeting.id, "prepare_audio")] and queue.get("audio-1")["state"] == "done"
+
+
+def test_assign_speaker_is_queued_and_run_by_the_gateway(repo, meeting):
+    queue = Commands(repo)
+    got = queue.submit("assign-1", meeting.id, {"action": "assign_speaker", "label": "unidentified-1", "user": "11"})
+    assert (got["action"], got["label"], got["user"], got["state"]) == ("assign_speaker", "unidentified-1", "11", "queued")
+    calls = []
+    assert execute_one(fake_service(repo, calls)) is True
+    assert calls == [(meeting.id, "unidentified-1", "11")] and queue.get("assign-1")["state"] == "done"

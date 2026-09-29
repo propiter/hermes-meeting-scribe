@@ -250,7 +250,9 @@ def get_audio(request: Request, meeting_id: str, space: str = SpaceParam) -> Fil
 def submit_command(request: Request, meeting_id: str, body: dict[str, Any] = Body(...),
                    space: str = SpaceParam) -> dict[str, Any]:
     """``{"request_id", "action": "reprocess", "stage": "transcribe|analyze|deliver", "confirm": true}``
-    or ``{"request_id", "action": "prepare_audio", "confirm": true}`` (write the listening copy).
+    or ``{"request_id", "action": "prepare_audio", "confirm": true}`` (write the listening copy), or
+    ``{"request_id", "action": "assign_speaker", "label": "unidentified-N", "user": "<id>", "confirm": true}``
+    (give an unidentified participant track to a participant, DESIGN §4.1).
     ``confirm`` must be literally ``true``: the page asks the operator before sending it."""
     if body.get("confirm") is not True:
         raise HTTPException(400, "confirmation required")

@@ -5,7 +5,8 @@ writes one row into ``desktop_commands`` and the worker that already runs in the
 on its next tick (``PipelineRunner.control``); the page polls ``GET /v1/commands/<id>``. Events do
 not cross processes, so polling is the contract.
 
-Only ``reprocess`` is accepted. A claimed command is never retried after a crash (its outcome is
+Accepted: ``reprocess``, ``prepare_audio`` and ``assign_speaker`` (give an "unidentified participant"
+track to a participant, DESIGN §4.1). A claimed command is never retried after a crash (its outcome is
 unknown and reported as such); request ids make an HTTP retry of the same submission inert.
 """
 from __future__ import annotations
@@ -18,7 +19,7 @@ import time
 from typing import Any, Mapping
 
 from ..domain.errors import NothingToReprocess
-from ..domain.models import MeetingState, Stage
+from ..domain.models import MeetingState, Stage, is_unidentified
 from ..llm_config import redact
 from ..storage.owner import process_owner_id
 
@@ -27,6 +28,7 @@ HEARTBEAT_EVERY = 20.0  # seconds between liveness writes (the worker ticks ever
 REPROCESS_STAGES = ("transcribe", "analyze", "deliver")
 STALE_RUNNING_SECONDS = 600
 _RID_RE = re.compile(r"[A-Za-z0-9_-]{1,100}")
+_USER_RE = re.compile(r"[A-Za-z0-9:_.-]{1,100}")  # a Discord id, or an imported speaker's (gmeet:…)
 _last_pulse: dict[int, float] = {}
 
 
@@ -94,6 +96,7 @@ class Commands:
         out = dict(row)
         body = json.loads(out.pop("body"))
         out["action"], out["stage"] = body.get("action"), body.get("stage")
+        out["label"], out["user"] = body.get("label"), body.get("user")
         out["stalled"] = out["state"] == "running" and time.time() - out["updated_at"] > STALE_RUNNING_SECONDS
         return out
 
@@ -133,6 +136,8 @@ class Commands:
             raise KeyError(mid)
         if body["action"] == "reprocess":
             _refuse_busy(self.repo, meeting)
+        if body["action"] == "assign_speaker":
+            _refuse_assign(meeting, body["label"], body["user"])
         pending = self.repo._x("SELECT id FROM desktop_commands WHERE meeting_id=? AND state IN ('queued','running','unknown')",
                                (mid,)).fetchone()
         if pending is not None:
@@ -146,13 +151,31 @@ class Commands:
         return self.get(rid)
 
 
+def _refuse_assign(meeting: Any, label: str, user: str) -> None:
+    """Checked again by the service when it runs; refused here so the page hears it at once."""
+    from ..pipeline.speakers import candidates
+
+    if meeting.state == MeetingState.RECORDING:
+        raise ValueError("meeting is still recording")
+    if user not in {s.user_id for s in candidates(meeting)}:
+        raise ValueError("that person is not a participant of this meeting")
+
+
 def _encode(body: Mapping[str, Any]) -> str:
-    """The two commands the page may queue: ``reprocess`` from a stage, and ``prepare_audio``
-    (write the listening copy of an older multitrack archive)."""
+    """The commands the page may queue: ``reprocess`` from a stage, ``prepare_audio`` (write the
+    listening copy of an older multitrack archive) and ``assign_speaker`` (``label``: an
+    ``unidentified-N`` track, ``user``: the participant's id)."""
     if not isinstance(body, Mapping):
         raise ValueError("invalid command")
     if body.get("action") == "prepare_audio" and set(body) == {"action"}:
         return json.dumps({"action": "prepare_audio"}, sort_keys=True)
+    if body.get("action") == "assign_speaker" and set(body) == {"action", "label", "user"}:
+        label, user = body.get("label"), body.get("user")
+        if not (isinstance(label, str) and is_unidentified(label) and len(label) <= 40):
+            raise ValueError("invalid track")
+        if not (isinstance(user, str) and _USER_RE.fullmatch(user)):
+            raise ValueError("invalid participant")
+        return json.dumps({"action": "assign_speaker", "label": label, "user": user}, sort_keys=True)
     if set(body) != {"action", "stage"} or body.get("action") != "reprocess":
         raise ValueError("invalid command")
     if body.get("stage") not in REPROCESS_STAGES:
@@ -177,6 +200,8 @@ def execute_one(service: Any) -> bool:
         meeting = service.require(row["meeting_id"])
         if body["action"] == "prepare_audio":
             service.prepare_audio(meeting.id)
+        elif body["action"] == "assign_speaker":
+            service.assign_speaker(meeting.id, body["label"], body["user"])
         else:
             _refuse_busy(repo, meeting)
             service.reprocess(meeting.id, Stage(body["stage"]))

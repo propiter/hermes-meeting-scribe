@@ -305,6 +305,28 @@ test('summary and processing tabs say whose audio was not captured', opts, async
   assert.doesNotMatch(html, /Could not capture the audio/)
 })
 
+test('unidentified participant tracks show interval, lines and an assign picker on summary and transcript', opts, async () => {
+  const { createElement } = await import('react')
+  const tracks = { tracks: [{ label: 'unidentified-1', name: 'Participante sin identificar', lines: 138, first: 2.5, last: 1250, owner: null },
+    { label: 'unidentified-2', name: 'Luis', lines: 3, first: 64, last: 70, owner: '11' }],
+  people: [{ id: '10', name: 'Ana' }, { id: '11', name: 'Luis' }] }
+  const d = { ...DETAIL, meeting: { ...MEETING, speaker_tracks: tracks } }
+  for (const tab of ['summary', 'transcript']) {
+    mod.$tab.set(tab)
+    const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': d, '/v1/status': STATUS, '/v1/meetings/k3v7q2ab/transcript?limit=300': TRANSCRIPT }, 'es')
+    assert.match(html, /1 participante sin identificar/)
+    assert.match(html, /una sola conexión de voz: una persona/)
+    assert.match(html, /Participante sin identificar · 138 líneas · 00:02–20:50/)
+    assert.match(html, /unidentified-2 → Luis · 3 líneas · 01:04–01:10/)
+    assert.match(html, /data-track="unidentified-1"><span>[^<]*<\/span><div data-sdk="select">.*data-value="10">Ana<\/div>/)
+    assert.equal((html.match(/data-track="/g) || []).length, 2)
+  }
+  mod.$tab.set('summary')
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': DETAIL, '/v1/status': STATUS })
+  assert.doesNotMatch(html, /unidentified participant/i)
+  assert.equal(mod.commandLabel({ action: 'assign_speaker' }, (k, ...a) => k === 'processing.actions.assign_speaker' ? 'Assign' : k), 'Assign')
+})
+
 test('summary tab plays the listening copy through the media protocol when available', opts, async () => {
   const { createElement } = await import('react')
   mod.$tab.set('summary')

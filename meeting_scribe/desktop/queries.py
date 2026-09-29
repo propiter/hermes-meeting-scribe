@@ -261,12 +261,22 @@ class Library:
         public["people"] = _people(public)
         public["missing_audio_names"] = list(meeting.missing_audio_names)
         public["private"] = self.private(meeting)
+        public["speaker_tracks"] = self.speaker_tracks(meeting)
         return {"meeting": public, "notes": notes, "tasks": tasks, "projects": projects,
                 "transcript_total": self.repo.utterance_count(mid), "job": self.job(mid),
                 "history": self.history(mid),
                 "waiting_destination": redact(self.repo.kv_get(WAITING_KV + mid) or "") or None,
                 "dm_notes": redact(self.repo.kv_get(KV_DM_NOTES + mid) or "") or None,
                 "audio": self.audio(mid), "command": self.last_command(mid)}
+
+    def speaker_tracks(self, meeting: Any) -> dict[str, Any]:
+        """The "unidentified participant" tracks (interval, lines, owner once assigned) and who they may
+        be given to (DESIGN §4.1): each track is one Discord voice connection, one person."""
+        from ..pipeline.speakers import candidates, tracks
+
+        folder = Layout(lambda: self.root).meeting_folder(meeting)
+        return {"tracks": [tr.to_dict() for tr in tracks(self.repo, folder, meeting)],
+                "people": [{"id": s.user_id, "name": s.name} for s in candidates(meeting)]}
 
     def tasks(self, mid: str) -> list[dict[str, Any]]:
         out = []

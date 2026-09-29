@@ -106,6 +106,12 @@ def test_detail_notes_tasks_sinks_and_redacted_job(repo, tmp_path, meeting, note
     from meeting_scribe.domain.models import Speaker
     repo.save_meeting(replace(m, speakers=(Speaker("43", "Luis"),), missing_audio=("43", "44")))
     assert Library(repo, tmp_path).detail(m.id)["meeting"]["missing_audio_names"] == ["Luis", "44"]
+    assert d["meeting"]["speaker_tracks"]["tracks"] == []
+    repo.save_meeting(replace(m, speakers=(Speaker("43", "Luis"), Speaker("unidentified-1", "Participante sin identificar"))))
+    tracks = Library(repo, tmp_path).detail(m.id)["meeting"]["speaker_tracks"]
+    assert tracks["people"] == [{"id": "43", "name": "Luis"}]
+    assert tracks["tracks"] == [{"label": "unidentified-1", "name": "Participante sin identificar", "lines": 0,
+                                 "first": None, "last": None, "owner": None}]
 
 
 def test_detail_survives_missing_or_damaged_notes(repo, tmp_path, meeting):

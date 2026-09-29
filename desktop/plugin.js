@@ -159,6 +159,16 @@ export const LOCALES = {
       dmNotes: 'Notes were left in a direct message',
       dmNotesHelp: 'The bot could not post in the server, so it sent the notes by DM. They move to the channel once one is available.'
     },
+    speakers: {
+      title: n => (n === 0 ? 'Unidentified participants: all assigned' : n === 1 ? '1 unidentified participant' : `${n} unidentified participants`),
+      help: 'Discord did not say whose voice this was. Each one is a single voice connection — one person. Assigning it renames their lines and tasks here and in the published notes (edited in place).',
+      lines: n => (n === 1 ? '1 line' : `${n} lines`),
+      noLines: 'no transcript lines',
+      assignedTo: (label, name) => `${label} → ${name}`,
+      assign: 'Assign to…',
+      confirm: 'Assign',
+      failed: e => `Could not assign it: ${e}`
+    },
     audio: {
       title: 'Recording', label: 'Meeting recording',
       ready: 'Listen to the whole meeting. Click a time in the transcript to jump there.',
@@ -215,7 +225,7 @@ export const LOCALES = {
       retryAuto: 'It will be retried automatically.',
       reprocess: 'Reprocess…',
       reprocessHelp: 'Redo a step and everything after it. Already published messages are updated, not duplicated.',
-      actions: { reprocess: step => `Reprocess from «${step}»`, prepare_audio: 'Prepare the audio to listen to', unknown: 'An action from this page' },
+      actions: { reprocess: step => `Reprocess from «${step}»`, prepare_audio: 'Prepare the audio to listen to', assign_speaker: 'Assign an unidentified participant', unknown: 'An action from this page' },
       cmd: {
         queued: 'Queued: the bot starts in a few seconds.', running: 'Running…', done: 'Finished.',
         failed: message => `Failed: ${message}`,
@@ -396,6 +406,16 @@ export const LOCALES = {
       dmNotes: 'Las notas quedaron en un mensaje directo',
       dmNotesHelp: 'El bot no pudo publicar en el servidor y envió las notas por mensaje directo. Se moverán al canal en cuanto haya uno disponible.'
     },
+    speakers: {
+      title: n => (n === 0 ? 'Participantes sin identificar: todos asignados' : n === 1 ? '1 participante sin identificar' : `${n} participantes sin identificar`),
+      help: 'Discord no dijo de quién era esta voz. Cada una es una sola conexión de voz: una persona. Al asignarla se renombran sus líneas y tareas aquí y en las notas publicadas (se editan en su sitio).',
+      lines: n => (n === 1 ? '1 línea' : `${n} líneas`),
+      noLines: 'sin líneas de transcripción',
+      assignedTo: (label, name) => `${label} → ${name}`,
+      assign: 'Asignar a…',
+      confirm: 'Asignar',
+      failed: e => `No se pudo asignar: ${e}`
+    },
     audio: {
       title: 'Grabación', label: 'Grabación de la reunión',
       ready: 'Escucha la reunión completa. Haz clic en una hora de la transcripción para saltar ahí.',
@@ -452,7 +472,7 @@ export const LOCALES = {
       retryAuto: 'Se reintentará automáticamente.',
       reprocess: 'Reprocesar…',
       reprocessHelp: 'Repite una etapa y todas las siguientes. Lo ya publicado se actualiza, no se duplica.',
-      actions: { reprocess: step => `Reprocesar desde «${step}»`, prepare_audio: 'Preparar el audio para escucharlo', unknown: 'Una acción de esta página' },
+      actions: { reprocess: step => `Reprocesar desde «${step}»`, prepare_audio: 'Preparar el audio para escucharlo', assign_speaker: 'Asignar un participante sin identificar', unknown: 'Una acción de esta página' },
       cmd: {
         queued: 'En cola: el bot empieza en unos segundos.', running: 'En marcha…', done: 'Terminado.',
         failed: message => `Falló: ${message}`,
@@ -1101,7 +1121,11 @@ export function MeetingDetail({ id, onBack }) {
   ].filter(Boolean)
 
   let panel
-  if (tab === 'transcript') panel = h(TranscriptTab, { id, total: d.transcript_total, onSeek: d.audio?.available ? seek : null })
+  if (tab === 'transcript') {
+    panel = h('div', { className: 'ms-stack' },
+      h(SpeakerTracks, { meeting: m, commandId: cmd, onSubmitted: setCommandId, onFinished: () => query.refetch() }),
+      h(TranscriptTab, { id, total: d.transcript_total, onSeek: d.audio?.available ? seek : null }))
+  }
   else if (tab === 'tasks') panel = h(TasksTab, { tasks: d.tasks || [], destinations: d.destinations || {} })
   else if (tab === 'processing') panel = h(ProcessingTab, { detail: d, commandId: cmd, onSubmitted: setCommandId, onFinished: () => query.refetch() })
   else panel = h(SummaryTab, { detail: d, tasks: openTasks, audioRef, onSubmitted: setCommandId, commandId: cmd, onFinished: () => query.refetch() })
@@ -1148,6 +1172,51 @@ function MissingAudio({ meeting: m }) {
     : null
 }
 
+/** «Unidentified participant» tracks (DESIGN §4.1): each one is one Discord voice connection, one
+ * person the bot could not prove. Shows its interval and lines, and gives it to a participant (a
+ * queued command the gateway runs; the published notes are then edited in place). */
+export function trackSpan(tr, t) {
+  return tr.first == null ? t('speakers.noLines') : `${fmtClock(tr.first)}–${fmtClock(tr.last)}`
+}
+
+function SpeakerTracks({ meeting: m, commandId, onSubmitted, onFinished }) {
+  const t = usePluginI18n(ID)
+  const info = m.speaker_tracks || { tracks: [], people: [] }
+  const [choice, setChoice] = useState({})
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const cmd = useCommand(commandId, onFinished)
+  const running = cmd.data && ['queued', 'running'].includes(cmd.data.state) && cmd.data.action === 'assign_speaker'
+  if (!info.tracks.length) return null
+  const open = info.tracks.filter(tr => !tr.owner)
+  const submit = async label => {
+    setError('')
+    setBusy(true)
+    const rid = newRequestId()
+    try {
+      await rest(`/v1/meetings/${encodeURIComponent(m.id)}/commands`, { method: 'POST', body: { request_id: rid, action: 'assign_speaker', label, user: choice[label], confirm: true } })
+      onSubmitted(rid)
+    } catch (e) {
+      setError(parseError(e).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const failed = cmd.data?.action === 'assign_speaker' && cmd.data.state === 'failed'
+  return h(Callout, { tone: open.length ? 'warn' : 'muted', title: t('speakers.title', open.length) },
+    h('p', null, t('speakers.help')),
+    h('ul', { className: 'ms-stack-sm' }, info.tracks.map(tr => h('li', { key: tr.label, className: 'ms-inline', 'data-track': tr.label },
+      h('span', null, tr.owner ? t('speakers.assignedTo', tr.label, tr.name) : tr.name, ' · ', t('speakers.lines', tr.lines), ' · ', trackSpan(tr, t)),
+      tr.owner || !info.people.length ? null : h(Fragment, null,
+        h(Select, { value: choice[tr.label] || '', onValueChange: v => setChoice(c => ({ ...c, [tr.label]: v })) },
+          h(SelectTrigger, { size: 'sm', 'aria-label': t('speakers.assign') }, h(SelectValue, { placeholder: t('speakers.assign') })),
+          h(SelectContent, null, info.people.map(p => h(SelectItem, { key: p.id, value: p.id }, p.name)))),
+        h(Button, { type: 'button', variant: 'secondary', size: 'sm', disabled: busy || running || !choice[tr.label], onClick: () => submit(tr.label) },
+          h(Codicon, { name: running ? 'loading~spin' : 'person', size: '0.8rem' }), t('speakers.confirm')))))),
+    failed ? h('p', { className: 'ms-error' }, t('speakers.failed', cmd.data.error || '')) : null,
+    error ? h('p', { className: 'ms-error', role: 'alert' }, error) : null)
+}
+
 function SummaryTab({ detail: d, tasks, audioRef, commandId, onSubmitted, onFinished }) {
   const t = usePluginI18n(ID)
   const m = d.meeting
@@ -1155,6 +1224,7 @@ function SummaryTab({ detail: d, tasks, audioRef, commandId, onSubmitted, onFini
   const notices = h(Fragment, null,
     m.partial ? h(Callout, { tone: 'warn' }, h('p', null, t('detail.partial'))) : null,
     h(MissingAudio, { meeting: m }),
+    h(SpeakerTracks, { meeting: m, commandId, onSubmitted, onFinished }),
     d.waiting_destination ? h(Callout, { tone: 'warn', title: t('detail.waiting') }, h('p', null, t('detail.waitingHelp'))) : null,
     d.dm_notes ? h(Callout, { tone: 'muted', title: t('detail.dmNotes') }, h('p', null, t('detail.dmNotesHelp'))) : null)
   const audio = h(AudioBlock, { id: m.id, audio: d.audio || {}, audioRef, commandId, onSubmitted, onFinished })
