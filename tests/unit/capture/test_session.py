@@ -263,12 +263,11 @@ async def test_connects_with_the_scribe_voice_client_when_available(world):
     await s.stop("stopped")
 
 
-async def test_receiver_learns_who_is_in_the_channel_and_who_is_muted(world):
-    world["ana"].voice.self_mute = True
+async def test_receiver_learns_who_is_in_the_channel_even_when_muted(world):
+    world["ana"].voice.self_mute = True  # mute flags lag: no evidence of who owns an SSRC (§4.1)
     s = await started(world)
     await run_ticks()
     assert s.receiver._present == {42, 43, 77}  # another bot may own an SSRC too
-    assert s.receiver._unmuted == {43, 77}
     await s.stop("stopped")
 
 

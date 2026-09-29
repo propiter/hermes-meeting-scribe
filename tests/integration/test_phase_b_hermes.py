@@ -118,8 +118,8 @@ def test_scribe_receiver_on_real_voice_receiver_packet_path():
 
 def test_real_voice_receiver_without_speaking_keeps_audio_until_identified():
     """Hermes' real ``_on_packet`` with a real Opus decoder: an SSRC SPEAKING never mapped is
-    retained (not decoded as noise) and, once it is the only candidate, decoded at its original
-    arrival times (DESIGN §4.1)."""
+    retained (not decoded as noise) and, once SPEAKING arrives, decoded at its original arrival
+    times; without it, it becomes an unidentified track inferred to be the only candidate's (§4.1)."""
     import discord.opus as opus
 
     if not opus.is_loaded():
@@ -138,13 +138,20 @@ def test_real_voice_receiver_without_speaking_keeps_audio_until_identified():
     for seq in (1, 2, 3):
         rx._on_packet(_rtp(key, frame, ssrc=777, seq=seq))
         now[0] += 0.02
-    assert rx.drain() == {}  # before the grace: nobody is guessed
-    now[0] += rx.IDENTIFY_GRACE
+    assert rx.drain() == {}  # plain Opus proves nothing: nobody is guessed
+    rx.map_ssrc(777, 42)
     drained = rx.drain()
     assert list(drained) == [42]
     assert [t for t, _ in drained[42]] == pytest.approx([100.0, 100.02, 100.04])
     assert all(len(pcm) == 3840 for _, pcm in drained[42])
-    assert rx.voice_report().identified == {777: (42, "sole")}
+    assert rx.voice_report().identified == {777: (42, "speaking")}
+    for seq in (4, 5):
+        rx._on_packet(_rtp(key, frame, ssrc=778, seq=seq))
+        now[0] += 0.02
+    rx.update_presence([42, 43])
+    rx.drain(final=True)
+    assert [len(f) for f in rx.drain_unidentified().values()] == [2]
+    assert rx.voice_report().inferred == {"unidentified-1": (43, "sole")}
     rx.stop()
 
 

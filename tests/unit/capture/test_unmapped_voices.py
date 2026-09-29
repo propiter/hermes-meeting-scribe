@@ -32,14 +32,14 @@ def clock():
     return Clock()
 
 
-def make(clock, dave=None, present=(A, B), muted=()):
+def make(clock, dave=None, present=(A, B)):
     cls = scribe_receiver_class(FakeVoiceReceiver)
     conn = FakeConn(dave=dave)
     vc = SimpleNamespace(_connection=conn, channel=SimpleNamespace(members=[]), user=SimpleNamespace(id=9999))
     rx = cls(vc, clock=clock, codec=FakeCodec())
     rx.decoder_factory = FakeCodec  # Hermes' own decoder for mapped SSRCs
     rx.start()
-    rx.update_presence(present, muted)
+    rx.update_presence(present)
     return rx
 
 
@@ -163,22 +163,36 @@ def test_late_speaking_replays_retained_dave_audio(clock):
 
 
 # -- no DAVE ----------------------------------------------------------------------------------------
-def test_plain_sole_candidate_is_mapped_after_the_grace(clock):
+# Plain Opus proves nothing: the SSRC always gets its own ``unidentified-N`` track and, when only one
+# person can own it, an inferred owner the session applies at the close (test_voice_identity.py has
+# the real-meeting sequence).
+def talk_and_tick(rx, clock, ssrc, n, step=0.2, present=None):
+    for i in range(1, n + 1):
+        send(rx, ssrc, b"OPUS" + str(i).encode(), seq=i)
+        clock.t += step
+        if i % 3 == 0:
+            rx.update_presence(present if present is not None else rx._present)
+            rx.drain()
+
+
+def test_plain_sole_candidate_is_inferred_never_written_to_their_track(clock):
     rx = make(clock, present=(A, B))
     rx.map_ssrc(400, A)  # A has spoken already (SPEAKING arrived)
     t0 = clock.t
-    talk_plain(rx, clock, 500, 10, step=0.25)  # 2.5 s: past IDENTIFY_GRACE
-    out = rx.drain()
-    assert list(out) == [B] and out[B][0][0] == t0 and len(out[B]) == 10
-    assert rx.voice_report().identified == {500: (B, "sole")}
+    talk_and_tick(rx, clock, 500, 60)
+    un = rx.drain_unidentified()
+    assert list(un) == ["unidentified-1"] and un["unidentified-1"][0][0] == t0 and len(un["unidentified-1"]) == 60
+    rep = rx.voice_report()
+    assert rep.inferred == {"unidentified-1": (B, "sole")} and B not in rep.identified
 
 
 def test_plain_two_candidates_become_an_unidentified_track_never_a_guess(clock):
     rx = make(clock, present=(A, B))
-    talk_plain(rx, clock, 500, 60, step=0.2)  # 12 s, nobody mapped: A or B?
+    talk_and_tick(rx, clock, 500, 60)
     assert rx.drain() == {}
     un = rx.drain_unidentified()
     assert list(un) == ["unidentified-1"] and len(un["unidentified-1"]) == 60
+    assert rx.voice_report().inferred == {}
     talk_plain(rx, clock, 500, 2, start=61)
     assert len(rx.drain_unidentified()["unidentified-1"]) == 2  # keeps streaming there
 
@@ -186,17 +200,14 @@ def test_plain_two_candidates_become_an_unidentified_track_never_a_guess(clock):
 def test_plain_two_unmapped_ssrcs_talking_are_not_assigned_by_elimination(clock):
     rx = make(clock, present=(A, B, C))
     rx.map_ssrc(400, A)
-    for i in range(1, 16):  # B and C talk at once; 2 candidates, 2 SSRCs: no sole rule
+    for i in range(1, 60):  # B and C talk at once; 2 candidates each: nobody is named
         send(rx, 500, b"OPUS%d" % i, seq=i)
         send(rx, 600, b"OPUS%d" % i, seq=i)
         clock.t += 0.2
-    assert rx.drain() == {}
-
-
-def test_plain_muted_members_are_not_candidates(clock):
-    rx = make(clock, present=(A, B), muted=(A,))
-    talk_plain(rx, clock, 500, 12, step=0.25)
-    assert list(rx.drain()) == [B]
+        if i % 3 == 0:
+            rx.update_presence([A, B, C])
+            rx.drain()
+    assert rx.drain() == {} and rx.voice_report().inferred == {}
 
 
 def test_plain_a_rejoined_member_is_a_candidate_again(clock):
@@ -206,8 +217,8 @@ def test_plain_a_rejoined_member_is_a_candidate_again(clock):
     rx.update_presence([A])  # B leaves...
     clock.t += 1
     rx.update_presence([A, B])  # ...and rejoins with a new SSRC and no SPEAKING
-    talk_plain(rx, clock, 502, 12, step=0.25)
-    assert list(rx.drain()) == [B]
+    talk_and_tick(rx, clock, 502, 60)
+    assert rx.voice_report().inferred == {"unidentified-1": (B, "sole")}
 
 
 def test_speaking_before_the_first_presence_snapshot_still_counts(clock):
@@ -218,29 +229,20 @@ def test_speaking_before_the_first_presence_snapshot_still_counts(clock):
     rx.start()
     rx.map_ssrc(400, A)  # SPEAKING lands before the session's first tick
     rx.update_presence([A, B])
-    talk_plain(rx, clock, 500, 12, step=0.25)
-    assert list(rx.drain()) == [B]  # A already has an SSRC: B is the only candidate
+    talk_and_tick(rx, clock, 500, 60)
+    assert rx.voice_report().inferred == {"unidentified-1": (B, "sole")}  # A already has an SSRC
 
 
-def test_plain_other_bot_in_channel_blocks_the_sole_rule(clock):
+def test_plain_other_bot_in_channel_blocks_the_inference(clock):
     rx = make(clock, present=(A, B, 8888))  # a music bot is a possible owner of the SSRC too
     rx.map_ssrc(400, A)
-    talk_plain(rx, clock, 500, 12, step=0.25)
-    assert rx.drain() == {}
-
-
-def test_sole_decision_also_happens_after_the_speaker_stops(clock):
-    rx = make(clock, present=(A,))
-    talk_plain(rx, clock, 500, 5)  # 0.1 s of audio, then silence
-    assert rx.drain() == {}
-    clock.t += rx.IDENTIFY_GRACE
-    assert list(rx.drain()) == [A]
+    talk_and_tick(rx, clock, 500, 60)
+    assert rx.drain() == {} and rx.voice_report().inferred == {}
 
 
 def test_speaking_after_unidentified_names_the_label(clock):
     rx = make(clock, present=(A, B))
-    talk_plain(rx, clock, 500, 60, step=0.2)
-    rx.drain()
+    talk_and_tick(rx, clock, 500, 60)
     rx.drain_unidentified()
     rx.map_ssrc(500, B)
     assert rx.voice_report().resolved == {"unidentified-1": B}
@@ -296,42 +298,6 @@ def test_voice_states_alone_name_dave_candidates_without_op_11(clock):
     for owner, ssrc in ((A, 500), (B, 600), (C, 700)):
         talk_dave(rx, clock, ssrc, owner, 3)
     assert sorted(rx.drain()) == [A, B, C]
-
-
-def test_plain_voice_state_timing_names_the_ssrc_among_several_candidates(clock):
-    """No DAVE, two people without SSRC and both unmuted now: B was muted while the SSRC talked
-    (muted at two consecutive snapshots with packets in between), so it is A's."""
-    rx = make(clock, present=(A, B), muted=(B,))
-    t0 = clock.t
-    talk_plain(rx, clock, 500, 20, step=0.05)
-    rx.update_presence([A, B], muted=[B])  # a second snapshot: B stayed muted through it
-    rx.update_presence([A, B])  # B unmutes: the sole-candidate rule no longer applies
-    clock.t += rx.IDENTIFY_GRACE
-    out = rx.drain()
-    assert list(out) == [A] and out[A][0][0] == t0 and len(out[A]) == 20
-    assert rx.voice_report().identified == {500: (A, "timing")}
-
-
-def test_plain_timing_is_ambiguous_when_both_talked(clock):
-    rx = make(clock, present=(A, B))
-    talk_plain(rx, clock, 500, 60, step=0.2)
-    rx.update_presence([A, B])
-    clock.t += 1
-    assert rx.drain() == {} and list(rx.drain_unidentified()) == ["unidentified-1"]
-
-
-def test_timing_later_names_an_unidentified_track(clock):
-    rx = make(clock, present=(A, B))
-    talk_plain(rx, clock, 500, 60, step=0.2)
-    rx.drain()
-    rx.drain_unidentified()
-    rx.update_presence([A, B], muted=[A])
-    talk_plain(rx, clock, 500, 20, start=61, step=0.1)
-    rx.update_presence([A, B], muted=[A])  # A muted while it kept talking: it is B
-    rx.drain()
-    assert rx.voice_report().resolved == {"unidentified-1": B}
-    talk_plain(rx, clock, 500, 2, start=81)
-    assert list(rx.drain()) == [B]
 
 
 def test_retention_is_bounded_per_ssrc_and_globally(clock):

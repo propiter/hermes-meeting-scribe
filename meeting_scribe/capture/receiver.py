@@ -21,20 +21,23 @@ decoder. We swap ``_decoders`` for :class:`_Decoders`: for an unmapped SSRC it r
   refuses a nonce it has already processed, so a frame cannot be opened twice.
   Frames retained before the owner's key was a candidate (their key/presence came later) are tried
   again whenever the candidate set grows, and every ``RETRY_SECONDS``, from the event loop.
-* Plain Opus (no DAVE, or DAVE passthrough): mapped only when, after ``IDENTIFY_GRACE`` seconds
-  without SPEAKING, exactly one unmuted person in the channel has no SSRC and this is the only
-  unmapped SSRC talking — or when voice-state TIMING leaves one person: whoever was muted, or not in
-  the channel, at two consecutive presence snapshots while the SSRC sent ``EVIDENCE_PACKETS`` or more
-  packets in between cannot be its owner; one candidate left (and no other unowned SSRC claiming
-  them) owns it.
+* Plain Opus (no DAVE, or DAVE passthrough): no proof exists, so it is NEVER written to a person's
+  own track. After ``UNIDENTIFIED_AFTER`` seconds without SPEAKING (or when the recording ends) the
+  SSRC gets its own ``unidentified-N`` track — one SSRC is one Discord connection, so one person —
+  and its owner is *inferred* as metadata (:attr:`VoiceReport.inferred`) whenever exactly one
+  person can own it: of everyone in the call while it sent audio (voice states and ops 11/12,
+  bots included), minus people whose SSRC is already known (mapped, proven or inferred) and people
+  absent at two consecutive snapshots while it talked, one is left, and no other SSRC without owner
+  could be theirs. Mute flags are no evidence (the voice-state cache lags: a real
+  meeting had a person flagged muted while their audio arrived). The inference
+  is recomputed on every drain, so it follows the call; a SPEAKING that contradicts it wins and is
+  logged as a WARNING — the audio never touched the wrong person's track, only the label moves.
 
-Once an owner is known, the whole retained audio — from the first packet — is decoded and stamped
-with its ORIGINAL arrival times, in batches of ``REPLAY_BATCH`` frames per drain so a long backlog
-never stalls the event loop; the SSRC is handed to Hermes' live path only when the backlog is empty,
-so the track stays in time order. When no safe decision exists the audio is never attributed to a
-guess: after ``UNIDENTIFIED_AFTER`` seconds audio that can be decoded becomes an "unidentified
-participant" track; DAVE audio no candidate's key opens cannot be decoded at all, stays pending
-and is reported at the end (:meth:`voice_report`).
+Once an owner is PROVEN (DAVE key or SPEAKING), the whole retained audio — from the first packet — is
+decoded and stamped with its ORIGINAL arrival times, in batches of ``REPLAY_BATCH`` frames per drain
+so a long backlog never stalls the event loop; the SSRC is handed to Hermes' live path only when the
+backlog is empty, so the track stays in time order. DAVE audio no candidate's key opens cannot be
+decoded at all, stays pending and is reported at the end (:meth:`voice_report`).
 
 Memory: retained payloads are the compressed packets (~100-200 bytes per 20 ms frame, about
 ``FRAME_OVERHEAD`` more in Python) kept for the WHOLE meeting if needed: ``RETAIN_SECONDS`` (4 h,
@@ -61,8 +64,7 @@ Frames = list[tuple[float, bytes]]
 _CLASSES: dict[type, type] = {}
 DAVE_MAGIC = b"\xfa\xfa"
 UNIDENTIFIED_PREFIX = "unidentified-"
-_HOW = {"dave": "DAVE key", "sole": "only person without SSRC", "speaking": "late SPEAKING",
-        "timing": "voice-state timing"}
+_HOW = {"dave": "DAVE key", "speaking": "late SPEAKING", "sole": "only person in the call without a voice"}
 FRAME_OVERHEAD = 120  # bytes of Python objects per retained frame (``_Frame`` + its ``bytes``)
 
 
@@ -148,9 +150,13 @@ class _Pending:
     label: Optional[str] = None  # set once it streams into an "unidentified participant" track
     tried: set[int] = field(default_factory=set)  # DAVE keys already tried on the retained frames
     retried_at: float = 0.0
-    recent: int = 0  # packets since the last presence snapshot (timing evidence)
-    excluded: set[int] = field(default_factory=set)  # muted/absent while it talked: not the owner
-    owner: Optional[int] = None  # identified; the backlog is being replayed into its track
+    recent: int = 0  # packets since the last presence snapshot
+    dave_frames: int = 0  # packets that carried the DAVE marker (logged when the SSRC is labelled)
+    snaps: int = 0  # presence snapshots taken while it sent audio
+    heard_by: dict[int, int] = field(default_factory=dict)  # user in the call while it talked -> first snapshot
+    absent_at: dict[int, int] = field(default_factory=dict)  # user -> last such snapshot they were absent
+    excluded: set[int] = field(default_factory=set)  # absent at two consecutive ones: not the owner
+    owner: Optional[int] = None  # proven (key/SPEAKING); the backlog is being replayed into its track
     how: str = ""
     decoder: Any = None
     kept: int = 0
@@ -159,15 +165,38 @@ class _Pending:
     def ambiguous(self) -> bool:
         return len(self.hits) > 1
 
+    def snapshot(self, in_call: frozenset[int], joined_at: dict[int, float], lag: float) -> None:
+        """A presence snapshot taken while this SSRC sent audio. Its owner is connected whenever it
+        sends, so someone out of the call at two consecutive such snapshots cannot own it (two, not
+        one: presence lags), nor can a newcomer whose join was seen more than ``lag`` seconds after
+        this SSRC's first packet — a connection that did not exist yet sent nothing."""
+        i, self.snaps = self.snaps, self.snaps + 1
+        for u in in_call - self.heard_by.keys():
+            self.heard_by[u] = i
+            if joined_at.get(u, float("-inf")) > self.first + lag:
+                self.excluded.add(u)
+        for u in self.heard_by.keys() - in_call:
+            if self.absent_at.get(u) == i - 1:
+                self.excluded.add(u)
+            self.absent_at[u] = i
+
 
 @dataclass(frozen=True)
 class VoiceReport:
     """What happened to SSRCs SPEAKING never mapped (read at the end of a recording)."""
 
-    identified: dict[int, tuple[int, str]]  # ssrc -> (user id, "dave" | "sole" | "speaking")
-    unidentified: dict[str, int]  # track label -> ssrc (audio kept, owner unknown)
-    resolved: dict[str, int]  # unidentified label -> user a later SPEAKING named
+    identified: dict[int, tuple[int, str]]  # ssrc -> (user id, "dave" | "speaking"): audio in their track
+    unidentified: dict[str, int]  # track label -> ssrc (one SSRC = one connection = one person)
+    resolved: dict[str, int]  # unidentified label -> user a later SPEAKING named (authoritative)
     undecided: dict[int, int]  # ssrc -> packets that could be neither attributed nor decoded
+    inferred: dict[str, tuple[int, str]] = field(default_factory=dict)  # label -> (user, "sole")
+    contradicted: dict[int, tuple[int, int]] = field(default_factory=dict)  # ssrc -> (inferred, SPEAKING)
+
+    def owners(self) -> dict[str, int]:
+        """Owner of each unidentified track that has one: SPEAKING first, then the inference."""
+        out = {label: uid for label, (uid, _how) in self.inferred.items()}
+        out.update(self.resolved)
+        return out
 
 
 class _Retainer:
@@ -213,12 +242,10 @@ def scribe_receiver_class(base: type) -> type:
 
     class ScribeReceiver(base):  # type: ignore[valid-type, misc]
         CONFIRM_PACKETS = 3  # DAVE frames one person's key must open before the SSRC is theirs
-        IDENTIFY_GRACE = 2.0  # seconds SPEAKING may lag before the sole-candidate rule applies
-        UNIDENTIFIED_AFTER = 10.0  # decodable audio still unattributable -> "unidentified" track
-        ACTIVE_WINDOW = 5.0  # an unmapped SSRC silent longer than this is not "talking now"
+        UNIDENTIFIED_AFTER = 10.0  # decodable audio without SPEAKING/key -> its own "unidentified" track
+        JOIN_LAG = 2.0  # a join seen this long after an SSRC's first packet cannot be its owner's
         RETRY_SCAN_FRAMES = 250  # newest retained frames (5 s of audio) a key is tried on: any of them proves it
         RETRY_SECONDS = 5.0  # retained DAVE frames are tried again with every candidate this often
-        EVIDENCE_PACKETS = 10  # packets between two presence snapshots that make them timing evidence
         REPLAY_BATCH = 1500  # retained frames (30 s of audio) replayed per drain
         RETAIN_SECONDS = 4 * 3600.0  # per-SSRC retention window: a whole default-length meeting
         RETAIN_SSRC_MAX_BYTES = 256 * 1024 * 1024  # per SSRC (~4 h at 64 kbps with overhead)
@@ -232,11 +259,11 @@ def scribe_receiver_class(base: type) -> type:
             self._buffers = _Buffers(clock)
             self._decoders = _Decoders(self)
             self._present: Optional[frozenset[int]] = None  # None until the first voice-state snapshot
-            self._unmuted: frozenset[int] = frozenset()
             # Ordering of joins and mappings (a counter, not the clock): a mapping older than the
             # member's last join belongs to a previous connection (a rejoin gets a new SSRC).
             self._order = itertools.count(1)
             self._joined: dict[int, int] = {}
+            self._joined_at: dict[int, float] = {}  # clock of each join seen (voice state, op 12)
             self._mapped_at: dict[int, int] = {}
             self._pending: dict[int, _Pending] = {}
             self._retained_bytes = 0
@@ -245,8 +272,9 @@ def scribe_receiver_class(base: type) -> type:
             self._identified: dict[int, tuple[int, str]] = {}
             self._labels: dict[str, int] = {}
             self._resolved: dict[str, int] = {}  # unidentified label -> user SPEAKING named later
+            self._inferred: dict[str, tuple[int, str]] = {}  # unidentified label -> (user, rule)
+            self._contradicted: dict[int, tuple[int, int]] = {}  # ssrc -> (inferred user, SPEAKING user)
             self._voice_clients: set[int] = set()  # users op 11/12 says have media in the call
-            self._seen: set[int] = set()  # everyone ever in the channel (timing candidates)
             self._candidates_grew = False  # a new DAVE key candidate: retry the retained frames
 
         # -- voice gateway opcodes ----------------------------------------------------------------
@@ -270,6 +298,8 @@ def scribe_receiver_class(base: type) -> type:
                 log.info("meeting-scribe: voice CLIENTS_CONNECT: %d user(s) already in the call: %s",
                          len(ids), sorted(ids))
                 with self._lock:
+                    if self._present is not None or self._voice_clients:  # not the handshake's own list
+                        self._joined_at.update((u, self._clock()) for u in ids - self._voice_clients)
                     self._candidates_grew |= not ids <= self._voice_clients
                     self._voice_clients |= ids
             elif op in (12, 13) and str(data.get("user_id") or "").isdigit():
@@ -278,27 +308,28 @@ def scribe_receiver_class(base: type) -> type:
                     if op == 12:
                         self._candidates_grew |= uid not in self._voice_clients
                         self._voice_clients.add(uid)
+                        self._joined_at[uid] = self._clock()
                     else:
                         self._voice_clients.discard(uid)
 
         # -- presence (event-loop thread) -------------------------------------------------------
-        def update_presence(self, user_ids: Iterable[int], muted: Iterable[int] = ()) -> None:
-            """The people in the voice channel right now (voice states) and which are muted."""
+        def update_presence(self, user_ids: Iterable[int]) -> None:
+            """The people in the voice channel right now (voice states). Mute flags are no evidence of
+            who owns an SSRC: the voice-state cache lags (a real meeting had a person flagged muted for
+            seconds while their audio arrived), so the receiver never sees them."""
             present = frozenset(int(u) for u in user_ids)
-            unmuted = present - {int(u) for u in muted}
             with self._lock:
                 if self._present is not None:  # the first snapshot is the baseline, not joins
                     for u in present - self._present:
                         self._joined[u] = next(self._order)
-                    silent = self._seen - (unmuted | self._unmuted)  # muted or away at both snapshots
-                    for p in self._pending.values():
-                        if not p.dave and p.owner is None and p.recent >= self.EVIDENCE_PACKETS:
-                            p.excluded |= silent
-                        p.recent = 0
-                self._candidates_grew |= not present <= self._seen
-                self._seen |= present
+                        self._joined_at[u] = self._clock()
+                in_call = present | self._voice_clients
+                for p in self._pending.values():
+                    if p.owner is None and p.recent:  # it sent audio since the last snapshot
+                        p.snapshot(in_call, self._joined_at, self.JOIN_LAG)
+                    p.recent = 0
+                self._candidates_grew |= not present <= (self._present or frozenset())
                 self._present = present
-                self._unmuted = unmuted
 
         def refresh_connection(self) -> None:
             """Re-read DAVE session / transport key (cheap attribute reads; called every tick)."""
@@ -324,15 +355,30 @@ def scribe_receiver_class(base: type) -> type:
             return sorted(ids)
 
         def map_ssrc(self, ssrc: int, user_id: int) -> None:
-            """SPEAKING (authoritative): map, and replay audio retained before it arrived."""
+            """SPEAKING (authoritative): map, and replay audio retained before it arrived. For an SSRC
+            already streaming as ``unidentified-N`` the track is named after them; an inferred owner
+            it contradicts is dropped with a WARNING (the audio was never in their track)."""
+            uid = int(user_id)
             with self._lock:
                 p = self._pending.get(ssrc)
-                if p is not None and p.label is None:
-                    self._assign(p, int(user_id), "speaking")  # authoritative, even over a key/timing
+                if p is not None and p.label is None and p.owner is None:
+                    self._assign(p, uid, "speaking")
                 else:
-                    if p is not None:  # already streaming as unidentified: name that track after them
-                        self._resolved[p.label] = int(user_id)
+                    if p is not None and p.owner is not None and p.owner != uid:
+                        log.warning("meeting-scribe: SPEAKING ssrc=%d -> user %d contradicts its DAVE key "
+                                    "(user %d); SPEAKING wins", ssrc, uid, p.owner)
+                        p.owner = uid
+                        return
+                    if p is not None and p.label is not None:
+                        guess = self._inferred.pop(p.label, None)
+                        if guess is not None and guess[0] != uid:
+                            self._contradicted[ssrc] = (guess[0], uid)
+                            log.warning("meeting-scribe: SPEAKING ssrc=%d -> user %d contradicts the inference "
+                                        "%s = user %d; %s is theirs", ssrc, uid, p.label, guess[0], p.label)
+                        self._resolved[p.label] = uid
+                        self._identified[ssrc] = (uid, "speaking")
                         self._pending.pop(ssrc)
+                        log.info("meeting-scribe: ssrc=%d (%s) named user %d by a late SPEAKING", ssrc, p.label, uid)
                     self._ssrc_to_user[ssrc] = user_id
                     self._mapped_at[ssrc] = next(self._order)
                     return
@@ -363,6 +409,7 @@ def scribe_receiver_class(base: type) -> type:
                 p.packets += 1
                 p.recent += 1
                 p.dave = p.dave or dave
+                p.dave_frames += dave
                 if p.owner is not None:  # identified, backlog still replaying: queue behind it
                     self._keep(p, frame)
                     return
@@ -379,8 +426,6 @@ def scribe_receiver_class(base: type) -> type:
                 self._stream_unidentified(label, frame)
             elif dave:
                 self._try_keys(ssrc)
-            elif now - p.first >= self.IDENTIFY_GRACE:
-                self._try_sole(ssrc)
 
         def _keep(self, p: _Pending, frame: _Frame) -> None:
             """Caller holds ``_lock``. Bounded: window per SSRC, then a global byte cap."""
@@ -451,58 +496,55 @@ def scribe_receiver_class(base: type) -> type:
                             p.hits[u] = p.hits.get(u, 0) + 1
             self._try_keys(ssrc)
 
-        def _try_sole(self, ssrc: int) -> None:
-            now = self._clock()
-            with self._lock:
-                p = self._pending.get(ssrc)
-                if (p is None or p.label is not None or p.owner is not None or p.hits
-                        or (p.dave and self._dave_session)):
-                    return
-                talking = [s for s, q in self._pending.items()
-                           if q.label is None and q.owner is None and now - q.last <= self.ACTIVE_WINDOW]
-                candidates = sorted(self._unmuted - self._owners())
-                if talking != [ssrc] or len(candidates) != 1:
-                    return
-                self._assign(p, candidates[0], "sole")
-            self._log_identified(ssrc, p)
-
         def _owners(self) -> set[int]:
-            """Caller holds ``_lock``. Users whose current connection already has an SSRC (mapped, or
-            identified and replaying)."""
+            """Caller holds ``_lock``. Users whose current connection has a PROVEN SSRC (SPEAKING or a
+            DAVE key); a mapping older than their last join belongs to a previous connection."""
             mapped = {int(u) for s, u in self._ssrc_to_user.items()
                       if u and self._mapped_at.get(s, 0) >= self._joined.get(int(u), 0)}
             return mapped | {q.owner for q in self._pending.values() if q.owner is not None}
 
-        def _timing_candidate(self, ssrc: int, p: _Pending) -> Optional[int]:
-            """Caller holds ``_lock``. The one person voice-state timing leaves for a plain SSRC."""
-            if p.dave or p.owner is not None or not p.excluded:
-                return None
-            def left(q: _Pending) -> set[int]:
-                return self._seen - q.excluded - self._owners()
-            mine = left(p)
-            if len(mine) != 1:
-                return None
-            others = [s for s, q in self._pending.items() if s != ssrc and q.owner is None and not q.dave
-                      and q.label is None and left(q) == mine]
-            return None if others else next(iter(mine))
+        def _candidates(self, p: _Pending, owners: set[int]) -> set[int]:
+            """Caller holds ``_lock``. Who may own ``p``: everyone in the call while it sent audio
+            (voice states, ops 11/12 — newcomers and other bots included), minus people absent at two
+            consecutive snapshots while it talked and people whose voice is already proven."""
+            return set(p.heard_by) - p.excluded - owners
 
-        def _try_timing(self, ssrc: int) -> None:
-            with self._lock:
-                p = self._pending.get(ssrc)
-                user_id = None if p is None else self._timing_candidate(ssrc, p)
-                if user_id is None:
-                    return
-                if p.label is not None:  # already streaming as unidentified: name that track after them
-                    self._resolved[p.label] = user_id
-                    self._pending.pop(ssrc)
-                    self._ssrc_to_user[ssrc] = user_id
-                    self._mapped_at[ssrc] = next(self._order)
-                    self._identified[ssrc] = (user_id, "timing")
-                    log.info("meeting-scribe: ssrc=%d (%s) identified as user %d by voice-state timing",
-                             ssrc, p.label, user_id)
-                    return
-                self._assign(p, user_id, "timing")
-            self._log_identified(ssrc, p)
+        def _infer(self) -> None:
+            """Caller holds ``_lock``. The owner of each unidentified track when only one person can
+            own it and no other SSRC without owner, active at the same time, can only be theirs
+            either (one SSRC is one Discord connection: one person). Recomputed on every drain, so a
+            SPEAKING or a proven key elsewhere can name a track later; never writes audio anywhere."""
+            owners = self._owners()
+            unowned = {s: q for s, q in self._pending.items() if q.owner is None and q.heard_by}
+            cands = {s: self._candidates(q, owners) for s, q in unowned.items()}
+            for ssrc, q in unowned.items():
+                if q.label is None or q.label in self._resolved:
+                    continue
+                mine = cands[ssrc]
+                user = next(iter(mine)) if len(mine) == 1 else None
+                rival = user is not None and any(
+                    s != ssrc and cands[s] == mine and r.first <= q.last and q.first <= r.last
+                    for s, r in unowned.items())
+                new = (user, "sole") if user is not None and not rival else None
+                old = self._inferred.get(q.label)
+                if new == old:
+                    continue
+                if new is None:
+                    self._inferred.pop(q.label, None)
+                    log.info("meeting-scribe: %s (ssrc=%d) no longer attributable: %s", q.label, ssrc,
+                             self._why(ssrc, mine, rival))
+                else:
+                    self._inferred[q.label] = new
+                    log.info("meeting-scribe: %s (ssrc=%d) is user %d (%s); its track keeps the label "
+                             "until the recording closes", q.label, ssrc, user, _HOW["sole"])
+
+        @staticmethod
+        def _why(ssrc: int, cands: set[int], rival: bool) -> str:
+            if rival:
+                return f"another SSRC without owner can only be user {next(iter(cands))} too"
+            if not cands:
+                return "0 candidates (everyone in the call already has a proven voice)"
+            return f"{len(cands)} candidates {sorted(cands)}"
 
         def _assign(self, p: _Pending, user_id: int, how: str) -> None:
             """Caller holds ``_lock``. The SSRC is ``user_id``'s: its retained frames (from the first
@@ -573,26 +615,21 @@ def scribe_receiver_class(base: type) -> type:
                 with self._lock:
                     self._unidentified.setdefault(label, []).append((frame.t, pcm))
 
-        def _settle(self) -> None:
-            """Event-loop side of identification: late sole-candidate decisions (the speaker stopped
-            before the grace ran out) and the switch of unattributable audio to a labelled track."""
+        def _settle(self, final: bool = False) -> None:
+            """Event-loop side of identification: DAVE key retries, the switch of audio without a
+            proven owner to its own ``unidentified-N`` track (``final``: whatever is left, however
+            short), and the owner inference of those tracks (:meth:`_infer`)."""
             now = self._clock()
             with self._lock:
                 grew, self._candidates_grew = self._candidates_grew, False
-                waiting = [(s, p) for s, p in self._pending.items() if p.owner is None]
+                waiting = [(s, p) for s, p in self._pending.items() if p.owner is None and p.label is None]
             for ssrc, p in waiting:
-                if p.label is not None:  # an unidentified track timing may still name
-                    self._try_timing(ssrc)
-                    continue
                 periodic = now - p.retried_at >= self.RETRY_SECONDS
                 if p.dave and self._dave_session and (grew or periodic):
                     self._retry_keys(ssrc, p, now, periodic=periodic)
-                if now - p.first >= self.IDENTIFY_GRACE:
-                    self._try_sole(ssrc)
-                    self._try_timing(ssrc)
                 with self._lock:
                     if (self._pending.get(ssrc) is not p or p.owner is not None
-                            or now - p.first < self.UNIDENTIFIED_AFTER):
+                            or (now - p.first < self.UNIDENTIFIED_AFTER and not final)):
                         continue
                     if p.dave and self._dave_session and not p.ambiguous:
                         continue  # only its owner's key can open it: keep trying (bounded)
@@ -603,16 +640,21 @@ def scribe_receiver_class(base: type) -> type:
                     self._retained_bytes -= p.size
                     p.size = 0
                     self._label_decoders[label] = self._codec.new_decoder()
-                log.warning("meeting-scribe: ssrc=%d could not be attributed to anyone; recorded as %s",
-                            ssrc, label)
+                    cands = self._candidates(p, self._owners())
+                log.warning("meeting-scribe: ssrc=%d has no SPEAKING and no DAVE key proves its owner; recorded "
+                            "as %s (DAVE frames: %d/%d, DAVE session %s; %d candidates %s)", ssrc, label,
+                            p.dave_frames, p.packets, "active" if self._dave_session else "none", len(cands),
+                            sorted(cands))
                 for frame in retained:
                     self._stream_unidentified(label, frame)
+            with self._lock:
+                self._infer()
 
         # -- drain (event-loop thread) -----------------------------------------------------------
         def drain(self, *, final: bool = False) -> dict[int, Frames]:
             """Swap out all mapped buffers under the receiver lock; ``{user_id: [(t, pcm), ...]}``, with
             the next batch of replayed retained audio (``final``: all of it — the recording ends)."""
-            self._settle()
+            self._settle(final)
             out: dict[int, Frames] = {}
             self._replay(out, None if final else self.REPLAY_BATCH)
             with self._lock:
@@ -637,7 +679,8 @@ def scribe_receiver_class(base: type) -> type:
         def voice_report(self) -> VoiceReport:
             with self._lock:
                 undecided = {s: p.packets for s, p in self._pending.items() if p.label is None and p.owner is None}
-                return VoiceReport(dict(self._identified), dict(self._labels), dict(self._resolved), undecided)
+                return VoiceReport(dict(self._identified), dict(self._labels), dict(self._resolved), undecided,
+                                   dict(self._inferred), dict(self._contradicted))
 
         def stop(self) -> None:
             if getattr(self._vc, "voice_op_listener", None) == self.note_voice_op:

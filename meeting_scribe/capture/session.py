@@ -127,6 +127,7 @@ class RecordingSession:
         self._last_tick = 0.0
         self.missing_audio: tuple[str, ...] = ()
         self._speakers: dict[str, Speaker] = {}
+        self._label_owners: dict[str, str] = {}  # unidentified-N -> user id, decided at the close
         self._task: Optional[asyncio.Task] = None
         self._teardown: Optional[asyncio.Task] = None
         self._final_lock = asyncio.Lock()
@@ -222,7 +223,7 @@ class RecordingSession:
         me = getattr(getattr(self.vc, "user", None), "id", None)
         members = [m for m in getattr(self.channel, "members", []) if m.id != me]
         muted = [m.id for m in members if _muted(m)]
-        self.receiver.update_presence([m.id for m in members], muted)
+        self.receiver.update_presence([m.id for m in members])
         for m in members:
             if not getattr(m, "bot", False) and m.id not in muted:
                 key = str(m.id)
@@ -256,8 +257,8 @@ class RecordingSession:
         return now - self._unhealthy_since >= grace  # a resume/move that never recovered
 
     def _unidentified_speaker(self, label: str) -> Speaker:
-        """The speaker of an "unidentified participant" track, named after the person a SPEAKING
-        that arrived later designated, if any (SPEAKING is authoritative)."""
+        """The speaker of an "unidentified participant" track (one SSRC: one Discord connection, one
+        person); :meth:`_attribute_labels` gives it to its owner at the close when one is known."""
         if label not in self._speakers:
             number = label.rsplit("-", 1)[-1]
             name = t("capture.unidentified", self.lang) + ("" if number == "1" else f" {number}")
@@ -372,6 +373,7 @@ class RecordingSession:
             self._stop_receiver()
             self._check_missing_audio()
             await asyncio.to_thread(self._close_writers)
+            self._attribute_labels()
             await self.consent.restore_nickname()
             await self._release_voice()
             try:
@@ -401,6 +403,7 @@ class RecordingSession:
             self._stop_receiver()
             self._check_missing_audio()
             self._close_writers()
+            self._attribute_labels()
             self._finish(True)
         finally:
             self._finished_threadsafe()
@@ -430,28 +433,49 @@ class RecordingSession:
                 log.warning("meeting-scribe: track %s had errors: %s", uid, writer.error)
 
     def _check_missing_audio(self) -> None:
-        """People unmuted in the channel > ``MISSING_AUDIO_SECONDS`` whose voice reached no track."""
+        """People unmuted in the channel > ``MISSING_AUDIO_SECONDS`` whose voice reached no track, and
+        the owner of each ``unidentified-N`` track: a later SPEAKING, else the only person in the call
+        without a voice of their own while it talked (DESIGN §4.1). Bots never own a track."""
         if self.receiver is None:
             return
         report = self.receiver.voice_report()
-        for label, uid in report.resolved.items():  # SPEAKING came after the audio went unidentified
-            sp = self._speaker_for(uid)
-            if sp is not None and label in self._speakers:
-                self._speakers[label] = Speaker(label, sp.name)
+        for label, uid in report.owners().items():
+            if label in self._speakers and self._speaker_for(uid) is not None:
+                self._label_owners[label] = str(uid)
         captured = {str(u) for u in self._writers} | {str(u) for u in self._writer_errors}
-        captured |= {str(u) for u in report.resolved.values()}
+        captured |= set(self._label_owners.values())
         missing = tuple(uid for uid, secs in self._unmuted_seconds.items()
                         if secs > MISSING_AUDIO_SECONDS and uid not in captured)
         self.missing_audio = missing
         if missing or report.undecided or report.unidentified:
             names = {uid: self._speakers[uid].name if uid in self._speakers else uid for uid in missing}
             log.warning("meeting-scribe %s: audio not captured for %s; ssrc never identified: %s; "
-                        "recorded as unidentified: %s; identified without SPEAKING: %s",
+                        "recorded as unidentified: %s; owner at the close: %s; identified without SPEAKING: %s",
                         self.meeting.id if self.meeting else "-",
                         ", ".join(f"{n} ({u})" for u, n in names.items()) or "nobody",
                         ", ".join(f"{s} ({n} packets)" for s, n in report.undecided.items()) or "none",
                         ", ".join(f"{lbl}=ssrc {s}" for lbl, s in report.unidentified.items()) or "none",
+                        ", ".join(f"{lbl}->{u}" for lbl, u in self._label_owners.items()) or "none",
                         ", ".join(f"ssrc {s}->{u} ({how})" for s, (u, how) in report.identified.items()) or "none")
+
+    def _attribute_labels(self) -> None:
+        """After the writers closed: a track whose owner is known becomes theirs — ``tracks/<label>.ogg``
+        is renamed ``tracks/<user id>.ogg`` and the label speaker disappears — unless they have a track
+        already (then the label keeps its audio, named after them)."""
+        if self.meeting is None:
+            return
+        for label, uid in self._label_owners.items():
+            owner = self._speakers[uid]
+            src = self.deps.service.track_path(self.meeting, label)
+            dst = self.deps.service.track_path(self.meeting, uid)
+            if uid in {str(u) for u in self._writers} or dst.exists() or not src.exists():
+                self._speakers[label] = Speaker(label, owner.name)
+                log.info("meeting-scribe %s: %s is %s (%s), (track kept under its label)",
+                         self.meeting.id, label, owner.name, uid)
+                continue
+            src.replace(dst)
+            self._speakers.pop(label, None)
+            log.info("meeting-scribe %s: %s attributed to %s (%s) at the close", self.meeting.id, label, owner.name, uid)
 
     @property
     def heard(self) -> bool:
