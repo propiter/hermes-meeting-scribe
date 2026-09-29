@@ -27,7 +27,7 @@ def test_op13_retires_the_proven_mapping_of_that_user(clock):
     rx.note_voice_op(13, {"user_id": str(A)})
     assert owners_now(rx) == set()  # the old SSRC is no voice of A's any more
     send(rx, 400, b"OPUS1", seq=1)
-    assert list(rx.drain()) == [A]  # a late packet of the old connection still reaches A's track
+    assert rx.drain() == {}  # after disconnect even a reused SSRC is unproven
 
 
 def test_op12_is_a_new_connection_even_without_a_voice_state_change(clock):

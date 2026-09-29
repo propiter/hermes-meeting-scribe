@@ -260,6 +260,7 @@ def scribe_receiver_class(base: type) -> type:
             self._clock = clock
             self._codec = codec or HostCodec()
             self._buffers = _Buffers(clock)
+            self._retired_audio: dict[int, Frames] = {}
             self._decoders = _Decoders(self)
             self._present: Optional[frozenset[int]] = None  # None until the first voice-state snapshot
             # Ordering of joins and mappings (a counter, not the clock): a mapping older than the
@@ -325,6 +326,15 @@ def scribe_receiver_class(base: type) -> type:
                     else:  # that connection is gone: its SSRC no longer proves a voice of theirs
                         self._voice_clients.discard(uid)
                         self._left[uid] = next(self._order)
+                        for ssrc, owner in list(self._ssrc_to_user.items()):
+                            if int(owner) != uid:
+                                continue
+                            self._ssrc_to_user.pop(ssrc)
+                            self._mapped_at.pop(ssrc, None)
+                            self._decoders.pop(ssrc, None)
+                            buf = self._buffers.pop(ssrc, None)
+                            if buf is not None:
+                                self._retired_audio.setdefault(uid, []).extend(buf.frames)
 
         # -- presence (event-loop thread) -------------------------------------------------------
         def update_presence(self, user_ids: Iterable[int]) -> None:
@@ -679,7 +689,8 @@ def scribe_receiver_class(base: type) -> type:
             """Swap out all mapped buffers under the receiver lock; ``{user_id: [(t, pcm), ...]}``, with
             the next batch of replayed retained audio (``final``: all of it — the recording ends)."""
             self._settle(final)
-            out: dict[int, Frames] = {}
+            with self._lock:
+                out, self._retired_audio = self._retired_audio, {}
             self._replay(out, None if final else self.REPLAY_BATCH)
             with self._lock:
                 mapping = dict(self._ssrc_to_user)
