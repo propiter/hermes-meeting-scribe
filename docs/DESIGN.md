@@ -670,8 +670,9 @@ so nothing below depends on any server's channel names.
   (`notes` pointer) and, last, the **task index** (`index` pointer): counts per project with a link to
   the thread holding them (⚠️ when a group has uncertain tasks, ⛔ when a channel lacked permissions),
   counts per person, closed DMs, and ONE `📋 My tasks` button (`mscribe:mine:<meeting>:all`).
-- **Project channel**: one anchor message + a thread per meeting (`thread:<channel>` pointer;
-  in the channel itself when `delivery_project_threads` is off or the thread cannot be created), then
+- **Project channel** (only with `delivery_tasks_placement=projects|projects_inline`, §16.1): one anchor
+  message + a thread per meeting (`thread:<channel>` pointer; in the channel itself with
+  `projects_inline` or when the thread cannot be created), then
   ONE message per task (`task:<item>` pointer with the routed `target`) with that task's buttons
   directly under it. A handled task shows ✅ Kanban `t_x` / 🟣 Linear ENG-1 / ❌ Dismissed and has no
   buttons, so it can never shift another task's buttons. Tasks without a channel go to a thread under
@@ -755,6 +756,52 @@ so nothing below depends on any server's channel names.
 ### Needs a live check
 Components v2 in ephemeral follow-ups and DMs, thread creation from an anchor message in channels with
 slow mode or restricted thread permissions, and DM delivery rate on large meetings.
+
+### 16.1 Where tasks are posted (`delivery_tasks_placement`, unreleased)
+Feedback: a meeting that touches four projects left its tasks in four channels plus the notes, which
+read as spam. The setting chooses the layout of a (non-private) meeting's task cards:
+
+| value | task cards | project channels |
+|---|---|---|
+| `meeting` (**default**) | every task in the meeting's place: the notes thread under the summary, the forum post, or the notes channel itself | untouched |
+| `projects` | each task in a thread per meeting in its project's channel (the 0.2 layout) | anchor + thread (forum: one post) |
+| `projects_inline` | each task straight in its project's channel, after the anchor | anchor only |
+
+- **Always, in every mode**: summary, transcript and index in the meeting's place; one message per task
+  with its own buttons; the project label (`📁 orion`) and ⚠️ uncertain flag on each card; assignee DM
+  panels (`delivery_dm_assignees`); Kanban/Linear exactly as before (the placement only moves Discord
+  messages). With `meeting`, the tasks of one project are posted together (projects in order of first
+  appearance, tasks without project last) and the index links every project to the notes; it does not
+  report project channels the bot cannot post in (they are not used). `delivery_fallback_channel` only
+  applies to the `projects*` layouts.
+- **📁 Move stays manual and wins.** A moved task (`item_overrides`, §16) is posted in the chosen channel
+  in every mode (in `meeting` mode without a thread: anchor + the task, like `projects_inline`); the
+  rest stays together. `TaskView.moved` carries it; `TaskPublisher.placed_channel()` is the one decision.
+- **Private (§19.2) and direct-message (§19.3) meetings ignore the setting**: a private meeting keeps
+  every task in its channel and shares only on a button; a `:dm` meeting never touches a channel.
+- **Pinned per meeting.** The pipeline's DELIVER (first delivery, `reprocess --from deliver`) applies the
+  setting and stores it as `tasks` in the `notes` pointer; button refreshes, 📁 moves and identity
+  corrections re-use the pinned value, so changing the setting never re-lays an old meeting on a click.
+  A `notes` pointer without `tasks` (published before this setting) is read as `projects`, or
+  `projects_inline` when its anchors have no thread.
+- **Switching is idempotent.** A task pointer records its `target` (project channel id, `""` = the notes,
+  `private`); a different target re-posts the task in the new place and deletes (or disarms) the old
+  message. After placing tasks, every `thread:<channel>` pointer whose channel no longer holds a task of
+  the meeting is removed: its anchor message deleted, its thread or forum post deleted
+  (`Messages.delete_thread`; without Manage Threads the thread stays, emptied of our tasks, and is
+  logged). A second reprocess changes nothing. A private meeting skips this cleanup: its public
+  anchors go through the withdrawal of §19.2.
+- **Not per rule.** `meeting_routes` rules decide *where the notes go* and their privacy; a placement per
+  rule would add a third axis to the rule syntax, the CLI `route` flags and the Desktop editor for a
+  choice that is about noise, not about who may read. The setting is per space (§23:
+  `space set <slug> delivery_tasks_placement projects`), which covers a team that wants the other layout.
+- **Replaces `delivery_project_threads`.** Two booleans (`delivery_project_threads` and a new "together")
+  would have overlapped: threads only mean something when tasks go to project channels. One enum states
+  the whole choice. `RETIRED_KEYS` in `config.py` reads a stored `delivery_project_threads` (global or a
+  space override) when `delivery_tasks_placement` is unset — `true` → `projects`, `false` →
+  `projects_inline` — with a warning (`doctor`, `config list`, Desktop) to save the new key;
+  `config set delivery_project_threads …` answers with the replacement. Installs that never set it get
+  the new default `meeting`: **their next deliveries change layout** (see CHANGELOG).
 
 ## 17. Google Meet import and transcript attachment (unreleased)
 
@@ -1003,9 +1050,10 @@ does not have guild info attached") and nobody else saw it.
     raises: the delivery fails, the DM is untouched and the job retries. Outside a move the
     attachment still never fails a delivery (§17.3).
   - Until moved, a DM meeting works where it is (buttons, 📋 My tasks, edits in place).
-- **Tasks**: with a project → the project channel (routing of §16, candidates from the server chosen
-  above, so Meet tasks route too); without → `delivery_fallback_channel` (id or name; anchor +
-  thread like a project channel), else the notes chat as before.
+- **Tasks** (with `delivery_tasks_placement=projects|projects_inline`, §16.1; the default `meeting` keeps
+  them all with the notes): with a project → the project channel (routing of §16, candidates from the
+  server chosen above, so Meet tasks route too); without → `delivery_fallback_channel` (id or name;
+  anchor + thread like a project channel), else the notes chat as before.
 - The last resolution per source is stored (`discord.destination_report.<source>`) so `doctor` and
   `config list` — which run in other processes without a Discord connection — can show which
   server/channel a name resolved to, its kind (`forum`/`media`) and the warnings below.
@@ -1067,7 +1115,7 @@ and automatically, and a configured id failed on `channel.send` (a forum has non
 Request: some voice channels hold conversations that the rest of the server must not see (a
 leadership group, a team's own room). The team wants to choose where those notes go and, for private
 rooms, keep everything there and decide what leaves by pressing buttons. Group meetings can also post
-their notes in the group's own channel or forum. Tasks still go to their project channels.
+their notes in the group's own channel or forum. Tasks follow `delivery_tasks_placement` (§16.1).
 
 **Setting** `meeting_routes` (list, group `delivery`, space-scoped like every setting, format
 `meeting_route`; module `routes.py`, pure). There is one rule per entry, `origin = channel[:private]`:

@@ -27,9 +27,11 @@ Audio never leaves your machine. Only transcript text is sent, and only to your 
 - **A project per task.** Each action item gets its own project. The LLM picks from your Hermes
   projects, Kanban boards, Linear projects and the Discord server's own channels and categories, and
   fuzzy matching absorbs transcription errors. A 📁 correction is remembered.
-- **Tasks where the work lives.** Each task is posted in a thread of its project's channel, with its
-  own buttons directly under it. The meeting chat gets the summary and a compact task index. Each
-  assignee gets a DM with their tasks, and **📋 My tasks** opens a private panel.
+- **Everything in one place, or tasks where the work lives.** By default the summary, transcript and
+  every task (labelled by project, each with its own buttons) stay together where the meeting is
+  posted, so a meeting does not spread over many channels. `delivery_tasks_placement projects` posts
+  each task in a thread of its project's channel instead. Either way each assignee gets a DM with their
+  tasks, **📋 My tasks** opens a private panel, and **📁 Move** sends a single task elsewhere.
 - **Delivery targets.** The meeting folder (always), Discord, Hermes Kanban, Linear and Obsidian.
 - **Durable and idempotent.** Every meeting is a resumable state machine stored in SQLite:
   - a restart resumes unfinished work
@@ -435,8 +437,8 @@ Rules decide, meeting by meeting, where the notes go. Each rule has three parts:
 - **Which meetings**: a voice channel, every voice channel of a category, or Google Meet meetings
   whose code or title matches a pattern (`*` as wildcard).
 - **Mode**:
-  - **Normal**: the notes go to the channel you choose; tasks go to their project channels and the
-    board as usual.
+  - **Normal**: the notes go to the channel you choose; tasks follow `delivery_tasks_placement` (with
+    the notes by default, or their project channels) and the board as usual.
   - **Private**: everything (summary, transcript, every task) stays in that channel. Each task can be
     shared by a button.
   - **Direct messages only**: nothing is posted in any channel. Each participant gets the whole
@@ -519,8 +521,8 @@ A voice channel rule wins over a category rule. Otherwise the first matching rul
 rule's channel is the only place the notes may go: if the bot cannot use it, the meeting waits and
 `status`/`doctor` explain why. It is never posted anywhere more public.
 
-- **Normal rule**: only the notes move. Tasks still go to their project channels and to their
-  assignees, as usual.
+- **Normal rule**: only the notes move. Tasks follow `delivery_tasks_placement` (with the notes by
+  default) and still reach their assignees, as usual.
 - **Private rule**: everything (summary, transcript, every task) stays in that channel. No task is
   sent to a project channel, to the fallback channel, to anyone's DMs, or to Kanban/Linear on its
   own. Each task gets buttons to **send it to its assignee** or **publish it in its project channel**.

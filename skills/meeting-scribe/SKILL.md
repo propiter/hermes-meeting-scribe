@@ -73,7 +73,8 @@ Call the tools directly; they return JSON.
 - Meetings imported from Google Meet (`meta.source == "google_meet"`) have speakers `gmeet:<id>`: they
   are not Discord users; name them, never format them as mentions.
 - Each action item has its OWN `project` (a meeting can cover several); do not report the meeting's
-  project for every task. In Discord, tasks live in their project channel's thread, and a user sees
+  project for every task. In Discord, tasks are with the meeting's notes by default
+  (`delivery_tasks_placement=meeting`) or in their project channel's thread (`projects`); a user sees
   their own with 📋 My tasks.
 
 ## Verification

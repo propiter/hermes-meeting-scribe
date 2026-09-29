@@ -29,9 +29,11 @@ proveedor de LLM.
   Hermes, tableros Kanban, proyectos de Linear y los propios canales y categorías del servidor de
   Discord, y la coincidencia aproximada absorbe los errores de transcripción. Una corrección con 📁
   se recuerda.
-- **Las tareas donde vive el trabajo.** Cada tarea se publica en un hilo del canal de su proyecto,
-  con sus botones justo debajo. El chat de la reunión recibe el resumen y un índice compacto de
-  tareas. Cada responsable recibe un DM con sus tareas, y **📋 Mis tareas** abre un panel privado.
+- **Todo en un solo lugar, o las tareas donde vive el trabajo.** Por defecto el resumen, la
+  transcripción y todas las tareas (marcadas por proyecto, cada una con sus botones) quedan juntas donde
+  se publica la reunión, sin regarla por muchos canales. Con `delivery_tasks_placement projects` cada
+  tarea va a un hilo del canal de su proyecto. En ambos casos cada responsable recibe un DM con sus
+  tareas, **📋 Mis tareas** abre un panel privado y **📁 Mover** lleva una tarea concreta a otro canal.
 - **Destinos de entrega.** La carpeta de la reunión (siempre), Discord, Kanban de Hermes, Linear y
   Obsidian.
 - **Duradero e idempotente.** Cada reunión es una máquina de estados reanudable, guardada en SQLite:
@@ -443,8 +445,8 @@ Las reglas deciden, reunión a reunión, adónde van las notas. Cada regla tiene
 - **Qué reuniones**: un canal de voz, todos los canales de voz de una categoría, o las reuniones de
   Google Meet cuyo código o título encaje con un patrón (`*` como comodín).
 - **Modo**:
-  - **Normal**: las notas van al canal que elijas; las tareas van a los canales de sus proyectos y
-    al tablero como siempre.
+  - **Normal**: las notas van al canal que elijas; las tareas siguen `delivery_tasks_placement` (junto
+    a las notas por defecto, o a los canales de sus proyectos) y al tablero como siempre.
   - **Privada**: todo (resumen, transcripción, cada tarea) se queda en ese canal. Cada tarea se
     puede compartir con un botón.
   - **Solo mensajes directos**: no se publica nada en ningún canal. Cada participante recibe la
@@ -527,8 +529,8 @@ coincide. El canal de esa regla es el único sitio donde pueden ir las notas: si
 usarlo, la reunión espera y `status`/`doctor` explican por qué. Nunca se publica en un sitio más
 público.
 
-- **Regla normal**: solo cambia el canal de las notas. Las tareas siguen yendo a los canales de sus
-  proyectos y a sus responsables, como siempre.
+- **Regla normal**: solo cambia el canal de las notas. Las tareas siguen `delivery_tasks_placement`
+  (junto a las notas por defecto) y llegan a sus responsables, como siempre.
 - **Regla privada**: todo (resumen, transcripción, todas las tareas) se queda en ese canal. Ninguna
   tarea se envía por sí sola a canales de proyecto, al canal de respaldo, a mensajes directos ni a
   Kanban/Linear. Cada tarea tiene botones para **enviarla a su responsable** o **publicarla en el

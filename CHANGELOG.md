@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Everything of a meeting in one place** (`delivery_tasks_placement`, per space; `setup` asks, a
+  choice in Desktop, explained by `doctor`). `meeting` (**new default**): the summary, the transcript,
+  the index and EVERY task card (labelled by project, with its own buttons) go to the meeting's place —
+  the notes thread, the forum post or the notes channel — and nothing is posted in project channels.
+  `projects`: the previous layout (a thread per meeting in each project's channel); `projects_inline`:
+  straight in the project's channel. In every mode each assignee still gets their DM, 📁 Move still
+  sends a single task to another channel, and Kanban/Linear are unchanged. Private and direct-message
+  meetings keep their own rules. Switching and `reprocess --from deliver` re-lay a meeting without
+  duplicates: tasks move to the new place and project anchors/threads the meeting no longer uses are
+  deleted. A button click never re-lays a meeting (the layout is pinned at each delivery).
 - **Assign an "Unidentified participant" track after the meeting.** `hermes meeting-scribe speaker
   list <meeting>` shows each `unidentified-N` (one SSRC = one Discord voice connection = one person)
   with its interval and line count; `speaker assign <meeting> unidentified-N <name|id|@id>`, Desktop's
@@ -152,6 +162,16 @@ All notable changes to this project are documented here. The format follows
   (`tests/desktop`) and `plugins validate`; **not yet exercised in a running Desktop**.
 
 ### Changed
+
+- **Default behaviour change: tasks are no longer spread over project channels.** An install that did
+  not set anything gets `delivery_tasks_placement=meeting` on its next delivery. To keep the previous
+  layout run `hermes meeting-scribe config set delivery_tasks_placement projects` (or choose "In each
+  project channel" in Desktop → Settings). Meetings already delivered keep their layout on button
+  clicks; a `reprocess --from deliver` applies the current setting.
+- **`delivery_project_threads` is replaced by `delivery_tasks_placement`.** A stored value keeps
+  working without any action: `true` is read as `projects`, `false` as `projects_inline` (also as a
+  space override), with a warning in `doctor`, `config list` and Desktop asking to save the new key.
+  `config set delivery_project_threads …` now answers with the replacement.
 
 - **Notes are never posted to Hermes' home channel any more**: it is often a DM with the owner, where
   nobody else sees them and tasks cannot be routed. A channel given by id that turns out to be a DM
