@@ -24,13 +24,14 @@ joins it (reload-safe).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, ContextManager, Optional
 
 from ..domain.ids import short_id
 from ..domain.models import SOURCE_GOOGLE_MEET, Meeting, MeetingState
@@ -351,8 +352,10 @@ class MeetPoller:
 
     def __init__(self, *, space: str, importer: Callable[[], Optional[MeetImporter]], repo: Callable[[], Any],
                  settings: Callable[[], Any], connected_at: Callable[[], Optional[float]], owner: str,
-                 spawner: Optional[Callable[..., threading.Thread]] = None) -> None:
+                 spawner: Optional[Callable[..., threading.Thread]] = None,
+                 job_scope: Callable[[], ContextManager[None]] = contextlib.nullcontext) -> None:
         self.space = space
+        self._job_scope = job_scope  # owner-profile secrets around each poll (``meeting_scribe.job_scope``)
         self._lease = lease_name(space)
         self._importer = importer
         self._repo = repo
@@ -405,6 +408,10 @@ class MeetPoller:
 
     def tick(self) -> Optional[SyncReport]:
         """One poll if enabled and we hold the lease; ``None`` when skipped."""
+        with self._job_scope():
+            return self._tick()
+
+    def _tick(self) -> Optional[SyncReport]:
         if not self._settings().google_meet_enabled:
             return None
         repo = self._repo()

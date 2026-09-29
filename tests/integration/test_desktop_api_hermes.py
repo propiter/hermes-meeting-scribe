@@ -57,6 +57,13 @@ def served(tmp_path, monkeypatch):
     try:
         yield {"client": client, "home": home, "ws": web_server}
     finally:
+        # A request's owner scope turns the process into a multi-profile host (a process-wide switch in
+        # Hermes); switch it back so later tests start from a single-profile process again.
+        from agent.secret_scope import set_multiplex_active
+        from tui_gateway import launch_profile_policy
+
+        set_multiplex_active(False)
+        launch_profile_policy._snapshot = None
         web_server.app.router.routes[:] = [r for r in web_server.app.router.routes
                                            if not getattr(r, "path", "").startswith(PREFIX)]
         web_server._get_dashboard_plugins(force_rescan=True)

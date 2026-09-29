@@ -17,6 +17,7 @@ from . import cli, hermes_adapters, home
 from .analyze.projects import CallableCatalog
 from .commands import Caller, MeetingCommands, caller_from_session
 from .config import PRIMARY_COMMAND
+from .job_scope import owner_job_scope
 from .runtime import Host, Runtime
 from .sinks.kanban import HermesKanban
 from .tools import SCHEMAS, TOOLSET, MeetingTools
@@ -67,7 +68,8 @@ def build_host(ctx: Any, role: home.Role) -> Host:
     return Host(get_config=ctx.get_config, set_config=ctx.set_config, data_dir=o["data_dir"], llm=lambda: ctx.llm,
                 secret=o["secret"], spawner=hermes_adapters.context_spawner, call_mcp=call_mcp,
                 kanban=HermesKanban(), project_sources=project_sources, llm_ready=_llm_ready(ctx),
-                is_gateway=hermes_adapters.is_gateway_process, llm_store=_llm_store, role=role.detail)
+                is_gateway=hermes_adapters.is_gateway_process, llm_store=_llm_store, role=role.detail,
+                job_scope=lambda: owner_job_scope(home.owner_home))
 
 
 def _llm_store() -> Any:

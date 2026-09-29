@@ -16,12 +16,13 @@ live process.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
 from dataclasses import replace
 from datetime import timedelta
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import Any, Callable, ContextManager, Iterable, Optional, Sequence
 
 from ..domain.errors import EmptyRecording, NothingToReprocess
 from ..domain.models import (
@@ -84,8 +85,12 @@ class PipelineRunner:
     def __init__(self, repo: Repository, stages: Stages, *, clock: Clock, spawner: Spawner = _thread_spawner,
                  max_attempts: "int | Callable[[], int]" = 3, backoff: Sequence[float] = (60, 300, 900),
                  owner: Optional[str] = None, workers: "int | Callable[[], int]" = 1,
-                 max_transcriptions: "int | Callable[[], int]" = 1) -> None:
+                 max_transcriptions: "int | Callable[[], int]" = 1,
+                 job_scope: Callable[[], ContextManager[None]] = contextlib.nullcontext) -> None:
         self.repo = repo
+        # Entered around every job and Desktop command: binds the owner profile's secrets when the
+        # host multiplexes profiles (``meeting_scribe.job_scope``); a no-op otherwise.
+        self.job_scope = job_scope
         self.owner = owner or process_owner_id()
         self.stages = stages
         self.clock = clock
@@ -239,6 +244,10 @@ class PipelineRunner:
 
     def run_once(self) -> bool:
         """Run one ready job to completion or failure; False when nothing is ready."""
+        with self.job_scope():
+            return self._run_one()
+
+    def _run_one(self) -> bool:
         if self._desktop_hook("control"):
             return True
         self._maybe_reclaim()
@@ -326,7 +335,8 @@ class PipelineRunner:
         """Keep our lease fresh while a (possibly hours-long) stage runs."""
         while not stop.wait(self.HEARTBEAT_SECONDS):
             try:
-                self._desktop_hook("pulse")
+                with self.job_scope():  # its own thread: the job's scope is not inherited
+                    self._desktop_hook("pulse")
                 if not self.repo.heartbeat_job(job_id, self.owner, now=self.clock.now().timestamp()):
                     log.warning("meeting-scribe: lost the lease on job %s", job_id)
                     return
@@ -462,7 +472,8 @@ class PipelineRunner:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                self._desktop_hook("pulse")
+                with self.job_scope():  # the pulse reads settings/spaces too
+                    self._desktop_hook("pulse")
                 worked = self.run_once()
             except Exception:  # keep the worker alive; the job row keeps the error context
                 log.exception("meeting-scribe pipeline iteration crashed")

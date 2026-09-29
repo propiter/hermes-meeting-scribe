@@ -12,12 +12,13 @@ the first one from the existing setup (see :func:`meeting_scribe.spaces.bootstra
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Optional, Sequence
 
 from .analyze.extract import LlmAnalyzer
 from .analyze.projects import CallableCatalog, LearnedCatalog
@@ -67,6 +68,8 @@ class Host:
     is_gateway: Callable[[], bool] = lambda: True
     llm_store: Callable[[], Any] = lambda: None  # ``llm_config.AuxStore`` over Hermes' config (None in tests)
     role: str = ""  # ``home.role(...).detail``: why this profile runs the plugin (DESIGN §1.5)
+    # Around each background job / Meet poll: the owner profile's secrets on a multi-profile host.
+    job_scope: Callable[[], ContextManager[None]] = contextlib.nullcontext
 
 
 class Runtime:
@@ -218,7 +221,8 @@ class Runtime:
                 runner = PipelineRunner(repo, stages, clock=self.clock, spawner=self.host.spawner,
                                         max_attempts=lambda: self.settings().pipeline_max_attempts,
                                         workers=lambda: self.settings().pipeline_workers,
-                                        max_transcriptions=lambda: self.settings().pipeline_max_transcriptions)
+                                        max_transcriptions=lambda: self.settings().pipeline_max_transcriptions,
+                                        job_scope=self.host.job_scope)
                 self._services[path] = MeetingService(repo, self.layout(), runner, self.settings, clock=self.clock,
                                                       item_sinks=self.item_sinks, catalogs=self.catalogs)
                 self._wire_desktop(self._services[path])
@@ -312,7 +316,7 @@ class Runtime:
                 poller = MeetPoller(space=slug, importer=lambda s=slug: self.meet_importer(s), repo=self.repo,
                                     settings=lambda s=slug: self.settings(s),
                                     connected_at=lambda s=slug: self.google_connected_at(s),
-                                    owner=owner, spawner=self.host.spawner)
+                                    owner=owner, spawner=self.host.spawner, job_scope=self.host.job_scope)
                 self._meet_pollers[slug] = poller
                 poller.start()
         for poller in gone:
