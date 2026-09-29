@@ -174,6 +174,41 @@ class PipelineRunner:
             raise
         self.enqueue(meeting_id, Stage.DELIVER)
 
+    def after_identity_change(self, meeting: Meeting) -> Optional[str]:
+        """Queue what an identity change (a voice given to its person) needs; returns ``"edit"``,
+        ``"deliver"`` or ``None``. A meeting whose delivery completed (DONE; FAILED only at ARCHIVE, or
+        while re-publishing an earlier identity edit) gets its publication edited in place. One whose
+        delivery failed is delivered again for real, so it reads DONE only once delivered. One that
+        failed before DELIVER, or is still on its way, needs nothing: its next run uses the change."""
+        job = self.repo.get_job(meeting.id)
+        failed = job.failed_stage if job is not None else None
+        published = meeting.state is MeetingState.DONE or (meeting.state is MeetingState.FAILED and (
+            failed is Stage.ARCHIVE or (failed is Stage.DELIVER and bool(self.repo.kv_get(REPUBLISH_KV + meeting.id)))))
+        if published:
+            self.republish_identity(meeting.id)
+            return "edit"
+        if meeting.state is MeetingState.FAILED and failed is Stage.DELIVER:
+            self.retry_delivery(meeting.id)
+            return "deliver"
+        return None
+
+    def retry_delivery(self, meeting_id: str) -> None:
+        """Queue the normal DELIVER of a meeting whose delivery never completed (FAILED), e.g. after an
+        identity correction: it is a first publication, not an edit, and ends DONE only if it really is
+        delivered. Unlike ``reprocess --from deliver`` it never authorizes moving notes out of a DM."""
+        meeting = self._meeting(meeting_id)
+        previous = self.repo.hold_job(meeting_id)
+        if previous is None:
+            raise ValueError("meeting is being processed right now")
+        try:
+            self.repo.kv_set(REPUBLISH_KV + meeting_id, None)
+            self.repo.kv_set(KV_MOVE_FROM_DM + meeting_id, None)
+            self.stages.persist(meeting.with_state(rewind_target(Stage.DELIVER), rewind=True))
+        except BaseException:
+            self.repo.unhold_job(meeting_id, previous)
+            raise
+        self.enqueue(meeting_id, Stage.DELIVER)
+
     def reprocess(self, meeting_id: str, stage: Stage) -> Stage:
         """Rewind and queue; returns the stage actually used (see :func:`effective_stage`)."""
         meeting = self._meeting(meeting_id)

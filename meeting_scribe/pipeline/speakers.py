@@ -63,7 +63,8 @@ class Assigned:
     lines: int
     tasks: int
     changed: bool  # False: it was already theirs (idempotent)
-    redeliver: bool
+    redeliver: bool  # the published notes are updated in place
+    deliver: bool = False  # the meeting was never delivered: its delivery is queued again
 
 
 def _records(repo: Any, meeting_id: str) -> dict[str, dict[str, Any]]:
@@ -196,12 +197,12 @@ def _assign(service: Any, meeting_id: str, label: str, who: str, *, actor: str, 
     repo.audit_speaker(meeting.id, label, actor, (old or {}).get("user"), target,
                        service.clock.now().isoformat())
     service.runner.stages.persist(meeting)
-    redeliver = meeting.state in (MeetingState.DONE, MeetingState.FAILED) and read_notes(folder) is not None
-    if redeliver:
-        service.runner.republish_identity(meeting.id)
+    step = service.runner.after_identity_change(meeting) if read_notes(folder) is not None else None
+    redeliver, deliver = step == "edit", step == "deliver"
     log.info("meeting-scribe %s: %s assigned to %s (%s): %d line(s), %d task(s)%s", meeting.id, label,
-             person.name, person.user_id, moved, tasks, "; re-delivering" if redeliver else "")
-    return Assigned(label, person.user_id, person.name, moved, tasks, True, redeliver)
+             person.name, person.user_id, moved, tasks,
+             "; re-delivering" if redeliver else "; delivering" if deliver else "")
+    return Assigned(label, person.user_id, person.name, moved, tasks, True, redeliver, deliver)
 
 
 def _reassign_tasks(repo: Any, folder: Any, meeting: Meeting, label: str, person: Speaker, lang: str) -> int:

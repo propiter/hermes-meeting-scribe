@@ -78,4 +78,6 @@ def dispatch(args: argparse.Namespace, rt: Any) -> int:
     _print(t("speakers.assigned", lang, label=done.label, name=done.name, lines=done.lines, tasks=done.tasks))
     if done.redeliver:
         _print(t("speakers.redelivering", lang))
+    elif done.deliver:
+        _print(t("speakers.delivering", lang))
     return 0

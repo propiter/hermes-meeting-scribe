@@ -95,6 +95,8 @@ class DiscordNotesSink:
         except Exception as exc:  # timeout, permissions, unknown channel: reported, the job retries
             fut.cancel()
             return SinkResult(SINK, False, errors=(f"{type(exc).__name__}: {exc}",))
+        if identity and not url:  # nothing was ever published: nothing edited, and nothing claimed as delivered
+            return SinkResult(SINK, True, skipped=("not published yet",))
         return SinkResult(SINK, True, (url,))
 
     # -- gateway loop ---------------------------------------------------------------------------

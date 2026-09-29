@@ -426,6 +426,7 @@
   "speakers.no_lines": "no transcript lines",
   "speakers.assigned": "{label} is now {name}: {lines} transcript line(s) and {tasks} task(s) moved.",
   "speakers.already": "{label} was already assigned to {name}; nothing changed.",
+  "speakers.delivering": "The notes had not been delivered yet: they will be delivered now.",
   "speakers.redelivering": "The published notes will be updated in place.",
   "speakers.error_unknown_person": "{detail} is not one of this meeting's participants.",
   "speakers.error_not_unidentified": "{detail} is not an unidentified participant track (unidentified-N).",

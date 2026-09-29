@@ -426,6 +426,7 @@
   "speakers.no_lines": "sin líneas de transcripción",
   "speakers.assigned": "{label} ahora es {name}: se movieron {lines} línea(s) de transcripción y {tasks} tarea(s).",
   "speakers.already": "{label} ya estaba asignada a {name}; no cambió nada.",
+  "speakers.delivering": "Las notas aún no se habían entregado: se entregarán ahora.",
   "speakers.redelivering": "Las notas publicadas se actualizarán en su sitio.",
   "speakers.error_unknown_person": "{detail} no es uno de los participantes de esta reunión.",
   "speakers.error_not_unidentified": "{detail} no es una pista de participante sin identificar (unidentified-N).",

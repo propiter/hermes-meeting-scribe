@@ -385,6 +385,8 @@ class ButtonActions:
                      if done.changed else t("speakers.already", self.lang, label=label, name=done.name))
             if done.redeliver:
                 reply += "\n" + t("speakers.redelivering", self.lang)
+            elif done.deliver:
+                reply += "\n" + t("speakers.delivering", self.lang)
         except (KeyError, LookupError, ValueError) as exc:
             log.warning("meeting-scribe: assigning %s of %s refused: %s", label, meeting_id, exc)
             reply = friendly_error(exc, self.lang)
