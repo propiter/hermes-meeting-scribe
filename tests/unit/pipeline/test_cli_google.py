@@ -199,8 +199,9 @@ def test_setup_enabling_google_without_channel_warns(grt, capsys):
 
 
 def test_setup_interactive_asks_for_the_meet_channel_again_when_left_empty(grt, capsys, monkeypatch):
-    answers = iter([""] * 10 + ["y", "", "5555"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers, ""))
+    answers = iter(["y", "", "5555"])  # the Google question, then the Meet channel twice; Enter elsewhere
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt="": next(answers, "") if "[y/N]" in prompt or "google_meet" in prompt else "")
     code, out = run(grt, ["setup"], capsys)
     assert code == 0 and grt.cfg["google_meet_discord_channel"] == "5555"
 

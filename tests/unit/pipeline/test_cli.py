@@ -127,6 +127,20 @@ def test_setup_interactive_uses_defaults_on_enter(rt, capsys, monkeypatch):
     assert "transcribe_model" not in rt.cfg and rt.settings().transcribe_model == "medium"
 
 
+def test_setup_asks_where_tasks_go_and_explains_the_choices(rt, capsys, monkeypatch):
+    prompts = []
+
+    def answer(prompt=""):
+        prompts.append(prompt)
+        return "projects" if prompt.startswith("delivery_tasks_placement") else ""
+    monkeypatch.setattr("builtins.input", answer)
+    code, out = run(rt, ["setup"], capsys)
+    assert code == 0 and "delivery_tasks_placement [meeting]: " in prompts
+    assert "projects_inline" in out and rt.cfg["delivery_tasks_placement"] == "projects"
+    code, _ = run(rt, ["setup", "--non-interactive", "--tasks-placement", "meeting"], capsys)
+    assert code == 0 and rt.cfg["delivery_tasks_placement"] == "meeting"
+
+
 def test_setup_rejects_bad_value(rt, capsys):
     code, out = run(rt, ["setup", "--non-interactive", "--kanban-mode", "sometimes"], capsys)
     assert code == 2 and rt.cfg == {}

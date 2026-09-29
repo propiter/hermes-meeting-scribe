@@ -162,6 +162,7 @@
   "cli.setup_intro": "Configuración de meeting-scribe — pulsa Enter para mantener el valor entre corchetes.",
   "cli.setup_language_hint": "Se recomienda fijar el idioma hablado: la autodetección puede cambiar a mitad de la reunión.",
   "cli.setup_saved": "Se guardaron {count} ajuste(s).",
+  "cli.setup_tasks_placement": "Dónde van las tareas — meeting: todo en un solo lugar con las notas (recomendado, menos ruido); projects: cada tarea en un hilo del canal de su proyecto; projects_inline: directo en el canal del proyecto. Los responsables reciben su DM en todos los casos.",
   "cli.waiting_destination": "esperando un canal de Discord",
   "cli.waiting_retried": "{count} entrega(s) que esperaban canal se reintentarán ahora en el gateway.",
   "cmd.capture_unavailable": "La grabación en vivo no está disponible en esta instalación. Puedes seguir consultando, buscando y reprocesando reuniones.",

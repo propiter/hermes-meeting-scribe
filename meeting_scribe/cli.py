@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional, Protocol
 from . import cli_google, cli_routes, cli_speakers, cli_spaces, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
 from .commands import status_headline
-from .config import (DESTINATION_KEYS, LEGACY_KEYS, RETIRED_KEYS, SPEC, Settings, canonical_key, config_schema, retired_hint,
+from .config import (DESTINATION_KEYS, LEGACY_KEYS, RETIRED_KEYS, SPEC, TASK_PLACEMENTS, Settings, canonical_key, config_schema, retired_hint,
                      validate_value)
 from .domain.models import MeetingState, Stage
 from .i18n import t
@@ -55,6 +55,8 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     s.add_argument("--no-autojoin", dest="autojoin", action="store_false")
     s.add_argument("--retention", choices=SPEC["audio_retention"].choices)
     s.add_argument("--kanban-mode")
+    s.add_argument("--tasks-placement", choices=TASK_PLACEMENTS,
+                   help="meeting: every task with the notes (default); projects / projects_inline: in project channels")
     s.add_argument("--linear-mode")
     s.add_argument("--linear-team")
     s.add_argument("--obsidian-vault")
@@ -151,7 +153,8 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
     lang = current.ui_language
     flags: dict[str, Any] = {
         "transcribe_language": args.language, "transcribe_model": args.model,
-        "delivery_discord_channel": args.notes_channel, "owners": args.owners, "autojoin_enabled": args.autojoin,
+        "delivery_discord_channel": args.notes_channel, "delivery_tasks_placement": args.tasks_placement,
+        "owners": args.owners, "autojoin_enabled": args.autojoin,
         "audio_retention": args.retention, "kanban_mode": args.kanban_mode, "linear_mode": args.linear_mode,
         "linear_default_team": args.linear_team, "obsidian_vault_path": args.obsidian_vault}
     google = {"google_meet_enabled": getattr(args, "google_meet", None),
@@ -164,6 +167,8 @@ def _setup(args: argparse.Namespace, rt: CliRuntime) -> int:
             if key in answers:
                 continue
             default = _fmt(getattr(current, key))
+            if key == "delivery_tasks_placement":
+                _print(t("cli.setup_tasks_placement", lang))
             if key == "transcribe_model":
                 for m in MODELS:
                     _print("  " + t("cli.model_estimate", lang, model=m, factor=realtime_factor(m),

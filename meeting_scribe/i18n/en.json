@@ -162,6 +162,7 @@
   "cli.setup_intro": "meeting-scribe setup — press Enter to keep the value in brackets.",
   "cli.setup_language_hint": "Pinning the spoken language is strongly recommended: auto-detect can flip mid-meeting.",
   "cli.setup_saved": "Saved {count} setting(s).",
+  "cli.setup_tasks_placement": "Where the tasks go — meeting: everything in one place with the notes (recommended, less noise); projects: each task in a thread of its project's channel; projects_inline: straight in the project's channel. Assignees get their DM in every case.",
   "cli.waiting_destination": "waiting for a Discord channel",
   "cli.waiting_retried": "{count} delivery(ies) waiting for a channel will be retried now by the gateway.",
   "cmd.capture_unavailable": "Live recording isn't available in this installation. You can still browse, search and reprocess meetings.",
