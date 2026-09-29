@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Assign an "Unidentified participant" track after the meeting.** `hermes meeting-scribe speaker
+  list <meeting>` shows each `unidentified-N` (one SSRC = one Discord voice connection = one person)
+  with its interval and line count; `speaker assign <meeting> unidentified-N <name|id|@id>`, Desktop's
+  "Assign to…" (Summary and Transcript) and a "Who is …?" button on the Discord notes (participants
+  or owners; private/direct-message gates kept) give it to its owner: transcript, index, tasks,
+  speakers and `missing_audio` are renamed, a reprocess keeps it, and published messages are edited
+  in place (no duplicates, no new pings). Idempotent. At the close, a track whose owner is the only
+  person in the call without a voice of their own is given to them automatically.
+
 - **Participants mentioned in the notes** (`delivery_mention_participants`, on by default,
   per space, a switch in Desktop). The first message of the notes — channel, thread, forum post or a
   private rule's channel — @mentions the humans of the meeting (Discord ids; Meet attendees via
@@ -160,6 +169,16 @@ All notable changes to this project are documented here. The format follows
   is plainer.
 
 ### Fixed
+
+- **A voice given to the wrong person, and a voice left unidentified with only one possible owner**
+  (seen in a real meeting). Mute flags were used as evidence of who owns an SSRC, but the voice-state
+  cache lags: the person talking before any SPEAKING was flagged muted, so her SSRC got no owner; when
+  her flag caught up she became "the only unmuted person without SSRC" just as a newcomer (flagged
+  muted on join) sent audio on a new SSRC, which went to her track. Plain Opus is now never written to
+  a person's track without SPEAKING or a DAVE key: it gets its own `unidentified-N` and an inferred
+  owner (presence while it talked, mute flags ignored, joins seen after it started excluded, known
+  SSRCs and other unowned SSRCs counted), overridden by a later SPEAKING with a WARNING. The label log
+  says how many frames were DAVE, whether a DAVE session was active and who the candidates were.
 
 - **Voices Discord never announced are no longer lost.** Discord often sends no SPEAKING for
   people already in the call when the bot joins; their audio was decoded still encrypted and

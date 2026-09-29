@@ -250,27 +250,69 @@ touching Hermes:
   frame of the SSRC proves its owner, `CONFIRM_PACKETS` suffice, and the loop
   stays cheap; the replay opens the rest. Voice states of the channel
   alone are enough candidates when op 11 never arrives.
-- **Without DAVE:** after `IDENTIFY_GRACE` (2 s) with no SPEAKING, the SSRC goes
-  to the sole unmuted person present without an SSRC; another bot present, or
-  two candidates, blocks the guess. With several candidates, **voice-state
-  timing** decides when it can: someone muted or absent at two consecutive
-  presence snapshots while the SSRC sent ≥ `EVIDENCE_PACKETS` (10) packets in
-  between is not its owner; if exactly one person is left (and no other
-  unowned SSRC is left with the same person) it is theirs. Timing can also name
-  an `unidentified-N` track later. Otherwise the audio stays unidentified.
-- **Replay.** Once an owner is known (key, sole candidate, timing, or a late
-  SPEAKING — always authoritative), the whole retained audio is decoded and
+- **Without DAVE (or DAVE passthrough): no proof, so never a person's track.**
+  Plain Opus carries nothing that says whose it is. Without SPEAKING it is
+  never written to a person's own track: after `UNIDENTIFIED_AFTER` (10 s), or
+  at the close, it gets its own track `unidentified-N`, speaker "Unidentified
+  participant" (transcribed). **One `unidentified-N` = one SSRC = one Discord
+  voice connection = one person.**
+- **Inferred owner.** Its owner is inferred as metadata (`VoiceReport.inferred`,
+  recomputed on every drain) when exactly one person can own it: everyone in
+  the call while it sent audio (voice states every tick, ops 11/12; bots
+  included, so another bot blocks it), minus people whose SSRC is already known
+  (mapped, proven or inferred), people absent at two consecutive presence
+  snapshots while it talked, and people whose join (a voice state, a later op
+  11, op 12) was seen more than `JOIN_LAG` (2 s) after its first packet — a
+  connection that did not exist yet sent nothing. Two SSRCs that could both be
+  the same only person: neither is named. **Mute flags are no evidence**: the
+  voice-state cache lags (see below). At the close the session gives an
+  inferred (or late-SPEAKING) track to its owner: `tracks/unidentified-N.ogg`
+  becomes `tracks/<user id>.ogg` and the label speaker disappears; if they
+  already have a track the label keeps its audio, named after them.
+- **Replay.** Once an owner is PROVEN (key or a late SPEAKING — always
+  authoritative), the whole retained audio is decoded and
   written at its original arrival times, `REPLAY_BATCH` (1500 frames = 30 s)
   per drain so a long backlog never stalls the loop; live packets queue behind
   it and the SSRC is handed to Hermes' live path only when the backlog is
   empty, so the track is in time order. The final drain replays everything.
-- **Never the wrong person.** Decodable audio still unattributable after
-  `UNIDENTIFIED_AFTER` (10 s) is written to its own track
-  `unidentified-N`, speaker "Unidentified participant" (transcribed); a later
-  SPEAKING for that SSRC names the track after that person. Re-joins get a new
-  SSRC: a mapping older than the user's last join is not reused.
+  A SPEAKING for an SSRC already streaming as `unidentified-N` names that
+  track; one that contradicts an inference drops it with a WARNING
+  (`contradicted`) — the audio never was in the inferred person's track.
+  Re-joins get a new SSRC: a mapping older than the user's last join is not
+  reused.
+- **Log.** Labelling an SSRC logs a WARNING with how many of its frames were
+  DAVE, whether a DAVE session was active and ready, the candidates left and
+  why it was not decided; the close logs every label with its owner.
+- **Why (a real meeting).** The bot joined a call with A and B (op 11 listed
+  both). A's SSRC sent audio with no SPEAKING; B's SPEAKING came 2.7 s later.
+  The voice-state cache still flagged A muted, so the old rule "the sole
+  *unmuted* person without SSRC" found nobody and A's 20 minutes became
+  `unidentified-1` with no owner. A minute later C joined flagged muted and her
+  client sent a little audio on a new SSRC 3 s after the join; A's flag had
+  caught up, so A was now the "sole unmuted person without SSRC" and C's
+  packets went to A's track until C's SPEAKING arrived 8 s later. Both came
+  from treating mute flags as evidence and from a guess that did not count
+  A's own unnamed SSRC nor C's fresh join. `tests/unit/capture/test_voice_identity.py`
+  replays that sequence (receiver and session).
+- **Assigning after the meeting.** Any `unidentified-N` left can be given to a
+  participant later: `hermes meeting-scribe speaker list <meeting>` (interval
+  and lines of each track) and `speaker assign <meeting> unidentified-N
+  <name|id|@id>`; Desktop (Summary and Transcript: "Assign to…", a queued
+  `assign_speaker` command run by the gateway); Discord, a "Who is
+  <Unidentified participant>?" button on the notes' first message (a
+  participant of the meeting or an owner; private meetings only in their
+  channel, direct-message meetings only in the clicker's own copy). Assigning
+  renames the lines (`transcript.jsonl`, `transcript.md`, the index), the tasks
+  the track owned, the speaker list and `missing_audio`, keeps the mapping
+  (`speakers.assigned.<meeting>`, applied again by `reprocess
+  from=transcribe`), and re-delivers a published meeting: every message is
+  edited in place, nothing is duplicated and an edit pings nobody. Assigning
+  the same track to the same person again changes nothing; to someone else, it
+  is refused.
 - **Missing audio.** Each tick adds elapsed time to every unmuted human in the
-  channel. At the end, anyone unmuted there > 60 s whose voice reached no track
+  channel (here the flag only estimates who could have spoken). At the end,
+  anyone unmuted there > 60 s whose voice reached no track — nor an
+  `unidentified-N` given to them —
   is stored on the meeting (`missing_audio`) and logged as a WARNING with the
   SSRCs never identified; the stop announcement, the Discord notes and
   `notes.md` say "Could not capture the audio of: X, Y" / "No se pudo capturar

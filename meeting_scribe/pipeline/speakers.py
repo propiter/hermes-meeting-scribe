@@ -19,7 +19,8 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Optional, Sequence
 
-from ..domain.models import ActionItem, Meeting, MeetingState, Speaker, Stage, Utterance, is_unidentified
+from ..domain.models import (UNIDENTIFIED_PREFIX, ActionItem, Meeting, MeetingState, Speaker, Stage, Utterance,
+                             is_unidentified)
 from ..domain.names import match_person
 from ..storage.artifacts import read_notes, read_transcript, write_notes, write_transcript, write_transcript_md
 
@@ -93,7 +94,7 @@ def tracks(repo: Any, folder: Any, meeting: Meeting) -> list[Track]:
            for label in names if is_unidentified(label) and label not in done]
     out += [Track(label, names.get(rec["user"], rec["user"]), int(rec["lines"]), rec["first"], rec["last"],
                   str(rec["user"])) for label, rec in done.items()]
-    return sorted(out, key=lambda tr: int(tr.label[len("unidentified-"):]))
+    return sorted(out, key=lambda tr: int(tr.label[len(UNIDENTIFIED_PREFIX):]))
 
 
 def _span(lines: Sequence[Utterance]) -> tuple[int, Optional[float], Optional[float]]:

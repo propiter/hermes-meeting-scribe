@@ -26,9 +26,10 @@ decoder. We swap ``_decoders`` for :class:`_Decoders`: for an unmapped SSRC it r
   SSRC gets its own ``unidentified-N`` track — one SSRC is one Discord connection, so one person —
   and its owner is *inferred* as metadata (:attr:`VoiceReport.inferred`) whenever exactly one
   person can own it: of everyone in the call while it sent audio (voice states and ops 11/12,
-  bots included), minus people whose SSRC is already known (mapped, proven or inferred) and people
-  absent at two consecutive snapshots while it talked, one is left, and no other SSRC without owner
-  could be theirs. Mute flags are no evidence (the voice-state cache lags: a real
+  bots included), minus people whose SSRC is already known (mapped, proven or inferred), people
+  absent at two consecutive snapshots while it talked and people whose join (voice state, op 11/12)
+  was seen more than ``JOIN_LAG`` seconds after its first packet, one is left, and no other SSRC
+  without owner could be theirs. Mute flags are no evidence (the voice-state cache lags: a real
   meeting had a person flagged muted while their audio arrived). The inference
   is recomputed on every drain, so it follows the call; a SPEAKING that contradicts it wins and is
   logged as a WARNING — the audio never touched the wrong person's track, only the label moves.
@@ -57,13 +58,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Optional
 
+from ..domain.models import UNIDENTIFIED_PREFIX
+
 log = logging.getLogger(__name__)
 
 Clock = Callable[[], float]
 Frames = list[tuple[float, bytes]]
 _CLASSES: dict[type, type] = {}
 DAVE_MAGIC = b"\xfa\xfa"
-UNIDENTIFIED_PREFIX = "unidentified-"
 _HOW = {"dave": "DAVE key", "speaking": "late SPEAKING", "sole": "only person in the call without a voice"}
 FRAME_OVERHEAD = 120  # bytes of Python objects per retained frame (``_Frame`` + its ``bytes``)
 
