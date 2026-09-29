@@ -158,8 +158,12 @@ class Stages:
         candidates, _errors = gather_candidates(self.catalogs(), meeting)
         notes = self.analyzer.analyze(meeting, utterances, candidates)
         # Rephrased titles must keep their ids, or a reprocess duplicates Kanban/Linear items.
-        notes = replace(notes, action_items=tuple(reconcile_ids(self.repo.list_action_items(meeting.id),
-                                                                notes.action_items)))
+        previous = {a.id: a for a in self.repo.list_action_items(meeting.id)}
+        items = reconcile_ids(list(previous.values()), notes.action_items)
+        notes = replace(notes, action_items=tuple(
+            replace(a, owner_track_id=previous[a.id].owner_track_id)
+            if a.id in previous and a.owner_speaker_id == previous[a.id].owner_speaker_id else a
+            for a in items))
         resolver = ProjectResolver(self.settings(meeting.space).projects_min_confidence, self.repo)
         res = resolver.resolve(meeting, candidates, notes.project, notes.project_confidence)
         project = res.candidate.name if res.candidate else None

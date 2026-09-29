@@ -78,6 +78,19 @@ def test_correction_after_retranscription_keeps_original_track(world):
     assert [u.track_id for u in read_transcript(service.folder(service.require(mid)))] == [None, LABEL, LABEL]
 
 
+def test_reanalysis_retains_task_provenance_for_later_corrections(world):
+    service, runner, _, mid = world
+    service.assign_speaker(mid, LABEL, "11")
+    drain(runner)
+    runner.stages.analyzer.analyze = lambda *args: Notes(
+        meeting_title="Informe semanal", tldr="t", summary="s", language="es",
+        action_items=(ActionItem(id="a1", title="Enviar informe", owner_speaker_id="11", owner_name="Luis"),))
+    service.reprocess(mid, Stage.ANALYZE)
+    drain(runner)
+    service.assign_speaker(mid, LABEL, "10", admin=True)
+    assert service.repo.get_action_item(mid, "a1").owner_speaker_id == "10"
+
+
 def test_tracks_show_interval_and_lines(world):
     service, _, _, mid = world
     [track] = service.speaker_tracks(service.require(mid))
