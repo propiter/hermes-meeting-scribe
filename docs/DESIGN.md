@@ -256,19 +256,33 @@ touching Hermes:
   at the close, it gets its own track `unidentified-N`, speaker "Unidentified
   participant" (transcribed). **One `unidentified-N` = one SSRC = one Discord
   voice connection = one person.**
-- **Inferred owner.** Its owner is inferred as metadata (`VoiceReport.inferred`,
-  recomputed on every drain) when exactly one person can own it: everyone in
-  the call while it sent audio (voice states every tick, ops 11/12; bots
-  included, so another bot blocks it), minus people whose SSRC is already known
-  (mapped, proven or inferred), people absent at two consecutive presence
-  snapshots while it talked, and people whose join (a voice state, a later op
-  11, op 12) was seen more than `JOIN_LAG` (2 s) after its first packet — a
-  connection that did not exist yet sent nothing. Two SSRCs that could both be
-  the same only person: neither is named. **Mute flags are no evidence**: the
-  voice-state cache lags (see below). At the close the session gives an
-  inferred (or late-SPEAKING) track to its owner: `tracks/unidentified-N.ogg`
-  becomes `tracks/<user id>.ogg` and the label speaker disappears; if they
-  already have a track the label keeps its audio, named after them.
+- **Presence is a suggestion, not proof.** `VoiceReport.inferred` is recomputed
+  on every drain but is NOT included in `owners()`. Presence snapshots, join
+  timing and elimination of proven voices can suggest the only remaining
+  candidate; they cannot prove the candidate set is complete. Delayed voice
+  states and invisible talkers must never rename files, transcript lines or
+  task owners. The track stays "Unidentified participant" with `suggested_user`
+  and `suggestion_reason` persisted in the speaker metadata. Desktop/Discord
+  offer "Is this X?" / "¿Es X?" for one-click confirmation; CLI lists the
+  suggestion and accepts `speaker assign`. Mute flags are never evidence.
+- **Strict closing-time exception.** Automatic elimination requires an initial
+  op 11 observed by `ScribeVoiceClient` from the voice handshake, a lossless
+  op 11/12/13 history passed to the receiver before its first presence snapshot,
+  no backlog overflow or websocket change, agreement with EVERY voice-state
+  snapshot, exactly one unproven candidate and no competing unknown SSRC.
+  Any connection change in the track interval prevents it. A plain receiver
+  handed an op 11 later is NOT an authoritative observer. Disagreement latches
+  uncertainty for the session, even if the caches later converge. This is
+  deliberately conservative. Only the final drain may expose these owners.
+  The A/B initial list, B SPEAKING at 2.7 seconds, A never announced sequence
+  is covered by `test_authoritative_membership.py`; the late-state, invisible
+  talker and rapid-rejoin adversarial sequences remain unnamed or suggestions.
+  Proven SPEAKING/DAVE identities (or this closing-time exception) may rename
+  `tracks/unidentified-N.ogg` to `tracks/<user id>.ogg`; ordinary suggestions may not.
+- **Connections, not people, own SSRCs.** op 13 removes current SSRC mappings
+  (already buffered audio is preserved). op 12 advances the user's connection
+  generation even if the voice-state cache never showed a leave. A previous
+  connection never excludes its user from current candidates.
 - **Replay.** Once an owner is PROVEN (key or a late SPEAKING — always
   authoritative), the whole retained audio is decoded and
   written at its original arrival times, `REPLAY_BATCH` (1500 frames = 30 s)
@@ -307,8 +321,22 @@ touching Hermes:
   (`speakers.assigned.<meeting>`, applied again by `reprocess
   from=transcribe`), and re-delivers a published meeting: every message is
   edited in place, nothing is duplicated and an edit pings nobody. Assigning
-  the same track to the same person again changes nothing; to someone else, it
-  is refused.
+  the same track to the same person again changes nothing. Non-owner participants
+  need BOTH the meeting-participant gate and Hermes authorization and may only
+  make the first assignment or confirm its suggestion. Owners bypass Hermes'
+  participant allowlist but keep the private/DM location gate.
+  CLI/Desktop operators and Discord owners may correct or undo using
+  `speaker assign <meeting> unidentified-N unassigned` (or the picker). Source
+  `track_id` on utterances and `owner_track_id` on tasks retain the identity
+  of the audio, so correcting a track does not steal unrelated lines/tasks
+  already owned by its previous or next owner. Legacy assignments without
+  source provenance fail closed rather than guessing. SQLite `speaker_audit`
+  records actor, timestamp, previous and next user; Desktop displays it.
+  Corrections queue `republish_identity`, NOT admin `reprocess(DELIVER)`:
+  only editable publication sinks run, no `move_from_dm` flag is armed, no
+  external task creation is repeated and old assignee DM panels are not resent.
+  Legacy DM summaries are edited only at their existing message ids: no new
+  DM delivery, migration or pending move is started by an identity change.
 - **Missing audio.** Each tick adds elapsed time to every unmuted human in the
   channel (here the flag only estimates who could have spoken). At the end,
   anyone unmuted there > 60 s whose voice reached no track — nor an

@@ -14,8 +14,16 @@ All notable changes to this project are documented here. The format follows
   "Assign to…" (Summary and Transcript) and a "Who is …?" button on the Discord notes (participants
   or owners; private/direct-message gates kept) give it to its owner: transcript, index, tasks,
   speakers and `missing_audio` are renamed, a reprocess keeps it, and published messages are edited
-  in place (no duplicates, no new pings). Idempotent. At the close, a track whose owner is the only
-  person in the call without a voice of their own is given to them automatically.
+  in place. Presence-only inference is now a saved suggestion ("¿Es X?"), never an identity.
+  Closing-time automatic assignment requires complete handshake membership, agreement with
+  voice states and no connection changes or ambiguous SSRCs; otherwise the track stays unnamed.
+- **Correct and undo voice assignments.** CLI/Desktop operators and Discord owners can change an
+  assignment or choose `unassigned`; source-track provenance protects unrelated lines and tasks.
+  SQLite keeps who changed what and when, displayed in Desktop. Participants need Hermes
+  authorization and may only make the first assignment. Identity republication never grants a
+  legacy DM move, reruns external task sinks or resends old assignee panels.
+- **Voice reconnections.** CLIENT_DISCONNECT retires current SSRC mappings; CLIENT_CONNECT advances
+  the connection generation even when voice-state snapshots miss the disconnect.
 
 - **Participants mentioned in the notes** (`delivery_mention_participants`, on by default,
   per space, a switch in Desktop). The first message of the notes — channel, thread, forum post or a

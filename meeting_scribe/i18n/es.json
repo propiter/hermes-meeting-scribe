@@ -416,7 +416,7 @@
   "cfg.delivery_mention_participants.help": "El primer mensaje de las notas menciona con @ a quienes estuvieron en la reunión (una vez, al publicarlas por primera vez; en un canal privado solo a quienes pueden verlo). Nunca @everyone, @here ni roles.",
   "speakers.correct": "Corregir voz de {name}",
   "speakers.error_owner_required": "Solo un propietario puede corregir o deshacer una asignación.",
-  "speakers.error_provenance_missing": "Esta asignación antigua no conserva la pista original. Reprocesa la transcripción antes de corregirla.",
+  "speakers.error_provenance_missing": "Esta asignación antigua no conserva la pista original; no se puede corregir de forma segura sin recuperar su procedencia.",
   "speakers.suggestion": "¿Es {name}?",
   "speakers.none": "No hay pistas de participantes sin identificar en esta reunión.",
   "speakers.one_person_each": "Cada pista sin identificar es una conexión de voz de Discord: una persona.",

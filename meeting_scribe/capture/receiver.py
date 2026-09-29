@@ -24,15 +24,12 @@ decoder. We swap ``_decoders`` for :class:`_Decoders`: for an unmapped SSRC it r
 * Plain Opus (no DAVE, or DAVE passthrough): no proof exists, so it is NEVER written to a person's
   own track. After ``UNIDENTIFIED_AFTER`` seconds without SPEAKING (or when the recording ends) the
   SSRC gets its own ``unidentified-N`` track — one SSRC is one Discord connection, so one person —
-  and its owner is *inferred* as metadata (:attr:`VoiceReport.inferred`) whenever exactly one
-  person can own it: of everyone in the call while it sent audio (voice states and ops 11/12,
-  bots included), minus people whose SSRC is already known (mapped, proven or inferred), people
-  absent at two consecutive snapshots while it talked and people whose join (voice state, op 11/12)
-  was seen more than ``JOIN_LAG`` seconds after its first packet, one is left, and no other SSRC
-  without owner could be theirs. Mute flags are no evidence (the voice-state cache lags: a real
-  meeting had a person flagged muted while their audio arrived). The inference
-  is recomputed on every drain, so it follows the call; a SPEAKING that contradicts it wins and is
-  logged as a WARNING — the audio never touched the wrong person's track, only the label moves.
+  and presence-based elimination provides only a SUGGESTION (:attr:`VoiceReport.inferred`).
+  A single visible candidate cannot prove the membership list is complete. Suggestions stay
+  outside ``owners()`` and never rename tracks. Only a final drain with a gap-free handshake
+  observer, matching presence throughout, and no connection changes in the audio interval may
+  automatically eliminate the sole remaining candidate. SPEAKING/DAVE remain identity proof.
+  Mute flags and join-lag heuristics are not proof; a contradicting SPEAKING wins and is logged.
 
 Once an owner is PROVEN (DAVE key or SPEAKING), the whole retained audio — from the first packet — is
 decoded and stamped with its ORIGINAL arrival times, in batches of ``REPLAY_BATCH`` frames per drain
@@ -196,7 +193,7 @@ class VoiceReport:
     authoritative: dict[str, int] = field(default_factory=dict)  # complete membership, at final drain only
 
     def owners(self) -> dict[str, int]:
-        """Owner of each unidentified track that has one: SPEAKING first, then the inference."""
+        """Proven owners and strict closing-time elimination; ordinary suggestions are excluded."""
         out = dict(self.authoritative)
         out.update(self.resolved)
         return out
@@ -562,8 +559,8 @@ def scribe_receiver_class(base: type) -> type:
                              self._why(ssrc, mine, rival))
                 else:
                     self._inferred[q.label] = new
-                    log.info("meeting-scribe: %s (ssrc=%d) is user %d (%s); its track keeps the label "
-                             "until the recording closes", q.label, ssrc, user, _HOW["sole"])
+                    log.info("meeting-scribe: %s (ssrc=%d) suggests user %d (%s); not identity proof",
+                             q.label, ssrc, user, _HOW["sole"])
 
         @staticmethod
         def _why(ssrc: int, cands: set[int], rival: bool) -> str:

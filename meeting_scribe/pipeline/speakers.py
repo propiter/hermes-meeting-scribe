@@ -1,9 +1,9 @@
 """Give an "unidentified participant" track to its owner after the meeting (DESIGN §4.1).
 
 Each ``unidentified-N`` is ONE SSRC, i.e. one Discord voice connection, i.e. one person whose voice
-the bot could not prove (no SPEAKING, no DAVE key). Capture already gives it to its owner at the
-close when exactly one person in the call had no voice of their own while it talked; otherwise an
-administrator or someone who was in the meeting assigns it here (CLI, Desktop, Discord button).
+the bot could not prove (no SPEAKING, no DAVE key). Presence is only a suggestion unless capture
+has complete authoritative membership. An authorized participant can make the first assignment;
+operators can correct or undo it, using preserved source-track provenance and an audit trail.
 
 Assigning rewrites what the meeting says, never the audio: transcript lines (``transcript.jsonl``,
 ``transcript.md``, the index), the tasks owned by the track, the speaker list and ``missing_audio``.
@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Optional, Sequence
 
-from ..domain.models import (UNIDENTIFIED_PREFIX, ActionItem, Meeting, MeetingState, Speaker, Stage, Utterance,
+from ..domain.models import (UNIDENTIFIED_PREFIX, ActionItem, Meeting, MeetingState, Speaker, Utterance,
                              is_unidentified)
 from ..domain.names import match_person
 from ..storage.artifacts import read_notes, read_transcript, write_notes, write_transcript, write_transcript_md
