@@ -443,6 +443,20 @@ test('settings: section nav, fields from the schema, origins', opts, async () =>
   assert.match(html, /for="ms-set-autojoin_min_humans"/)
 })
 
+test('settings: where tasks are posted is a plain-language choice, all together by default', opts, async () => {
+  const { createElement } = await import('react')
+  const field = { key: 'delivery_tasks_placement', type: 'str', group: 'delivery', label: 'Dónde se publican las tareas',
+    help: 'h', default: 'meeting', choices: ['meeting', 'projects', 'projects_inline'], storage: 'plugin' }
+  const settings = { ...SETTINGS, schema: { groups: [{ key: 'delivery', label: 'Dónde se publican las notas' }], fields: [field] },
+    values: { delivery_tasks_placement: { value: 'meeting', origin: 'default' } } }
+  const html = await render(createElement(mod.SettingsView), { '/v1/settings?lang=es': settings }, 'es')
+  assert.match(html, /Todo junto con las notas/)
+  for (const locale of ['en', 'es']) {
+    const labels = mod.LOCALES[locale].choice.delivery_tasks_placement
+    assert.deepEqual(Object.keys(labels), field.choices)  // every choice has client-facing words
+  }
+})
+
 test('project–channel editor renders one validated row per association', opts, async () => {
   const { createElement } = await import('react')
   const html = await render(createElement(mod.ProjectChannelsEditor, { value: ['Proyecto Alfa=111111111111111111', 'Proyecto Beta=222222222222222222'] }), {}, 'es')

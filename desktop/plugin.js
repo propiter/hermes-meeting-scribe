@@ -334,6 +334,10 @@ export const LOCALES = {
       transcribe_device: { auto: 'Automatic', cpu: 'Processor (CPU)', cuda: 'Graphics card (CUDA)' },
       transcribe_compute_type: { auto: 'Automatic' },
       kanban_mode: { approve: 'Ask before creating', auto: 'Create automatically', off: 'Off' },
+      delivery_tasks_placement: {
+        meeting: 'All together with the notes', projects: 'In each project channel (a thread per meeting)',
+        projects_inline: 'In each project channel (no thread)'
+      },
       linear_mode: { approve: 'Ask before creating', auto: 'Create automatically', off: 'Off' },
       audio_retention: { multitrack: 'One track per person', mixed: 'One mixed track', none: 'Do not keep audio' },
       ui_language: { en: 'English', es: 'Spanish' }
@@ -583,6 +587,10 @@ export const LOCALES = {
       transcribe_device: { auto: 'Automático', cpu: 'Procesador (CPU)', cuda: 'Tarjeta gráfica (CUDA)' },
       transcribe_compute_type: { auto: 'Automático' },
       kanban_mode: { approve: 'Preguntar antes de crear', auto: 'Crear automáticamente', off: 'Desactivado' },
+      delivery_tasks_placement: {
+        meeting: 'Todo junto con las notas', projects: 'En el canal de cada proyecto (un hilo por reunión)',
+        projects_inline: 'En el canal de cada proyecto (sin hilo)'
+      },
       linear_mode: { approve: 'Preguntar antes de crear', auto: 'Crear automáticamente', off: 'Desactivado' },
       audio_retention: { multitrack: 'Una pista por persona', mixed: 'Una pista mezclada', none: 'No guardar audio' },
       ui_language: { en: 'Inglés', es: 'Español' }
