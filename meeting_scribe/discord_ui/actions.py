@@ -18,8 +18,9 @@ from ..domain.errors import (ChannelUnavailable, DirectMessageUnavailable, Forum
                              NotPrivate, SinkUnavailable)
 from ..domain.models import Candidate
 from ..i18n import t
-from .auth import (MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, TASK_ACTIONS, check_dm,
-                   check_private, check_task)
+from ..pipeline.speakers import AssignError
+from .auth import (MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, SPEAKER_ACTIONS, TASK_ACTIONS,
+                   check_dm, check_private, check_speaker, check_task)
 from .render import ButtonSpec, custom_id
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ def friendly_error(exc: BaseException, lang: str) -> str:
         return t("ui.error_channel_unavailable", lang)
     if isinstance(exc, UserMessage):
         return str(exc)
+    if isinstance(exc, AssignError):
+        return t(f"speakers.error_{exc.code}", lang, detail=exc.detail)
     if isinstance(exc, (KeyError, LookupError)):
         return t("ui.error_not_found", lang)
     return t("ui.action_failed", lang)
@@ -75,8 +78,10 @@ class ButtonActions:
                  owners: Callable[..., Sequence[str]], check_auth: Callable[[Any], bool], sink: Callable[[], Any],
                  project_view: Callable[[str, Sequence[Candidate]], Any],
                  move_view: Callable[[str, str, Sequence[tuple[str, str]]], Any],
-                 buttons_view: Callable[[Sequence[ButtonSpec]], Any] = lambda _specs: None) -> None:
+                 buttons_view: Callable[[Sequence[ButtonSpec]], Any] = lambda _specs: None,
+                 speaker_view: Callable[[str, str, Sequence[tuple[str, str]]], Any] = lambda *_a: None) -> None:
         self._buttons_view = buttons_view
+        self._speaker_view = speaker_view
         self._service = service
         self._settings = settings
         self._owners = owners
@@ -161,6 +166,8 @@ class ButtonActions:
             return gate
         if action in OPEN_ACTIONS:
             return True
+        if action in SPEAKER_ACTIONS:
+            return await self._speaker_gate(interaction, meeting_id)
         if item_id == "all" or action in MEETING_ACTIONS:  # 0.1 meeting-wide buttons keep their rule
             if self.is_owner(interaction):
                 return True
@@ -177,9 +184,19 @@ class ButtonActions:
             await self._deny(interaction, verdict.message)
         return verdict.allowed
 
+    async def _speaker_gate(self, interaction: Any, meeting_id: str) -> bool:
+        from ..pipeline.speakers import candidates
+
+        meeting = await asyncio.to_thread(self._service().require, meeting_id)
+        verdict = check_speaker(self._uid(interaction), frozenset(s.user_id for s in candidates(meeting)),
+                                self._owner_ids(), self.lang)
+        if not verdict.allowed:
+            await self._deny(interaction, verdict.message)
+        return verdict.allowed
+
     async def handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
                      values: Optional[Sequence[str]] = None) -> None:
-        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS | SHARE_ACTIONS:
+        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS | SHARE_ACTIONS | SPEAKER_ACTIONS:
             return
         token = _SPACE.set(await asyncio.to_thread(self._meeting_space, meeting_id))
         try:
@@ -202,6 +219,10 @@ class ButtonActions:
             return
         if action in SHARE_ACTIONS:
             await self._share(interaction, action, meeting_id, item_id)
+            return
+        if action in SPEAKER_ACTIONS:
+            await (self._offer_speakers(interaction, meeting_id, item_id) if action == "spk"
+                   else self._assign_speaker(interaction, meeting_id, item_id, list(values or ())))
             return
         from_panel = _from_panel(interaction) and action in TASK_ACTIONS
         if from_panel:  # update-type defer: edit_original_response then targets the clicked panel
@@ -321,6 +342,41 @@ class ButtonActions:
             await interaction.edit_original_response(view=view)
         else:
             await interaction.followup.send(view=view, ephemeral=True)
+
+    # -- unidentified participants (DESIGN §4.1) -----------------------------------------------------
+    async def _offer_speakers(self, interaction: Any, meeting_id: str, label: str) -> None:
+        from ..pipeline.speakers import candidates
+
+        from ..storage.artifacts import fmt_ts
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        svc = self._service()
+        meeting = await asyncio.to_thread(svc.require, meeting_id)
+        track = next((tr for tr in await asyncio.to_thread(svc.speaker_tracks, meeting) if tr.label == label), None)
+        if track is None or track.owner:
+            await interaction.followup.send(t("speakers.already", self.lang, label=label,
+                                              name=track.name if track else label), ephemeral=True)
+            return
+        span = f"{fmt_ts(track.first)}–{fmt_ts(track.last)}" if track.first is not None else t("speakers.no_lines", self.lang)
+        options = [(s.user_id, s.name) for s in candidates(meeting)][:SELECT_LIMIT]
+        await interaction.followup.send(t("speakers.pick", self.lang, name=track.name, lines=track.lines, span=span),
+                                        view=self._speaker_view(meeting_id, label, options), ephemeral=True)
+
+    async def _assign_speaker(self, interaction: Any, meeting_id: str, label: str, values: list[str]) -> None:
+        """The same operation as ``speaker assign``: the pipeline then edits every published message."""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            if not values:
+                raise UserMessage(t("ui.no_selection", self.lang))
+            done = await asyncio.to_thread(self._service().assign_speaker, meeting_id, label, values[0])
+            reply = (t("speakers.assigned", self.lang, label=label, name=done.name, lines=done.lines, tasks=done.tasks)
+                     if done.changed else t("speakers.already", self.lang, label=label, name=done.name))
+            if done.redeliver:
+                reply += "\n" + t("speakers.redelivering", self.lang)
+        except (KeyError, LookupError, ValueError) as exc:
+            log.warning("meeting-scribe: assigning %s of %s refused: %s", label, meeting_id, exc)
+            reply = friendly_error(exc, self.lang)
+        await interaction.followup.send(clip_reply(reply), ephemeral=True)
 
     async def _offer_channels(self, interaction: Any, meeting_id: str, item_id: str) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)

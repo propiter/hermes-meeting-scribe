@@ -15,6 +15,10 @@ shares) someone else's task, owners included; everyone already has the whole mee
 MY task in its project channel) is the only share button; Kanban keeps its owners-only rule; 📁 Move
 is not offered nor accepted (it would pick among the bot's channels, private ones included).
 
+"Who is <unidentified participant>?" (``spk``, then the picker ``ssel``, DESIGN §4.1) is open to the
+people who were in the meeting and to the owners — in a private meeting inside its channel, in a
+direct-messages meeting only in the clicker's own copy.
+
 A PRIVATE meeting (DESIGN §19.2) adds one gate to every button: the click must come from the meeting's
 private channel (or its thread / forum post) and the clicker must be able to see that channel. The share
 buttons (``shd`` to the assignee, ``shp`` to the project channel, ``sha``/``shc`` share everything) are
@@ -36,6 +40,7 @@ SHARE_ACTIONS = frozenset({"shd", "shp", "sha", "shc"})
 OPEN_ACTIONS = frozenset({"mine", "pg"})
 MEETING_OWNER_ONLY = frozenset({"allk"})
 MEETING_ACTIONS = frozenset({"allk", "alll", "psel"})
+SPEAKER_ACTIONS = frozenset({"spk", "ssel"})
 
 
 @dataclass(frozen=True)
@@ -81,7 +86,7 @@ def check_dm(interaction: Any, recipients: dict[str, str], action: str, item: Op
                                                          if getattr(interaction, "channel_id", None) else set())
     if getattr(interaction, "guild", None) is not None or not uid or recipients.get(uid) not in here:
         return Verdict(False, t("dm.only_own_copy", lang))
-    if action in OPEN_ACTIONS:
+    if action in OPEN_ACTIONS or action in SPEAKER_ACTIONS:  # the speaker rule is checked next
         return Verdict(True)
     if action not in DM_TASK_ACTIONS or item is None:
         return Verdict(False, t("dm.only_own_tasks", lang))
@@ -109,3 +114,10 @@ def check_task(action: str, item: Optional[ActionItem], user_id: str, owners: fr
     who = f"<@{assignee}>" if is_discord_user_id(assignee) else safe_name(item.owner_name or assignee)
     return Verdict(False, t("tasks.belongs_to", lang, user=who))
 
+
+
+def check_speaker(user_id: str, participants: frozenset[str], owners: frozenset[str], lang: str) -> Verdict:
+    """Naming an unidentified participant: someone who was in the meeting, or an owner."""
+    if user_id and (user_id in participants or user_id in owners):
+        return Verdict(True)
+    return Verdict(False, t("speakers.only_participants", lang))

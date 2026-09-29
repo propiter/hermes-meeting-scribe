@@ -18,9 +18,9 @@ from ..i18n import t
 from .render import ButtonSpec
 from .render_tasks import TaskPanel
 
-BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg|shp|shd|sha|shc):(?P<meeting>[a-z0-9]{1,16}):"
+BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg|shp|shd|sha|shc|spk):(?P<meeting>[a-z0-9]{1,16}):"
                    r"(?P<item>[A-Za-z0-9_-]{1,40})")
-SELECT_TEMPLATE = r"mscribe:(?P<action>psel|tsel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+SELECT_TEMPLATE = r"mscribe:(?P<action>psel|tsel|ssel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _STYLES = {"success": discord.ButtonStyle.success, "primary": discord.ButtonStyle.primary,
            "danger": discord.ButtonStyle.danger, "secondary": discord.ButtonStyle.secondary}
 
@@ -120,6 +120,15 @@ class ViewKit:
     def move_view(self, meeting_id: str, item_id: str, options: Sequence[tuple[str, str]]) -> discord.ui.View:
         opts = [discord.SelectOption(label=_clip(label), value=str(value)) for value, label in options][:25]
         select = discord.ui.Select(custom_id=f"mscribe:tsel:{meeting_id}:{item_id}", options=opts, min_values=1,
+                                   max_values=1)
+        view = discord.ui.View(timeout=None)
+        view.add_item(self.select_cls(select))
+        return view
+
+    def speaker_view(self, meeting_id: str, label: str, options: Sequence[tuple[str, str]]) -> discord.ui.View:
+        """Who an unidentified track was: one option per participant (DESIGN §4.1)."""
+        opts = [discord.SelectOption(label=_clip(name), value=uid) for uid, name in options][:25]
+        select = discord.ui.Select(custom_id=f"mscribe:ssel:{meeting_id}:{label}", options=opts, min_values=1,
                                    max_values=1)
         view = discord.ui.View(timeout=None)
         view.add_item(self.select_cls(select))

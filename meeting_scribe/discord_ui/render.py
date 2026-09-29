@@ -12,13 +12,13 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ..domain.models import ActionItem, Meeting, Notes
+from ..domain.models import ActionItem, Meeting, Notes, is_unidentified
 from ..i18n import t
 
 MESSAGE_LIMIT = 2000
 EMBED_LIMIT = 4096
 ACTIONS = ("ok", "lin", "no", "prj", "allk", "alll", "psel", "mine", "pg", "tsel", "shp", "shd", "sha", "shc")
-TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc|spk|ssel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _TEMPLATE_RE = re.compile(f"^{TEMPLATE}$")
 _TOKEN_RE = re.compile(r"<[@#][!&]?\d+>|\S+|\s+")
 
@@ -135,5 +135,14 @@ def render_header(meeting: Meeting, notes: Notes, lang: str, participants: str =
     ``participants`` (a line under the title) and ``pings`` (who that line may ping) only concern the
     FIRST part; every other part, and the model's text anywhere, pings nobody."""
     parts = split_text(_header(meeting, notes, lang, participants))
-    return [MessageSpec(part, mentions=(tuple(pings or ()) if i == 0 and participants else ()))
+    return [MessageSpec(part, buttons=speaker_buttons(meeting, lang) if i == 0 else (),
+                        mentions=(tuple(pings or ()) if i == 0 and participants else ()))
             for i, part in enumerate(parts)]
+
+
+def speaker_buttons(meeting: Meeting, lang: str) -> tuple[ButtonSpec, ...]:
+    """"Who is <unidentified participant>?" — one per track still unassigned (DESIGN §4.1), at most 5
+    (one row); who may press it is decided on click (``auth.check_speaker``)."""
+    return tuple(ButtonSpec(t("ui.btn_assign", lang, name=s.name)[:80], custom_id("spk", meeting.id, s.user_id),
+                            "secondary", 1, "👤")
+                 for s in meeting.speakers if is_unidentified(s.user_id))[:5]
