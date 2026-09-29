@@ -21,8 +21,8 @@ All notable changes to this project are documented here. The format follows
 - **Assign an "Unidentified participant" track after the meeting.** `hermes meeting-scribe speaker
   list <meeting>` shows each `unidentified-N` (one SSRC = one Discord voice connection = one person)
   with its interval and line count; `speaker assign <meeting> unidentified-N <name|id|@id>`, Desktop's
-  "Assign to…" (Summary and Transcript) and a "Who is …?" button on the Discord notes (participants
-  or owners; private/direct-message gates kept) give it to its owner: transcript, index, tasks,
+  "Assign to…" (Summary and Transcript) and a "Who is …?" button on the Discord notes (a participant
+  claims their own voice with "That's me"; owners pick anyone; private/direct-message gates kept) give it to its owner: transcript, index, tasks,
   speakers and `missing_audio` are renamed, a reprocess keeps it, and published messages are edited
   in place. Presence-only inference is now a saved suggestion ("¿Es X?"), never an identity.
   Closing-time automatic assignment requires complete handshake membership, agreement with
@@ -30,7 +30,7 @@ All notable changes to this project are documented here. The format follows
 - **Correct and undo voice assignments.** CLI/Desktop operators and Discord owners can change an
   assignment or choose `unassigned`; source-track provenance protects unrelated lines and tasks.
   SQLite keeps who changed what and when, displayed in Desktop. Participants need Hermes
-  authorization and may only make the first assignment. Identity republication never grants a
+  authorization and may only make the first assignment, to themselves. Identity republication never grants a
   legacy DM move, reruns external task sinks or resends old assignee panels.
 - **Voice reconnections.** CLIENT_DISCONNECT retires current SSRC mappings; CLIENT_CONNECT advances
   the connection generation even when voice-state snapshots miss the disconnect.
@@ -163,6 +163,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **A participant can only claim a voice as their own.** On the Discord notes, "Who is …?" now offers
+  participants a single "That's me" button; giving a voice to someone else, correcting or undoing is
+  for owners (their picker lists everyone), the CLI and the Desktop. Every change is still audited.
 - **Default behaviour change: tasks are no longer spread over project channels.** An install that did
   not set anything gets `delivery_tasks_placement=meeting` on its next delivery. To keep the previous
   layout run `hermes meeting-scribe config set delivery_tasks_placement projects` (or choose "In each
@@ -197,6 +200,23 @@ All notable changes to this project are documented here. The format follows
   is plainer.
 
 ### Fixed
+
+- **Background work on a multi-profile Hermes host.** Once the process hosted several profiles, the
+  pipeline worker and the Google Meet poller could no longer read the owner's secrets (Hermes refuses
+  a read outside a profile scope), so deliveries failed. Each job and each poll now reads the owner
+  profile's secrets for its own duration; single-profile hosts and older Hermes versions are unchanged.
+- **A discussion in a project thread is never deleted.** Switching `delivery_tasks_placement`, a lost
+  project channel or a reprocess used to delete the meeting's project thread or forum post, people's
+  replies included. Now only threads with nothing but the bot's messages are deleted; one where people
+  wrote stays, its tasks move out and its first message says where they are now.
+- **Naming a voice on a meeting that was never delivered** marked it done without delivering it. It is
+  now delivered for real and stays pending until it is.
+- **Re-posted tasks no longer ping their assignee again.** A layout switch, a re-delivery, 📁 Move or a
+  task message deleted by hand and posted again notified the assignee a second time; only the first
+  post of a task does now.
+- **An old `delivery_project_threads` value can be removed.** `space unset <space>
+  delivery_project_threads` works, the new `config unset <key> [--space …]` removes a global value
+  (under any old name too), and the Desktop settings page has "Use default" for any stored value.
 
 - **A voice given to the wrong person, and a voice left unidentified with only one possible owner**
   (seen in a real meeting). Mute flags were used as evidence of who owns an SSRC, but the voice-state

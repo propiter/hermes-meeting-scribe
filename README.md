@@ -233,6 +233,7 @@ hermes meeting-scribe reprocess <id> [--from transcribe|analyze|deliver] [--now]
 hermes meeting-scribe export <id> [--format md|json] [--out FILE] [--space SLUG]
 hermes meeting-scribe config get [KEY] [--space SLUG]
 hermes meeting-scribe config set KEY VALUE [--space SLUG]    # with --space: that space's override
+hermes meeting-scribe config unset KEY [--space SLUG]       # back to the default (or the global value)
 hermes meeting-scribe config list [--json] [--group GROUP] [--space SLUG]   # value + origin (+ resolved channel)
 hermes meeting-scribe config schema --json [--lang en|es]    # machine-readable form description
 hermes meeting-scribe llm show [--json]                      # see "Models and fallbacks"

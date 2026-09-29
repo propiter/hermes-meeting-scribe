@@ -25,6 +25,14 @@ faster-whisper 1.2.1, Python 3.11–3.14.
    only to serve the Desktop page with the owner's data. `meeting_scribe.home` is the only resolver
    (see §1.5). Nothing follows a request's profile scope. Secrets via
    `agent.secret_scope.get_secret`; threads via `agent.memory_provider.spawn_context_thread`.
+   Background work runs outside any turn: on a multi-profile host (`gateway.multiplex_profiles`, a
+   hosted room, a Desktop `?profile=` request, `migrate --multiplex`) an unscoped `get_secret` fails
+   closed. Each pipeline job, worker pulse and Meet poll therefore binds the OWNER profile's secrets
+   (`meeting_scribe.job_scope.owner_job_scope`: `build_profile_secret_scope(<owner home>)` +
+   `set_secret_scope(..., profile_home=...)`, reset afterwards) when multiplexing is active and no scope
+   is bound. It is re-checked per job (the switch can flip while the worker runs), never uses the
+   launch profile's scope (the gateway may have been started as another profile) and is a no-op on
+   single-profile hosts and on Hermes versions without the API (capabilities are probed).
 5. **Local-first**: audio never leaves the machine. Only transcript text goes to
    the user's own configured LLM.
 6. **Strict TDD**: tests first, fakes for Discord/RTP/LLM/Linear.
@@ -315,7 +323,13 @@ touching Hermes:
   `assign_speaker` command run by the gateway); Discord, a "Who is
   <Unidentified participant>?" button on the notes' first message (a
   participant of the meeting or an owner; private meetings only in their
-  channel, direct-message meetings only in the clicker's own copy). Assigning
+  channel, direct-message meetings only in the clicker's own copy). **A
+  participant can only claim a voice as their own**: the button offers them a
+  single "That's me" / "Soy yo" (`sme`, always the clicker's id, whatever the
+  click carries), and a suggestion naming someone else leads to that same
+  offer. Giving a voice to another person, correcting or undoing is for owners
+  (the person picker), the CLI and the Desktop; the service enforces it
+  (`AssignError("self_only")` for a non-admin actor naming someone else). Assigning
   renames the lines (`transcript.jsonl`, `transcript.md`, the index), the tasks
   the track owned, the speaker list and `missing_audio`, keeps the mapping
   (`speakers.assigned.<meeting>`, applied again by `reprocess
@@ -323,7 +337,7 @@ touching Hermes:
   edited in place, nothing is duplicated and an edit pings nobody. Assigning
   the same track to the same person again changes nothing. Non-owner participants
   need BOTH the meeting-participant gate and Hermes authorization and may only
-  make the first assignment or confirm its suggestion. Owners bypass Hermes'
+  make the first assignment, to themselves. Owners bypass Hermes'
   participant allowlist but keep the private/DM location gate.
   CLI/Desktop operators and Discord owners may correct or undo using
   `speaker assign <meeting> unidentified-N unassigned` (or the picker). Source
@@ -332,7 +346,13 @@ touching Hermes:
   already owned by its previous or next owner. Legacy assignments without
   source provenance fail closed rather than guessing. SQLite `speaker_audit`
   records actor, timestamp, previous and next user; Desktop displays it.
-  Corrections queue `republish_identity`, NOT admin `reprocess(DELIVER)`:
+  A meeting whose delivery never completed (FAILED at DELIVER, not while
+  re-publishing an earlier identity edit) has nothing to edit: the change queues
+  its normal DELIVER instead (`PipelineRunner.after_identity_change` /
+  `retry_delivery`, no DM move armed), so it reads DONE only once really
+  delivered; Discord's identity refresh of an unpublished meeting reports
+  `skipped`, never a delivery. Published meetings:
+  corrections queue `republish_identity`, NOT admin `reprocess(DELIVER)`:
   only editable publication sinks run, no `move_from_dm` flag is armed, no
   external task creation is repeated and old assignee DM panels are not resent.
   Legacy DM summaries are edited only at their existing message ids: no new
@@ -787,8 +807,13 @@ read as spam. The setting chooses the layout of a (non-private) meeting's task c
 - **Switching is idempotent.** A task pointer records its `target` (project channel id, `""` = the notes,
   `private`); a different target re-posts the task in the new place and deletes (or disarms) the old
   message. After placing tasks, every `thread:<channel>` pointer whose channel no longer holds a task of
-  the meeting is removed: its anchor message deleted, its thread or forum post deleted
-  (`Messages.delete_thread`; without Manage Threads the thread stays, emptied of our tasks, and is
+  the meeting (placement switched, route lost, tasks moved) is cleaned up — **but a discussion is never
+  deleted**: a thread or forum post holding any message a person wrote (not the bot, not a system
+  message; unreadable = assume yes) is kept, only the bot's task messages leave it (they were re-posted
+  elsewhere), and its anchor (a forum post's first message) is edited once to "📋 The tasks of this
+  meeting are now with the notes: <link>" (`retired` in the pointer). The pointer stays, so the same
+  thread is used again if the tasks come back. A thread with only the bot's messages is deleted with its
+  anchor (`Messages.delete_thread`; without Manage Threads the thread stays, emptied of our tasks, and is
   logged). A second reprocess changes nothing. A private meeting skips this cleanup: its public
   anchors go through the withdrawal of §19.2.
 - **Not per rule.** `meeting_routes` rules decide *where the notes go* and their privacy; a placement per
@@ -800,7 +825,10 @@ read as spam. The setting chooses the layout of a (non-private) meeting's task c
   the whole choice. `RETIRED_KEYS` in `config.py` reads a stored `delivery_project_threads` (global or a
   space override) when `delivery_tasks_placement` is unset — `true` → `projects`, `false` →
   `projects_inline` — with a warning (`doctor`, `config list`, Desktop) to save the new key;
-  `config set delivery_project_threads …` answers with the replacement. Installs that never set it get
+  `config set delivery_project_threads …` answers with the replacement. `config unset` / `space unset`
+  (and Desktop's "Use default", a `PUT … {"value": null}`) remove the value under every name it may be
+  stored — the retired key included (`config.names_to_clear`) — so an old override can always be
+  dropped. Installs that never set it get
   the new default `meeting`: **their next deliveries change layout** (see CHANGELOG).
 
 ## 17. Google Meet import and transcript attachment (unreleased)
@@ -1363,9 +1391,14 @@ are there.
   decisions, questions, task titles, a Meet name — may contain `<@id>`, `<@&role>` or `@everyone`:
   it shows as written but notifies nobody.
 - **Task messages** follow the same rule (`mentions.may_mention`): the assignee is shown as `<@id>`
-  (and pinged when the message is first posted) only if they can view the channel where it goes;
+  (and pinged when the task is first posted) only if they can view the channel where it goes;
   otherwise — a private channel they cannot open, or a member the bot cannot check there — by name
   (`**Name**`). The tasks index and the "Sent to" line of a private task do the same.
+- **Only the first publication of a task pings** (`pinged:<item>` pointer, written once and kept even
+  when a withdrawal drops the task pointer). Every later post of that task — a placement switch, a
+  `reprocess`/republish, a 📁 move, a message deleted by hand and posted again, a shared copy of a
+  private task posted again — shows the same text with `users=[]`. A task that is new in a reprocess
+  gets its one ping.
 
 **Not verifiable without real Discord.** That `guild.get_member` is populated (members intent and
 cache) for everyone in a private channel; without it those people are named, not mentioned.
