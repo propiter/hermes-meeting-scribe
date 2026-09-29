@@ -266,6 +266,7 @@
   "tasks.kanban_owner_tasks": "El botón Kanban solo aparece en las tareas de los dueños del tablero.",
   "tasks.legacy_moved": "↪️ Estas tareas se movieron a los hilos de cada proyecto; consulta el índice de tareas.",
   "tasks.moved": "Movida a {channel}; las próximas tareas de “{project}” también irán ahí.",
+  "tasks.anchor_retired": "📋 Las tareas de esta reunión ahora están con las notas: {link}",
   "tasks.moved_notice": "↪️ «{title}» se movió a {channel}.",
   "tasks.moved_one": "Movida a {channel}.",
   "tasks.no_permission": "No tengo permiso para publicar en {channel}; dejo las tareas aquí",

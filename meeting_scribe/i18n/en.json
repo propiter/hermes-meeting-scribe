@@ -266,6 +266,7 @@
   "tasks.kanban_owner_tasks": "The Kanban button only appears on the board owners' own tasks.",
   "tasks.legacy_moved": "↪️ These tasks moved to their project threads; see the task index.",
   "tasks.moved": "Moved to {channel}; future “{project}” tasks will go there too.",
+  "tasks.anchor_retired": "📋 The tasks of this meeting are now with the notes: {link}",
   "tasks.moved_notice": "↪️ “{title}” moved to {channel}.",
   "tasks.moved_one": "Moved to {channel}.",
   "tasks.no_permission": "I'm not allowed to post in {channel}; the tasks are here",

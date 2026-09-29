@@ -51,6 +51,7 @@ from .mentions import may_mention, participants_line
 from .render import MessageSpec, RenderOptions, render_header
 from .render_tasks import TaskView, render_index, render_panel, render_task
 from .transcript_file import SUFFIX as TRANSCRIPT_SUFFIX, mark_legacy, publish_transcript
+from .withdraw import HISTORY_LIMIT
 
 log = logging.getLogger(__name__)
 POST_NAME_LIMIT = 100  # Discord caps thread (forum post) names at 100 characters
@@ -405,7 +406,7 @@ class TaskPublisher:
         if is_forum(channel):
             return await self._project_post(channel, meeting, notes, spec, ptr, suffix, ptrs, project)
         placed = await self.msgs.edit_or_send(ptr, channel, spec=spec)
-        ptr = {**ptr, **placed}
+        ptr = {k: v for k, v in {**ptr, **placed}.items() if k != "retired"}  # in use again
         await ptrs.save(suffix, ptr)
         if not threads:
             return channel
@@ -431,7 +432,7 @@ class TaskPublisher:
         if ptr.get("forum") and ptr.get("thread"):
             thread, first_id = await self._open_post(ptr["thread"], ptr.get("message"), spec)
             if thread is not None:
-                ptr = {**ptr, "message": first_id}
+                ptr = {k: v for k, v in {**ptr, "message": first_id}.items() if k != "retired"}  # in use again
                 await ptrs.save(suffix, ptr, ptr.get("url", ""))
                 await self._sync_post(thread, ptr, name, wanted, ptrs, suffix)
                 return thread
@@ -572,20 +573,64 @@ class TaskPublisher:
             first.setdefault(view.route.project or "", i)
         return sorted(board.views, key=lambda v: (not v.route.project, first[v.route.project or ""]))
 
-    async def _drop_stale_anchors(self, ptrs: Pointers, in_use: set[str]) -> None:
+    async def _drop_stale_anchors(self, ptrs: Pointers, in_use: set[str], link: str) -> None:
         """A project channel that no longer holds tasks of this meeting (placement switched to ``meeting``,
-        every task moved away, a re-analysis): its anchor message and the thread or forum post named after
-        the meeting are deleted, so no empty "N tasks" anchor is left behind."""
+        every task moved away, a route lost, a re-analysis). Its tasks were already moved out by
+        :meth:`place_task`. A thread or forum post where people wrote is KEPT: only its anchor (the forum
+        post's first message) is edited to say where the tasks are now, and the pointer stays so the
+        same thread is used again if the tasks come back. One that holds only the bot's messages is
+        deleted with its anchor, so no empty "N tasks" anchor is left behind."""
         for cid, ptr in (await ptrs.with_prefix("thread:")).items():
             if cid in in_use:
                 continue
+            thread_id = (ptr.get("thread") or ptr.get("channel")) if ptr.get("forum") else ptr.get("thread")
+            if thread_id and await self._people_wrote_in(thread_id):
+                if not ptr.get("retired"):
+                    await self._retire_anchor(ptr, link)
+                    await ptrs.save(f"thread:{cid}", {**ptr, "retired": True}, ptr.get("url", ""))
+                continue
             if ptr.get("forum"):
-                await self.msgs.delete_thread(ptr.get("thread") or ptr.get("channel"))
+                await self.msgs.delete_thread(thread_id)
             else:
-                if ptr.get("thread"):
-                    await self.msgs.delete_thread(ptr["thread"])
+                if thread_id:
+                    await self.msgs.delete_thread(thread_id)
                 await self.msgs.delete(ptr.get("channel"), ptr.get("message"))
             await ptrs.drop(f"thread:{cid}")
+
+    async def _people_wrote_in(self, thread_id: Any) -> bool:
+        """Does the thread hold a message a person wrote (not the bot, not a system message)? When it
+        cannot be read, assume yes: a discussion is never deleted on a guess."""
+        try:
+            thread = await self.msgs.channel(thread_id)
+        except Exception as exc:
+            if is_missing(exc):
+                return False
+            log.info("meeting-scribe: cannot open thread %s (%s); keeping it", thread_id, exc)
+            return True
+        me = getattr(getattr(thread, "guild", None), "me", None)
+        if me is None:
+            return True
+        try:
+            async for msg in thread.history(limit=HISTORY_LIMIT):
+                author = getattr(msg, "author", None)
+                kind = getattr(getattr(msg, "type", None), "name", "default")
+                if (str(getattr(author, "id", "")) != str(me.id) and not getattr(author, "bot", False)
+                        and kind in ("default", "reply")):
+                    return True
+        except Exception as exc:
+            log.info("meeting-scribe: cannot read thread %s (%s); keeping it", thread_id, exc)
+            return True
+        return False
+
+    async def _retire_anchor(self, ptr: dict, link: str) -> None:
+        """The anchor of a kept thread now says, briefly, that the tasks moved (with a link)."""
+        spec = MessageSpec(t("tasks.anchor_retired", self.o.lang, link=link or "—"))
+        try:
+            await self.msgs.edit(await self.msgs.channel(ptr["channel"]), ptr["message"], spec=spec)
+        except Exception as exc:
+            if not is_missing(exc):
+                raise  # transient: the delivery retries
+            log.info("meeting-scribe: anchor %s gone (%s)", ptr.get("message"), exc)
 
     async def _drop_stale_tasks(self, board: Board, ptrs: Pointers) -> None:
         """A reprocess that no longer finds a task deletes its message (and its pointer)."""
@@ -843,7 +888,7 @@ class TaskPublisher:
                 await self.place_task(meeting, view, target, ptrs, placement)
         await self._drop_stale_tasks(board, ptrs)
         if not board.private:  # a private meeting's public anchors are withdrawn by ``withdraw_public``
-            await self._drop_stale_anchors(ptrs, anchors)
+            await self._drop_stale_anchors(ptrs, anchors, str(notes_ptr.get("url") or ""))
         # the index links each project to where its tasks are: a project kept with the notes links there
         threads = {**{v.route.channel_id: placed[None] for v in groups.get(None, ()) if None in placed}, **placed}
         dm_failed: list[str] = []
