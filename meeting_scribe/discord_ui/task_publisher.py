@@ -537,9 +537,10 @@ class TaskPublisher:
         return True
 
     # -- index ----------------------------------------------------------------------------------
-    async def index(self, board: Board, chat: Any, threads: dict, dm_failed: Sequence[str], ptrs: Pointers) -> None:
+    async def index(self, board: Board, chat: Any, threads: dict, dm_failed: Sequence[str], ptrs: Pointers,
+                    placement: str) -> None:
         spec = render_index(board.meeting, board.views, threads, dm_failed, self.o, private=board.private,
-                            shown=self.shown(chat, board.private))
+                            shown=self.shown(chat, board.private), permissions=placement != TASKS_MEETING)
         ptr = await ptrs.load("index")
         placed = await self.msgs.edit_or_send(ptr, chat, spec=spec)
         await ptrs.save("index", {**placed, "threads": {str(k): v for k, v in threads.items()},
@@ -551,10 +552,12 @@ class TaskPublisher:
             return
         threads = {(None if k == "None" else k): v for k, v in (ptr.get("threads") or {}).items()}
         chat = await self.msgs.channel(ptr["channel"])
+        placement = await self.placement(ptrs, deliver=False)
         await self.msgs.edit(chat, ptr["message"], spec=render_index(board.meeting, board.views, threads,
                                                                      ptr.get("dm_failed") or (), self.o,
                                                                      private=board.private,
-                                                                     shown=self.shown(chat, board.private)))
+                                                                     shown=self.shown(chat, board.private),
+                                                                     permissions=placement != TASKS_MEETING))
 
     @staticmethod
     def _in_order(board: Board, placement: str) -> list[TaskView]:
@@ -855,7 +858,7 @@ class TaskPublisher:
         for uid in (await ptrs.with_prefix("dm:")):  # lost every task since the last run: empty panel
             if uid not in assignees:
                 await self.dm(board, uid, ptrs, send=False)
-        await self.index(board, chat, threads, dm_failed, ptrs)
+        await self.index(board, chat, threads, dm_failed, ptrs, placement)
         if attach_transcript and not identity_refresh:
             alive = {v.item.id for v in board.views}
             if move is not None:

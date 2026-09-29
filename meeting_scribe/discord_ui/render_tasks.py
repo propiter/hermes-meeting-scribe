@@ -200,12 +200,16 @@ def render_shared_dm(meeting: Meeting, view: TaskView, lang: str) -> MessageSpec
 
 
 # -- index -----------------------------------------------------------------------------------------
-def _project_lines(views: Sequence[TaskView], threads: Mapping[Optional[str], str], lang: str) -> list[str]:
+def _project_lines(views: Sequence[TaskView], threads: Mapping[Optional[str], str], lang: str,
+                   permissions: bool = True) -> list[str]:
+    """``permissions``: tasks are meant for project channels, so a channel the bot cannot post in is
+    reported (⛔); with every task kept with the notes it is not."""
     groups: dict[tuple[Optional[str], str, str], list[TaskView]] = {}
     for v in views:
         r = v.route
         label = r.project if r.channel_id or r.reason == "no_permission" else t("tasks.no_project", lang)
-        groups.setdefault((r.channel_id, r.reason if r.reason == "no_permission" else "", label or ""), []).append(v)
+        problem = r.reason if r.reason == "no_permission" and permissions else ""
+        groups.setdefault((r.channel_id, problem, label or ""), []).append(v)
     lines = []
     for (cid, problem, label), group in groups.items():
         done = sum(v.item.status in _FINISHED for v in group)
@@ -249,15 +253,16 @@ def _shareable(view: TaskView) -> bool:
 
 def render_index(meeting: Meeting, views: Sequence[TaskView], threads: Mapping[Optional[str], str],
                  dm_failed: Sequence[str], o: RenderOptions, *, private: bool = False,
-                 shown: Callable[[str], bool] = lambda uid: True) -> MessageSpec:
+                 shown: Callable[[str], bool] = lambda uid: True, permissions: bool = True) -> MessageSpec:
     """``shown(uid)``: that person can see the channel (``mentions.may_mention``) — shown as a mention,
-    otherwise by name. The index notifies nobody (each task message pings its own assignee)."""
+    otherwise by name. ``permissions``: report project channels the bot cannot post in (off when every
+    task stays with the notes). The index notifies nobody (each task message pings its own assignee)."""
     lang = o.lang
     lines = [f"## 📋 {t('tasks.index_title', lang)} · {len(views)}"]
     if private:
         lines += _private_lines(views, lang)
     if views:
-        lines += [f"**{t('tasks.by_project', lang)}**", *_project_lines(views, threads, lang),
+        lines += [f"**{t('tasks.by_project', lang)}**", *_project_lines(views, threads, lang, permissions),
                   f"**{t('tasks.by_person', lang)}**", *_person_lines(views, lang, shown)]
     else:
         lines.append(t("notes.none", lang))

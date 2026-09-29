@@ -190,3 +190,16 @@ async def test_notes_forum_post_holds_every_task(together):
     assert all(with_title(together, t) == [post.id] for t in TITLES)
     assert together.orion.ordered() == [] and together.nebula.ordered() == []
     assert "Usar SES" in post.ordered()[0].content and post.ordered()[-1].view == ("mscribe:mine:k3v7q2ab:all",)
+
+
+async def test_the_index_does_not_report_project_channels_it_does_not_use(together):
+    together.nebula.can_post = False
+    await deliver(together)
+    index = together.chat.ordered()[-1].content
+    assert "⛔" not in index and "- **nebula** — 1 · <#200>" in index  # linked to the notes, no warning
+
+
+async def test_the_index_still_reports_a_channel_without_permission_in_projects_mode(env):  # noqa: F811
+    env.nebula.can_post = False
+    await deliver(env)
+    assert "⛔" in env.chat.ordered()[-1].content
