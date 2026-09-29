@@ -167,7 +167,12 @@ class ButtonActions:
         if action in OPEN_ACTIONS:
             return True
         if action in SPEAKER_ACTIONS:
-            return await self._speaker_gate(interaction, meeting_id)
+            if not await self._speaker_gate(interaction, meeting_id):
+                return False
+            if self.is_owner(interaction) or self._hermes_allows(interaction):
+                return True
+            await self._deny(interaction, t("ui.not_allowed", self.lang))
+            return False
         if item_id == "all" or action in MEETING_ACTIONS:  # 0.1 meeting-wide buttons keep their rule
             if self.is_owner(interaction):
                 return True

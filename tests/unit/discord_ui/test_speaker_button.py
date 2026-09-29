@@ -89,6 +89,17 @@ async def test_picking_runs_the_assignment_and_reports_it(env):
     assert "is not one of this meeting's participants" in bad.replies()
 
 
+@pytest.mark.parametrize("action", ["spk", "ssel"])
+async def test_hermes_denial_blocks_participants_but_not_owners(env, action):
+    env.acts._check_auth = lambda i: False
+    denied = FakeInteraction(ANA, values=["12"])
+    await env.acts.handle(denied, action, MID, LABEL)
+    assert not env.svc.calls and not denied.followup.sent
+    owner = FakeInteraction(OWNER, values=["12"])
+    await env.acts.handle(owner, action, MID, LABEL)
+    assert owner.followup.sent
+
+
 async def test_an_assigned_track_offers_no_picker(env):
     env.svc.owner = "12"
     i = FakeInteraction(ANA)
