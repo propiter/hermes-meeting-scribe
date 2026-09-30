@@ -233,25 +233,35 @@ def _apply(service: Any, meeting: Meeting, item: ActionItem, target: Optional[st
     return TaskAssigned(meeting.id, item.id, item.title, current, target, target_name, True, audit_id, sinks)
 
 
+def _queue(repo: Any, meeting_id: str, item_id: str, build: Any) -> None:
+    """Read-modify-write of the meeting's queue in ONE transaction (the assignment, a refresh and the
+    sink's :func:`take_announcements` touch the same row from different threads). ``build(old record)``
+    returns the new one; every write gets a higher ``seq``, so a record queued again while the sink is
+    showing the previous one never equals it and is not dropped as already shown."""
+    with repo.transaction():
+        pending = pending_announcements(repo, meeting_id)
+        seq = 1 + max((int(r.get("seq") or 0) for r in pending.values() if isinstance(r, dict)), default=0)
+        pending[item_id] = {**build(pending.get(item_id) or {}), "seq": seq}
+        repo.kv_set(ANNOUNCE_KV + meeting_id, json.dumps(pending, sort_keys=True))
+
+
 def _queue_announce(repo: Any, meeting_id: str, item_id: str, previous: Optional[str], target: Optional[str],
                     actor_id: str) -> None:
     """What Discord still has to show for this change (read by the Discord sink, see module doc).
     ``from``: whose panels lost the task; ``ping``: the new assignee is someone else than who acted."""
-    pending = pending_announcements(repo, meeting_id)
-    rec = pending.get(item_id) or {}
-    old = [u for u in [*rec.get("from", []), previous] if u and u != target]
-    pending[item_id] = {"to": target, "from": list(dict.fromkeys(old)), "actor": actor_id,
-                        "ping": bool(target) and target != actor_id}
-    repo.kv_set(ANNOUNCE_KV + meeting_id, json.dumps(pending, sort_keys=True))
+    def build(rec: dict[str, Any]) -> dict[str, Any]:
+        old = [u for u in [*rec.get("from", []), previous] if u and u != target]
+        return {"to": target, "from": list(dict.fromkeys(old)), "actor": actor_id,
+                "ping": bool(target) and target != actor_id}
+    _queue(repo, meeting_id, item_id, build)
 
 
 def queue_refresh(repo: Any, meeting_id: str, item_id: str) -> None:
     """Re-render a task's card in place (e.g. it went to Linear), pinging nobody."""
-    pending = pending_announcements(repo, meeting_id)
     item = repo.get_action_item(meeting_id, item_id)
-    rec = pending.get(item_id) or {"from": [], "ping": False, "actor": "", "refresh": True}
-    pending[item_id] = {**rec, "to": item.owner_speaker_id if item is not None else None}
-    repo.kv_set(ANNOUNCE_KV + meeting_id, json.dumps(pending, sort_keys=True))
+    to = item.owner_speaker_id if item is not None else None
+    _queue(repo, meeting_id, item_id,
+           lambda rec: {**(rec or {"from": [], "ping": False, "actor": "", "refresh": True}), "to": to})
 
 
 def take_announcements(repo: Any, meeting_id: str, done: dict[str, dict[str, Any]]) -> None:

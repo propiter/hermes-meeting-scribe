@@ -63,7 +63,7 @@ def test_a_participant_takes_an_unassigned_task(world):
     [audit] = service.repo.task_history(mid, "fix-mail")
     assert (audit["actor"], audit["previous_user"], audit["next_user"]) == (ANA, None, ANA)
     assert pending_announcements(service.repo, mid) == {"fix-mail": {"to": ANA, "from": [], "actor": ANA,
-                                                                     "ping": False}}  # took it: nobody to ping
+                                                                     "ping": False, "seq": 1}}  # took it: nobody to ping
 
 
 def test_assigning_twice_changes_nothing_the_second_time(world):
