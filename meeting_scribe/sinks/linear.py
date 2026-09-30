@@ -50,6 +50,8 @@ class LinearBackend(Protocol):
 
     def create_issue(self, issue: Mapping[str, Any]) -> dict[str, Any]: ...
 
+    def update_issue(self, issue_id: str, changes: Mapping[str, Any]) -> None: ...
+
 
 def _urllib_transport(url: str, headers: Mapping[str, str], body: bytes) -> Mapping[str, Any]:
     req = urllib.request.Request(url, data=body, headers=dict(headers), method="POST")
@@ -122,6 +124,11 @@ class LinearGraphQL:
             raise LinearError("issueCreate returned success=false")
         return dict(res["issue"])
 
+    def update_issue(self, issue_id: str, changes: Mapping[str, Any]) -> None:
+        q = "mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }"
+        if not self._q(q, {"id": issue_id, "input": dict(changes)})["issueUpdate"].get("success"):
+            raise LinearError("issueUpdate returned success=false")
+
 
 def _mcp_payload(result: Mapping[str, Any]) -> Any:
     if not result.get("ok", True):
@@ -152,7 +159,8 @@ class LinearMcp:
                   "teams": ("list_teams", "get_teams", "linear_list_teams"),
                   "users": ("list_users", "get_users", "linear_list_users"),
                   "projects": ("list_projects", "get_projects", "linear_list_projects"),
-                  "search": ("list_issues", "search_issues", "linear_search_issues")}
+                  "search": ("list_issues", "search_issues", "linear_search_issues"),
+                  "update": ("update_issue", "save_issue", "linear_update_issue")}
 
     def __init__(self, call: McpCaller, server: str = "linear") -> None:
         self._call = call
@@ -203,6 +211,13 @@ class LinearMcp:
         data = payload.get("issue", payload) if isinstance(payload, Mapping) else {}
         return {"id": str(data.get("id") or data.get("identifier") or ""), "url": data.get("url"),
                 "identifier": data.get("identifier")}
+
+    def update_issue(self, issue_id: str, changes: Mapping[str, Any]) -> None:
+        args: dict[str, Any] = {"id": issue_id}
+        if "assigneeId" in changes:
+            args["assignee"] = changes["assigneeId"]
+            args["assigneeId"] = changes["assigneeId"]
+        self._invoke("update", args)
 
 
 def select_backend(api_key: Callable[[], Optional[str]], mcp: Optional[McpCaller]) -> Optional[LinearBackend]:
@@ -303,11 +318,31 @@ class LinearSink(ItemSink):
             issue["projectId"] = ref["project_id"]
         if item.due:
             issue["dueDate"] = item.due
-        if item.owner_speaker_id:
-            speaker = next((s for s in meeting.speakers if s.user_id == item.owner_speaker_id),
-                           Speaker(item.owner_speaker_id, item.owner_name or ""))
-            user = match_linear_user(speaker, backend.users(), self._link(meeting.space, item.owner_speaker_id))
-            if user:
-                issue["assigneeId"] = user["id"]
+        user = self._linear_user(meeting, item, backend)
+        if user:
+            issue["assigneeId"] = user["id"]
         created = backend.create_issue(issue)
         return str(created.get("id")), created.get("url")
+
+    def _linear_user(self, meeting: Meeting, item: ActionItem, backend: LinearBackend) -> Optional[Mapping[str, Any]]:
+        if not item.owner_speaker_id:
+            return None
+        speaker = next((s for s in meeting.speakers if s.user_id == item.owner_speaker_id),
+                       Speaker(item.owner_speaker_id, item.owner_name or ""))
+        return match_linear_user(speaker, backend.users(), self._link(meeting.space, item.owner_speaker_id))
+
+    def set_assignee(self, meeting: Meeting, item: ActionItem) -> str:
+        """The issue already created for ``item`` gets its new assignee (DESIGN §16.2): ``synced``,
+        ``cleared`` (nobody), or ``unmapped`` (the person matches no Linear user: the issue is left
+        without assignee rather than keep the previous one)."""
+        from ..domain.ids import idempotency_key
+
+        row = self._store.get_delivery(self.name, idempotency_key(meeting.id, item.id))
+        backend = self._backend()
+        if row is None or not row.get("external_id"):
+            return "not_sent"
+        if backend is None:
+            raise LinearError("Linear is not connected")
+        user = self._linear_user(meeting, item, backend)
+        backend.update_issue(str(row["external_id"]), {"assigneeId": user["id"] if user else None})
+        return "synced" if user else "cleared" if not item.owner_speaker_id else "unmapped"

@@ -21,6 +21,8 @@ class FakeTransport:
         req = json.loads(body)
         self.requests.append((url, headers, req))
         q = req["query"]
+        if "issueUpdate" in q:
+            return {"data": {"issueUpdate": {"success": True}}}
         if "issueCreate" in q:
             inp = req["variables"]["input"]
             return {"data": {"issueCreate": {"success": True, "issue": {
@@ -189,3 +191,30 @@ def test_graphql_lists_follow_pagination(method):
 def test_user_on_page_three_is_matched():
     users = LinearGraphQL(lambda: "k", transport=PagedTransport()).users()
     assert match_linear_user(Speaker("1", "User 599"), users, None)["id"] == "u599"
+
+
+def test_an_issue_already_created_follows_the_task_s_new_assignee(tmp_path, repo, meeting, notes, settings_of):
+    """DESIGN §16.2: reassigning a task that is already in Linear moves the issue to the mapped user; a
+    person without a Linear user leaves the issue unassigned (never with the previous assignee)."""
+    from dataclasses import replace
+
+    t = FakeTransport()
+    repo.sync_action_items(meeting.id, notes.action_items)
+    sink = _sink(repo, settings_of(linear__mode="auto", linear__default_team="ENG"), gql(t))
+    item = notes.action_items[1]
+    assert sink.set_assignee(meeting, item) == "not_sent"  # nothing in Linear yet: nothing to change
+    sink.deliver(meeting, notes, tmp_path)
+    ana = replace(item, owner_speaker_id="10", owner_name="Ana María Ruiz")
+    assert sink.set_assignee(meeting, ana) == "synced"
+    stranger = replace(item, owner_speaker_id="55", owner_name="Nadie Conocido")
+    assert sink.set_assignee(meeting, stranger) == "unmapped"
+    assert sink.set_assignee(meeting, replace(item, owner_speaker_id=None, owner_name=None)) == "cleared"
+    updates = [r[2]["variables"] for r in t.requests if "issueUpdate" in r[2]["query"]]
+    assert [u["input"]["assigneeId"] for u in updates] == ["u_ana", None, None]
+    assert {u["id"] for u in updates} == {"iss_1"}
+
+
+def test_mcp_backend_updates_the_assignee():
+    mcp = FakeMcp({"update_issue": lambda a: json.dumps({"ok": True})})
+    LinearMcp(mcp).update_issue("iss_1", {"assigneeId": "u_ana"})
+    assert mcp.calls == [("linear", "update_issue", {"id": "iss_1", "assignee": "u_ana", "assigneeId": "u_ana"})]

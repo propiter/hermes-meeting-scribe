@@ -71,6 +71,14 @@ class DeliveriesMixin:
             sql, params = sql + " AND substr(key, 1, ?)=?", params + [len(prefix), prefix]
         return [dict(r) for r in self._x(sql + " ORDER BY id", params).fetchall()]
 
+    def find_task_cards(self, message_id: str) -> list[dict[str, Any]]:
+        """The Discord task messages (``mtg:<meeting>:task:<item>`` and a participant's direct-messages
+        copy ``mtg:<meeting>:pdm:<user>:task:<item>``) whose message id is ``message_id``."""
+        rows = self._x("SELECT meeting_id, key, external_id FROM deliveries WHERE sink='discord' AND state='done'"
+                       " AND key LIKE 'mtg:%task:%' AND json_valid(external_id)"
+                       " AND CAST(json_extract(external_id, '$.message') AS TEXT)=?", (str(message_id),))
+        return [dict(r) for r in rows.fetchall()]
+
     def delete_delivery(self, sink: str, key: str) -> None:
         """Drop a mutable pointer (a Discord message that no longer exists)."""
         self._x("DELETE FROM deliveries WHERE sink=? AND key=?", (sink, key))

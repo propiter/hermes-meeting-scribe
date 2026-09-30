@@ -95,6 +95,16 @@ _MIGRATIONS: tuple[str, ...] = (  # schema changes after the baseline, in order 
       id INTEGER PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
       label TEXT NOT NULL, actor TEXT NOT NULL, previous_user TEXT, next_user TEXT, at TEXT NOT NULL);
     """,
+    # 103: who a task was given to by a person (DESIGN §16.2): audited, and it survives re-analysis
+    """CREATE TABLE task_audit (
+      id INTEGER PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL, actor TEXT NOT NULL, previous_user TEXT, next_user TEXT, at TEXT NOT NULL,
+      undone INTEGER NOT NULL DEFAULT 0);
+    CREATE INDEX task_audit_item ON task_audit(meeting_id, item_id, id);
+    ALTER TABLE item_overrides ADD COLUMN owner_set INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE item_overrides ADD COLUMN owner_user TEXT;
+    ALTER TABLE item_overrides ADD COLUMN owner_name TEXT;
+    """,
 )
 SCHEMA_VERSION = BASELINE + len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
@@ -454,13 +464,16 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
                           (meeting_id, a.id, pos, a.status.value, json.dumps(a.to_dict(), ensure_ascii=False))))
         self._tx(stmts)
 
-    _ITEM_SELECT = ("SELECT a.*, o.project AS o_project, o.project_key AS o_key FROM action_items a"
+    _ITEM_SELECT = ("SELECT a.*, o.project AS o_project, o.project_key AS o_key, o.owner_set AS o_owner_set,"
+                    " o.owner_user AS o_owner, o.owner_name AS o_owner_name FROM action_items a"
                     " LEFT JOIN item_overrides o ON o.meeting_id=a.meeting_id AND o.item_id=a.id")
 
     def _item(self, row: sqlite3.Row) -> ActionItem:
         data = {**json.loads(row["data"]), "status": row["status"]}
         if row["o_key"]:  # a human 📁 move beats whatever the (re-)analysis said
             data.update(project=row["o_project"], project_key=row["o_key"], project_confidence=1.0)
+        if row["o_owner_set"]:  # so does a person's assignment (DESIGN §16.2)
+            data.update(owner_speaker_id=row["o_owner"], owner_name=row["o_owner_name"], owner_track_id=None)
         return ActionItem.from_dict(data)
 
     def list_action_items(self, meeting_id: str) -> list[ActionItem]:
@@ -477,6 +490,34 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
                 " ON CONFLICT(meeting_id, item_id) DO UPDATE SET project=excluded.project,"
                 " project_key=excluded.project_key, updated_at=excluded.updated_at",
                 (meeting_id, item_id, project, project_key, time.time()))
+
+    def set_owner_override(self, meeting_id: str, item_id: str, *, user: Optional[str], name: Optional[str]) -> None:
+        """Pin who a task belongs to (``user=None``: nobody), decided by a person; survives re-analysis."""
+        self._x("INSERT INTO item_overrides (meeting_id, item_id, owner_set, owner_user, owner_name, updated_at)"
+                " VALUES (?,?,1,?,?,?) ON CONFLICT(meeting_id, item_id) DO UPDATE SET owner_set=1,"
+                " owner_user=excluded.owner_user, owner_name=excluded.owner_name, updated_at=excluded.updated_at",
+                (meeting_id, item_id, user, name, time.time()))
+
+    def owner_overrides(self, meeting_id: str) -> dict[str, tuple[Optional[str], Optional[str]]]:
+        """``{item id: (user id or None, name)}`` of the tasks a person assigned (or released)."""
+        rows = self._x("SELECT item_id, owner_user, owner_name FROM item_overrides WHERE meeting_id=? AND owner_set=1",
+                       (meeting_id,))
+        return {str(r["item_id"]): (r["owner_user"], r["owner_name"]) for r in rows.fetchall()}
+
+    def audit_task(self, meeting_id: str, item_id: str, actor: str, previous: Optional[str],
+                   target: Optional[str], at: str) -> int:
+        return int(self._x("INSERT INTO task_audit(meeting_id,item_id,actor,previous_user,next_user,at)"
+                           " VALUES(?,?,?,?,?,?) RETURNING id", (meeting_id, item_id, actor, previous, target, at)
+                           ).fetchone()[0])
+
+    def task_history(self, meeting_id: str, item_id: Optional[str] = None) -> list[dict[str, Any]]:
+        sql, params = "SELECT * FROM task_audit WHERE meeting_id=?", [meeting_id]
+        if item_id is not None:
+            sql, params = sql + " AND item_id=?", params + [item_id]
+        return [dict(r) for r in self._x(sql + " ORDER BY id", params).fetchall()]
+
+    def mark_task_audit_undone(self, audit_id: int) -> None:
+        self._x("UPDATE task_audit SET undone=1 WHERE id=?", (audit_id,))
 
     def moved_items(self, meeting_id: str) -> set[str]:
         """Ids of the tasks a person pinned to a channel with 📁 (``set_item_override``)."""

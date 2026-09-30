@@ -286,6 +286,39 @@ class MeetingService:
         return assign(self, meeting_id, label, who, actor=actor, admin=admin)
 
     # -- action items -------------------------------------------------------------------------
+    def item_sinks(self) -> Mapping[str, Any]:
+        return self._item_sinks()
+
+    def assign_task(self, meeting_id: str, item_id: str, who: str, actor: Any, *, name: str = "") -> Any:
+        """Give a task to someone, take it or release it (see :mod:`.task_assign` for who may)."""
+        from .task_assign import assign
+
+        return assign(self, meeting_id, item_id, who, actor, name=name)
+
+    def undo_task_assignment(self, meeting_id: str, item_id: str, actor: Any) -> Any:
+        from .task_assign import undo
+
+        return undo(self, meeting_id, item_id, actor)
+
+    def resolve_task(self, meeting: Meeting, ref: str) -> ActionItem:
+        """A task of ``meeting`` by id, unique id prefix, or the id of the Discord message that shows it."""
+        from .task_assign import TaskAssignError, item_for_message
+
+        ref = str(ref or "").strip()
+        items = self.repo.list_action_items(meeting.id)
+        exact = next((a for a in items if a.id == ref), None)
+        if exact is not None:
+            return exact
+        by_message = item_for_message(self.repo, meeting.id, ref)
+        if by_message is not None:
+            found = next((a for a in items if a.id == by_message), None)
+            if found is not None:
+                return found
+        prefixed = [a for a in items if ref and a.id.startswith(ref)]
+        if len(prefixed) == 1:
+            return prefixed[0]
+        raise TaskAssignError("unknown_task", ref)
+
     def _sink(self, name: str, meeting: Meeting) -> Any:
         sink = self._item_sinks().get(name)
         if sink is None or not sink.enabled(meeting):
