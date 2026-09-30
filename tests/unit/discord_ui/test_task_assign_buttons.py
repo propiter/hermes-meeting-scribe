@@ -207,3 +207,28 @@ async def test_a_private_meeting_s_assign_buttons_work_only_inside_its_channel(b
     i.channel = SimpleNamespace(id=777)
     await buttons.acts.handle(i, "tak", "k3v7q2ab", "a3")
     assert buttons.svc.calls == [] and "This meeting is private" in i.replies()
+
+
+async def test_the_agent_finds_the_card_a_message_replies_to():
+    """DESIGN §16.3: the tools read which message the user's Discord message replies to, on the gateway loop."""
+    from meeting_scribe import discord_ui
+
+    reply = SimpleNamespace(reference=SimpleNamespace(message_id=8001))
+    plain = SimpleNamespace(reference=None)
+    channel = SimpleNamespace(fetch_message=lambda mid: _done({9001: reply, 9002: plain}[mid]))
+    client = SimpleNamespace(get_channel=lambda cid: channel if cid == 7001 else None)
+    runtime = _Runtime()
+    discord_ui._STATES[runtime] = SimpleNamespace(adapter=SimpleNamespace(_client=client), loop=asyncio.get_running_loop())
+    lookup = discord_ui.replied_to_for(runtime)
+    assert await asyncio.to_thread(lookup, "7001", "9001") == "8001"
+    assert await asyncio.to_thread(lookup, "7001", "9002") is None
+    assert lookup("7001", "9001") is None  # never blocks the gateway loop on itself
+    assert discord_ui.replied_to_for(_Runtime()) is None  # Discord not connected
+
+
+class _Runtime:
+    """Weak-referenceable, like the real runtime."""
+
+
+async def _done(value):
+    return value

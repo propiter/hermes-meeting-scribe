@@ -55,8 +55,8 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "description": ("Assign a meeting task AS the Discord user who is talking to you: assignee 'me' takes an "
                         "unassigned task for them; 'none' releases their own task; another user (id or <@id>) "
                         "only works if that Discord user is an owner. The plugin checks who is asking — never "
-                        "claim permissions on the user's behalf. If the user replied to a task card, pass that "
-                        "message's id as message_id instead of task_id."),
+                        "claim permissions on the user's behalf. When the user's message replies to a task card, "
+                        "task_id and meeting_id can be omitted: the card is found from the reply."),
         "parameters": {"type": "object", "properties": {
             "meeting_id": {"type": "string", "maxLength": 40,
                            "description": "Meeting id or unique prefix (optional with message_id)."},
@@ -72,8 +72,8 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "description": ("Create a meeting task in Linear or in the Hermes Kanban board AS the Discord user who is "
                         "talking to you (the same as pressing the task card's button): its assignee or an owner "
                         "may send it; Kanban only takes the owners' own tasks. Only the destinations configured "
-                        "for the meeting's space work. Pass message_id instead of task_id when the user replied "
-                        "to a task card."),
+                        "for the meeting's space work. When the user's message replies to a task card, task_id "
+                        "and meeting_id can be omitted."),
         "parameters": {"type": "object", "properties": {
             "meeting_id": {"type": "string", "maxLength": 40,
                            "description": "Meeting id or unique prefix (optional with message_id)."},
@@ -131,13 +131,15 @@ class MeetingTools:
     def __init__(self, service: Callable[[], MeetingService], max_utterances: int = 400,
                  guild: Callable[[], str] = _session_guild, reader: Callable[[], Reader] = _session_reader,
                  caller: Callable[[], Optional[Any]] = _session_caller,
-                 owners: Callable[[str], Any] = lambda space: ()) -> None:
+                 owners: Callable[[str], Any] = lambda space: (),
+                 replied_to: Callable[[], Optional[Callable[[str, str], Optional[str]]]] = lambda: None) -> None:
         self._service = service
         self._max = max_utterances
         self._guild = guild
         self._reader = reader
         self._caller = caller
         self._owners = owners
+        self._replied_to = replied_to
 
     def _space(self, service: MeetingService) -> str:
         return service.space_for(self._guild() or None)
@@ -201,7 +203,8 @@ class MeetingTools:
 
         space = self._space(service)
         ref = str(args.get("meeting_id") or "").strip()
-        card = find_card(service.repo, str(args.get("message_id") or "")) if args.get("message_id") else None
+        message = str(args.get("message_id") or "") or ("" if args.get("task_id") else self._reply_target())
+        card = find_card(service.repo, message) if message else None
         meeting = service.find(ref, space) if ref else None
         if meeting is None and card is not None:
             meeting = service.find(card.meeting_id, space)
@@ -210,6 +213,15 @@ class MeetingTools:
         if meeting is not None and not service.readable(meeting, self._reader()):
             meeting = None
         return meeting, card
+
+    def _reply_target(self) -> str:
+        """The message the user's Discord message replies to (a task card, in the case this is for)."""
+        caller = self._caller()
+        lookup = self._replied_to()
+        if caller is None or lookup is None or (caller.platform or "").lower() != "discord" or not caller.message_id:
+            return ""
+        chat = caller.thread_id or caller.chat_id
+        return lookup(str(chat), str(caller.message_id)) or ""
 
     def task_list(self, args: Mapping[str, Any], **_: Any) -> str:
         try:
@@ -256,8 +268,10 @@ class MeetingTools:
         from .pipeline.task_assign import TaskAssignError
 
         meeting, card = self._meeting(service, args)
+        if meeting is None and not (args.get("meeting_id") or args.get("message_id")):
+            raise TaskAssignError("which_task")
         if meeting is None:
-            raise LookupError(f"no meeting {args.get('meeting_id') or args.get('message_id')!r}; use meeting_search")
+            raise TaskAssignError("unknown_meeting", str(args.get("meeting_id") or args.get("message_id")))
         actor = self._who(service, meeting)
         if actor is None:
             raise TaskAssignError("no_identity")
@@ -312,8 +326,6 @@ class MeetingTools:
                           "message": t("ui.approved", lang, sink=name, ref=ref)})
         except TaskAssignError as exc:
             return _json({"error": _assign_error(exc, lang), "code": exc.code})
-        except LookupError as exc:  # no such meeting here: say how to find it
-            return _json({"error": str(exc).strip("'\"")})
         except Exception as exc:  # tool contract: the same plain words as the button
             return _json({"error": friendly_error(exc, lang)})
 

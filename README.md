@@ -39,7 +39,10 @@ Audio never leaves your machine. Only transcript text is sent, and only to your 
 - **Auto join and leave.** The bot joins when people gather in a voice channel and stops when the
   channel empties.
 - **Agent tools.** `meeting_search` and `meeting_get` let you ask Hermes things like *"what did we
-  decide about the SMTP migration?"*.
+  decide about the SMTP migration?"*. Reply to a task card with *"this one is mine, create it in
+  Linear"* and the agent assigns it to you and sends it — acting as you, with your permissions.
+- **Take a task.** A task without assignee has a 🙋 **I'll take it** button; owners reassign any task
+  (👤 Assign, with undo). The card is edited in place and every change is audited.
 - **One file per meeting.** `recording.mka` holds a playable mix plus one stream per speaker.
 - **Languages.** The bot's messages are in English or Spanish (`ui_language`). Notes can be written
   in any language.
@@ -249,12 +252,30 @@ CLI process instead. Meeting ids can be shortened to any unique prefix.
 
 ### Ask the agent
 
-The `meeting_scribe` toolset provides two tools:
+The `meeting_scribe` toolset provides:
 
 - `meeting_search(query, limit)`
 - `meeting_get(meeting_id, part=notes|transcript|tasks|meta)`
+- `meeting_task_list(meeting_id)`
+- `meeting_task_assign(meeting_id, task_id | message_id, assignee)` — `me`, `none` or a user
+- `meeting_task_send(meeting_id, task_id | message_id, target)` — `linear` or `kanban`
 
-The bundled skill `meeting-scribe` teaches the agent how to answer questions with them.
+The task tools act as the Discord user who is talking to the bot, with the same rules as the task
+card's buttons: anyone who was in the meeting (or can see the task and may use the bot) can take an
+unassigned task; only owners give a task to someone else. A reply to a task card needs no ids. Outside a
+Discord conversation (Hermes CLI, cron) they only read. The bundled skill `meeting-scribe` teaches the
+agent how to use them.
+
+### Who a task belongs to
+
+- In Discord: 🙋 **I'll take it** on a task without assignee; 👤 **Assign** lets owners pick a participant
+  or any member of the server (and undo), and lets the assignee release it. In a private meeting, only
+  inside its channel; in a direct-messages meeting, not from chat.
+- The card is edited where it is (no re-post). A new assignee someone else chose is mentioned once and
+  gets the task in their DM panel (`delivery_dm_assignees`). A task already in Linear gets the new
+  assignee there when that person is linked to a Linear user (`/meeting link`); otherwise the issue is
+  left without assignee and you are told.
+- `hermes meeting-scribe task list|assign|undo|history <meeting> …`, and the Tasks tab in Desktop.
 
 ## Configuration
 

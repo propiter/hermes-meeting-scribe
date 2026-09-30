@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Take a task, or give it to someone, after the meeting.** A task card without assignee has 🙋 **I'll
+  take it** (participants, or members Hermes authorizes who can see the card); 👤 **Assign** lets owners
+  pick a participant or any member of the server and undo, and lets the assignee release it. Private
+  meetings only from their channel; direct-messages meetings not from chat. The card is edited in place,
+  a new assignee chosen by someone else is mentioned once and gets the DM panel (never twice), the index
+  is refreshed, and an issue already in Linear gets the new assignee through the person links (or is
+  left unassigned, and the reply says so). Every change is audited (who, when, from whom to whom) and
+  survives reprocessing. Also `hermes meeting-scribe task list|assign|undo|history` and the Desktop
+  Tasks tab.
+- **Agent task tools that act as the person asking.** `meeting_task_list`, `meeting_task_assign` and
+  `meeting_task_send` (Linear / Kanban) use the Discord user Hermes bound to the turn and the same rules
+  as the buttons — a user can never gain rights by what they write. A reply to a task card needs no ids.
+  Without a Discord user (Hermes CLI, cron, other platforms) they refuse to write. All tool schemas are
+  now closed (`additionalProperties: false`).
+
 - **Everything of a meeting in one place** (`delivery_tasks_placement`, per space; `setup` asks, a
   choice in Desktop, explained by `doctor`). `meeting` (**new default**): the summary, the transcript,
   the index and EVERY task card (labelled by project, with its own buttons) go to the meeting's place —

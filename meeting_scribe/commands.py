@@ -58,6 +58,7 @@ class Caller:
     parent_chat_id: str = ""  # a thread's / forum post's channel (private meetings, DESIGN §19.2)
     source: str = ""  # Hermes' session source (cli, tui, desktop, ...): who the operator is without a chat
     cron: bool = False  # a scheduled job: its output goes wherever the job delivers (never private meetings)
+    message_id: str = ""  # the chat message that started the turn (a reply to a task card names it)
 
     @property
     def guild_id(self) -> str:
@@ -82,7 +83,8 @@ def caller_from_session() -> Caller:
                   scope_id=get_session_env("HERMES_SESSION_SCOPE_ID", "") or "",
                   parent_chat_id=get_session_env("HERMES_SESSION_PARENT_CHAT_ID", "") or "",
                   source=get_session_env("HERMES_SESSION_SOURCE", "") or "",
-                  cron=bool(get_session_env("HERMES_CRON_SESSION", "")))
+                  cron=bool(get_session_env("HERMES_CRON_SESSION", "")),
+                  message_id=get_session_env("HERMES_SESSION_MESSAGE_ID", "") or "")
 
 
 def status_headline(st: dict[str, Any], lang: str, visible: Callable[[str], bool] = lambda mid: True) -> list[str]:

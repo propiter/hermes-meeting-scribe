@@ -473,5 +473,7 @@
   "assign.error_taken": "This task already belongs to {detail}. They can release it, or an owner can reassign it.",
   "assign.error_not_eligible": "Only someone who was in the meeting, or a member allowed to use the bot who can see this task, can take it.",
   "assign.error_nothing_to_undo": "“{detail}” has no assignment to undo.",
-  "assign.error_cli_me": "“me” at the terminal means the space's only owner, but it has {detail}; give the user id instead."
+  "assign.error_cli_me": "“me” at the terminal means the space's only owner, but it has {detail}; give the user id instead.",
+  "assign.error_unknown_meeting": "No meeting {detail} here; find it with meeting_search.",
+  "assign.error_which_task": "Which task? Pass meeting_id and task_id (see meeting_task_list), or reply to the task card."
 }

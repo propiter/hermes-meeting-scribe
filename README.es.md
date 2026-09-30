@@ -42,7 +42,12 @@ proveedor de LLM.
 - **Entrada y salida automáticas.** El bot entra cuando se reúne gente en un canal de voz y deja de
   grabar cuando el canal se vacía.
 - **Herramientas para el agente.** `meeting_search` y `meeting_get` te permiten preguntarle a Hermes
-  cosas como *"¿qué decidimos sobre la migración de SMTP?"*.
+  cosas como *"¿qué decidimos sobre la migración de SMTP?"*. Responde a la tarjeta de una tarea con
+  *"esta es mía, créala en Linear"* y el agente te la asigna y la envía, actuando como tú y con tus
+  permisos.
+- **Quedarse una tarea.** Una tarea sin responsable tiene el botón 🙋 **Me la quedo**; los dueños
+  reasignan cualquiera (👤 Asignar, con deshacer). La tarjeta se edita en su sitio y cada cambio queda
+  auditado.
 - **Un archivo por reunión.** `recording.mka` contiene una mezcla reproducible más una pista por
   hablante.
 - **Idiomas.** Los mensajes del bot están en inglés o español (`ui_language`). Las notas pueden
@@ -254,12 +259,30 @@ sea ambiguo.
 
 ### Preguntarle al agente
 
-El toolset `meeting_scribe` ofrece dos herramientas:
+El toolset `meeting_scribe` ofrece:
 
 - `meeting_search(query, limit)`
 - `meeting_get(meeting_id, part=notes|transcript|tasks|meta)`
+- `meeting_task_list(meeting_id)`
+- `meeting_task_assign(meeting_id, task_id | message_id, assignee)` — `me`, `none` o un usuario
+- `meeting_task_send(meeting_id, task_id | message_id, target)` — `linear` o `kanban`
 
-El skill incluido, `meeting-scribe`, le enseña al agente a responder preguntas con ellas.
+Las herramientas de tareas actúan como el usuario de Discord que habla con el bot, con las mismas reglas
+que los botones de la tarjeta: quien estuvo en la reunión (o ve la tarea y puede usar el bot) puede
+quedarse una tarea sin responsable; solo los dueños se la dan a otra persona. Una respuesta a la tarjeta
+no necesita ids. Fuera de una conversación de Discord (CLI de Hermes, cron) solo leen. El skill incluido,
+`meeting-scribe`, le enseña al agente a usarlas.
+
+### De quién es una tarea
+
+- En Discord: 🙋 **Me la quedo** en una tarea sin responsable; 👤 **Asignar** deja a los dueños elegir un
+  participante o cualquier miembro del servidor (y deshacer), y al responsable liberarla. En una reunión
+  privada, solo dentro de su canal; en una reunión por mensaje directo, no desde el chat.
+- La tarjeta se edita donde está (sin volver a publicarla). Un nuevo responsable elegido por otra
+  persona recibe una sola mención y la tarea en su panel por DM (`delivery_dm_assignees`). Si la tarea ya
+  está en Linear, allí cambia el responsable cuando esa persona está vinculada a un usuario de Linear
+  (`/meeting link`); si no, el issue queda sin responsable y se te avisa.
+- `hermes meeting-scribe task list|assign|undo|history <reunión> …`, y la pestaña Tareas de Desktop.
 
 ## Configuración
 

@@ -61,17 +61,18 @@ def world(prepo, layout, settings, clock, meeting):
     prepo.upsert_delivery(live.id, "discord", f"mtg:{live.id}:task:fix-mail", external_id=json.dumps(ptr), url="")
     prepo.upsert_delivery(live.id, "discord", f"mtg:{live.id}:notes",
                           external_id=json.dumps({"channel": "7000", "thread": THREAD}), url="")
-    state = {"caller": None}
+    state = {"caller": None, "replies": {}}
 
     def tools():
         return MeetingTools(lambda: service, guild=lambda: "", caller=lambda: state["caller"],
                             reader=lambda: state["caller"].reader if state["caller"] else privacy.Reader(),
-                            owners=lambda space: (OWNER,))
+                            owners=lambda space: (OWNER,),
+                            replied_to=lambda: lambda chat, message: state["replies"].get((chat, message)))
     return service, live.id, sinks, state, tools
 
 
-def discord(user, chat=THREAD, parent="7000"):
-    return Caller(platform="discord", chat_id=chat, user_id=user, parent_chat_id=parent, scope_id="")
+def discord(user, chat=THREAD, parent="7000", message=""):
+    return Caller(platform="discord", chat_id=chat, user_id=user, parent_chat_id=parent, scope_id="", message_id=message)
 
 
 def call(tools, name, **args):
@@ -98,6 +99,19 @@ def test_the_reply_to_the_card_takes_the_task_and_sends_it_to_linear(world):
     assert sent["ok"] and sent["ref"] == "ENG-7" and sinks["linear"].sent == [("fix-mail", ANA)]
     [audit] = service.repo.task_history(mid, "fix-mail")
     assert (audit["actor"], audit["next_user"]) == (ANA, ANA)
+
+
+def test_a_reply_to_the_card_needs_no_ids_at_all(world):
+    """The agent only knows "this task" — the user's message replies to the card, and that is enough."""
+    service, mid, sinks, state, tools = world
+    state["replies"][(THREAD, "9001")] = CARD
+    state["caller"] = discord(ANA, message="9001")
+    took = call(tools, "task_assign", assignee="me")
+    assert took["ok"] and (took["meeting_id"], took["task_id"], took["assignee"]) == (mid, "fix-mail", ANA)
+    assert call(tools, "task_send", target="linear")["ref"] == "ENG-7"
+    state["caller"] = discord(ANA, message="9002")  # not a reply: the agent must say which task
+    out = call(tools, "task_assign", assignee="me")
+    assert out["code"] == "which_task" and "meeting_task_list" in out["error"]
 
 
 def test_assigning_twice_through_the_tool_changes_nothing(world):
@@ -150,8 +164,8 @@ def test_a_private_meeting_s_tasks_only_move_from_its_channel(world):
     privacy.remember(service.repo, mid, "rule", "7000")
     state["caller"] = discord(ANA, chat=ELSEWHERE, parent="")
     out = call(tools, "task_assign", meeting_id=mid, task_id="fix-mail", assignee="me")
-    assert "no meeting" in out["error"]  # outside its channel the meeting does not exist for the agent
-    assert "no meeting" in call(tools, "task_send", message_id=CARD, target="linear")["error"]
+    assert out["code"] == "unknown_meeting"  # outside its channel the meeting does not exist for the agent
+    assert call(tools, "task_send", message_id=CARD, target="linear")["code"] == "unknown_meeting"
     state["caller"] = discord(ANA)
     assert call(tools, "task_assign", message_id=CARD, assignee="me")["assignee"] == ANA
     sent = call(tools, "task_send", message_id=CARD, target="linear")
@@ -184,3 +198,11 @@ def test_the_list_says_where_each_task_already_is(world):
     state["caller"] = discord(ANA)
     tasks = {t["id"]: t for t in call(tools, "task_list", message_id=CARD)["tasks"]}
     assert tasks["report"]["sent_to"] == ["linear"] and tasks["fix-mail"]["assignee"] is None
+
+
+def test_only_destinations_configured_for_the_space_are_used(world):
+    service, mid, sinks, state, tools = world
+    sinks["linear"].enabled = lambda meeting: False
+    state["caller"] = discord(LUIS)
+    out = call(tools, "task_send", meeting_id=mid, task_id="report", target="linear")
+    assert "Linear" in out["error"] and sinks["linear"].sent == []

@@ -102,6 +102,13 @@ def _membership(runtime: Runtime) -> Any:
     return fn(runtime) if callable(fn) else None
 
 
+def _replied_to(runtime: Runtime) -> Any:
+    """The Discord UI's "which message does this one reply to" lookup (``None`` without Discord)."""
+    ui = sys.modules.get(f"{__package__}.discord_ui")
+    fn = getattr(ui, "replied_to_for", None)
+    return fn(runtime) if callable(fn) else None
+
+
 def _command_handler(commands: MeetingCommands, runtime: Runtime, name: str) -> Callable[[str], str]:
     def handler(raw_args: str) -> str:
         try:
@@ -165,7 +172,7 @@ def register(ctx: Any, plugin_root: Path) -> Optional[Runtime]:
             runtime.close()  # stops the pipeline thread and closes SQLite (review W3)
         on_unload(meeting_scribe_runtime_close)
 
-    tools = MeetingTools(runtime.service, owners=runtime.owners)
+    tools = MeetingTools(runtime.service, owners=runtime.owners, replied_to=lambda: _replied_to(runtime))
     for name, handler in (("meeting_search", tools.search), ("meeting_get", tools.get),
                           ("meeting_task_list", tools.task_list), ("meeting_task_assign", tools.task_assign),
                           ("meeting_task_send", tools.task_send)):

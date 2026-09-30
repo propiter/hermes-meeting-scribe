@@ -368,8 +368,8 @@ class DiscordNotesSink:
             await sync_copies(pub, board, ptrs)
             return
         if pub.settings.delivery_dm_assignees:
-            if is_discord_user_id(target):
-                await pub.dm(board, target, ptrs, send=True)  # an existing panel is edited, never duplicated
+            if is_discord_user_id(target):  # an existing panel is edited, never duplicated; a mere refresh
+                await pub.dm(board, target, ptrs, send=not rec.get("refresh"))  # never posts a new one
             for uid in rec.get("from") or ():
                 if is_discord_user_id(uid) and await ptrs.load(f"dm:{uid}"):
                     await pub.dm(board, str(uid), ptrs, send=False)

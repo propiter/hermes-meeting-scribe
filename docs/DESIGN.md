@@ -524,7 +524,9 @@ hints, LLM reachability, Kanban, Linear connectivity, Obsidian path.
 
 Tools (toolset `meeting_scribe`): `meeting_search(query, limit)`,
 `meeting_get(meeting_id, part)` so the agent can answer "¿qué decidimos del
-SMTP?". Plugin skill `meeting-scribe:meeting-scribe` explains usage.
+SMTP?"; `meeting_task_list`, `meeting_task_assign` and `meeting_task_send` act on tasks AS the
+Discord user of the turn (§16.3). Every schema is closed (`additionalProperties: false`). Plugin skill
+`meeting-scribe:meeting-scribe` explains usage.
 
 ## 12. Known limits (documented)
 
@@ -830,6 +832,83 @@ read as spam. The setting chooses the layout of a (non-private) meeting's task c
   stored — the retired key included (`config.names_to_clear`) — so an old override can always be
   dropped. Installs that never set it get
   the new default `meeting`: **their next deliveries change layout** (see CHANGELOG).
+
+### 16.2 Who a task belongs to, after the meeting (unreleased)
+Feedback: a task left without assignee ("Arreglar el correo") could only be taken by an owner, and a
+member who said "this one is mine" had no way to do it. One service (`pipeline/task_assign.py`) decides
+for every surface — the card's buttons, the agent's tools (§16.3), `hermes meeting-scribe task …` and
+Desktop's tasks tab; each surface only states what it PROVED about who acts (`Actor`):
+`user_id`, `admin` (an owner of the meeting's space), `authorized` (Hermes' own user/role allowlist lets
+them use the bot), `sees` (they can see where the task lives), `local` (the operator at this machine).
+
+| who | may |
+|---|---|
+| a **participant** of the meeting (`privacy.participants`: Discord speakers, Meet attendees an admin linked) | take an **unassigned** task for themselves (🙋 "I'll take it") |
+| a member Hermes **authorizes** who **sees** the card's channel | the same — a task discussed in a thread is often taken by someone who was not in the call, but only by someone who is allowed to use the bot and can already read the task |
+| the task's **current assignee** | release it (to nobody) — never hand it to someone else |
+| an **owner** (`owner_user_ids` of the space) | give any task to any participant or any Discord member (member picker), take a task that has an assignee, release, **undo** the last change |
+| the **CLI / Desktop** operator | everything (audited as `cli` / `desktop`) |
+
+- **Private meeting (§19.2)**: all of the above only from its private channel (thread/forum post), by
+  someone who can see it (`Actor.sees`) — owners included; the private gate of every button runs first,
+  and the tools see a private meeting only from its channel (`Reader.may_read`).
+- **Direct-messages meeting (§19.3)**: no assignment from chat at all (`dm_meeting`), not even owners:
+  its copies were sent to fixed recipients and a new assignee would have no copy; the DM copies carry no
+  🙋/👤 buttons (`RenderOptions.can_assign=False`). The operator can still do it from CLI/Desktop.
+- **Why participants AND authorized viewers, not "anyone who can click"**: a public card is visible to
+  the whole server; letting any viewer take tasks would let strangers (or a guest in a community
+  server) claim work. Hermes' allowlist is already the operator's statement of who may use the bot.
+- **Nothing typed widens it.** Buttons ignore select values for 🙋 (always the clicker, like "That's
+  me" in §4.1); the tools read the identity from Hermes' session, never from the message.
+- **Persisted like a 📁 move**: `item_overrides.owner_set/owner_user/owner_name` (migration 103) pins the
+  assignee so a re-analysis keeps it; `action_items` and `notes.json` are rewritten; `task_audit` keeps
+  who, when, from whom to whom (`undone` marks an undone row). Assigning the same person again changes
+  nothing (no audit row, nothing re-rendered, no Linear call).
+- **Shown in Discord in place** (`DiscordNotesSink.announce`, queued in `kv tasks.announce.<meeting>`):
+  the card is EDITED (an edit notifies nobody); only when someone else chose the new assignee, and that
+  person was never notified of this task before (`pinged:<item>`, shared with the first publication),
+  ONE short reply under the card mentions them (`allowed_mentions` = exactly them; skipped when they
+  cannot view the channel, §19.4). With `delivery_dm_assignees` their DM panel is posted once or edited
+  (`dm:<user>` pointer: never duplicated); the previous assignee's panel is edited; the index counts are
+  refreshed. A private meeting refreshes its shared copies instead of DMing. A click shows it at once;
+  CLI/Desktop/agent changes are shown by the gateway worker's next pulse (`Runtime.announce_assignments`).
+  A never-published meeting shows it at its first delivery.
+- **Linear/Kanban**: when the task already has an issue, `LinearSink.set_assignee` updates it through the
+  existing person mapping (link → email → name, `match_linear_user`); a person without a Linear user
+  leaves the issue **unassigned** (never the previous person) and the reply says so. Kanban tasks have
+  no person assignee (`unsupported`). Nothing is created by an assignment.
+- **Buttons** (all persistent `DynamicItem`s, `tak|tas|trl|tun` buttons, `asel` select, `ausr`
+  `UserSelect`): 🙋 on unassigned cards, 👤 "Assign" on assigned ones — owners get the participant
+  picker, the member picker and ↩️ undo; the assignee gets "Release it"; anyone else is told whose it is.
+
+### 16.3 The agent acts on tasks as the person asking (unreleased)
+`meeting_task_list(meeting_id)`, `meeting_task_assign(meeting_id?, task_id?|message_id?, assignee)` and
+`meeting_task_send(meeting_id?, task_id?|message_id?, target: linear|kanban)`.
+- **Identity**: `commands.caller_from_session()` reads `gateway.session_context.get_session_env`
+  (hermes-agent `gateway/session_context.py:173`), whose ContextVars the gateway binds for every
+  message turn in `GatewayRunner._set_session_env` (`gateway/run.py:4261`, called from
+  `gateway/run_turn.py:2053`) with the Discord source's `user_id`, `chat_id`, `thread_id`,
+  `parent_chat_id`, `scope_id`; tool handlers run in executor threads that copy the context
+  (`tools/daemon_pool.py:32`, `gateway/run.py:4302`). The tools act only when the platform is `discord`,
+  the user id is a snowflake, a chat id is bound and it is not a cron session; otherwise (Hermes CLI/TUI,
+  cron, other platforms, unbound) the write tools refuse with `no_identity` and only read. The operator
+  uses `task assign` / Desktop instead.
+- **What it proves**: Hermes answered the turn, so the person passed Hermes' allowlist (`authorized`);
+  `sees` = the chat is one of the channels/threads/forum posts holding the meeting's notes or cards
+  (`task_assign.meeting_places`), for a private meeting `Reader.may_read`, for a `:dm` meeting the
+  person's own DM copy; `admin` = the user id is an owner of the meeting's space. Then the §16.2 rules.
+- **Reply to a card**: Hermes gives the model the reply's quoted text but not the replied message id.
+  The session binds the triggering message id (`HERMES_SESSION_MESSAGE_ID`, `Caller.message_id`), so when
+  neither `task_id` nor `message_id` is given the tool asks the connected bot which message it replies to
+  (`discord_ui.replied_to_for`, run on the gateway loop from the tool's thread, 10 s timeout) and maps
+  that card to its task through the task-card pointers (`deliveries … task:<item>` and
+  `pdm:<user>:task:<item>`, `Repository.find_task_cards`). An explicit `message_id` does the same
+  without the lookup. Not a reply and no ids: an error asking which task.
+- **Send**: `meeting_task_send` is the 🟣/✅ button pressed by the person (`auth.check_task`: the assignee
+  or an owner; Kanban only owners' own tasks), through `MeetingService.approve_item` (only sinks enabled
+  for the meeting's space; a private meeting's issue carries the task only, §19.2), and then the card is
+  re-rendered in place (no ping). A direct-messages meeting: only one's own task from one's own copy.
+- **Errors** are short, in the space's language, and say what to do (`assign.error_*`).
 
 ## 17. Google Meet import and transcript attachment (unreleased)
 
@@ -1637,7 +1716,7 @@ Authentication is the host's (session token / OAuth gate). All bodies are JSON. 
 | `GET /v1/meetings/{id}` | `space` | `{meeting, notes, tasks, transcript_total, audio:{available, reason?, path?, stream_path?, can_prepare?}, history, job, command, projects, waiting_destination, dm_notes, destinations:{discord, kanban, linear, kanban_board}}` (destinations use the space's settings) |
 | `GET /v1/meetings/{id}/transcript` | `space, cursor, limit(1–500, 200)` | `{items:[{id,t0,t1,speaker,text,…}], total, next_cursor}` |
 | `GET\|HEAD /v1/meetings/{id}/audio` | `space`, `Range` | the listening copy (`playback.ogg`) or `recording.ogg`, inline, 206 with Range; 404 without audio |
-| `POST /v1/meetings/{id}/commands` | `space`; `{request_id:[A-Za-z0-9_-]{1,100}, action:"reprocess", stage:"transcribe"\|"analyze"\|"deliver", confirm:true}` or `{request_id, action:"prepare_audio", confirm:true}` | `{id, action, stage, state:"queued", …}`; the same `request_id` again returns the existing command |
+| `POST /v1/meetings/{id}/commands` | `space`; `{request_id:[A-Za-z0-9_-]{1,100}, action:"reprocess", stage:"transcribe"\|"analyze"\|"deliver", confirm:true}` or `{request_id, action:"prepare_audio", confirm:true}` or `{request_id, action:"assign_speaker", label, user, confirm:true}` or `{request_id, action:"assign_task", task:"<item id>", user:"<id>"\|"none"\|"undo", confirm:true}` (§16.2) | `{id, action, stage, state:"queued", …}`; the same `request_id` again returns the existing command |
 | `GET /v1/commands/{rid}` | `space` | `{id, action, stage, state, error, created_at, updated_at, …}` |
 | `POST /v1/commands/{rid}/acknowledge` | `space`; `{confirm:true}` | the command, `state:"acknowledged"` |
 

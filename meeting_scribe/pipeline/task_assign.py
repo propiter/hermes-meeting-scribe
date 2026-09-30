@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 SINK_NAMES = {"kanban": "Kanban", "linear": "Linear"}
 ANNOUNCE_KV = "tasks.announce."  # + meeting id -> {item id: {"to", "from": [...], "actor"}}
 NOBODY = frozenset({"none", "nobody", "unassigned", "nadie"})
-ME = frozenset({"me", "yo", "mí", "mi"})
+ME = frozenset({"me", "yo"})
 _CARD_KEY = re.compile(r"^mtg:(?P<meeting>[^:]+):(?:pdm:(?P<user>[0-9]+):)?task:(?P<item>.+)$")
 
 
@@ -249,7 +249,7 @@ def queue_refresh(repo: Any, meeting_id: str, item_id: str) -> None:
     """Re-render a task's card in place (e.g. it went to Linear), pinging nobody."""
     pending = pending_announcements(repo, meeting_id)
     item = repo.get_action_item(meeting_id, item_id)
-    rec = pending.get(item_id) or {"from": [], "ping": False, "actor": ""}
+    rec = pending.get(item_id) or {"from": [], "ping": False, "actor": "", "refresh": True}
     pending[item_id] = {**rec, "to": item.owner_speaker_id if item is not None else None}
     repo.kv_set(ANNOUNCE_KV + meeting_id, json.dumps(pending, sort_keys=True))
 

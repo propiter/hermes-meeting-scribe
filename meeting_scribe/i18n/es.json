@@ -473,5 +473,7 @@
   "assign.error_taken": "Esta tarea ya es de {detail}. Esa persona puede liberarla, o un dueño reasignarla.",
   "assign.error_not_eligible": "Solo puede tomarla alguien que estuvo en la reunión, o un miembro autorizado a usar el bot que pueda ver esta tarea.",
   "assign.error_nothing_to_undo": "“{detail}” no tiene ninguna asignación que deshacer.",
-  "assign.error_cli_me": "“me” en la terminal es el único dueño del espacio, pero tiene {detail}; indica el id de usuario."
+  "assign.error_cli_me": "“me” en la terminal es el único dueño del espacio, pero tiene {detail}; indica el id de usuario.",
+  "assign.error_unknown_meeting": "Aquí no hay ninguna reunión {detail}; búscala con meeting_search.",
+  "assign.error_which_task": "¿Qué tarea? Indica meeting_id y task_id (ver meeting_task_list), o responde a la tarjeta de la tarea."
 }

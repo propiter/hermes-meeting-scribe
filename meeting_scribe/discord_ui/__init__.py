@@ -79,6 +79,43 @@ def membership_for(runtime: Any) -> Optional[Callable[[str, Sequence[str]], Opti
     return check
 
 
+REPLY_LOOKUP_TIMEOUT = 10.0
+
+
+def replied_to_for(runtime: Any) -> Optional[Callable[[str, str], Optional[str]]]:
+    """For the agent's task tools (DESIGN §16.3): ``lookup(chat_id, message_id)`` → the id of the message
+    that Discord message replies to (``None``: not a reply / not found). Runs on the gateway loop from a
+    tool's worker thread; ``None`` while Discord is not connected."""
+    state = _STATES.get(runtime)
+    client = getattr(state.adapter, "_client", None) if state is not None else None
+    loop = state.loop if state is not None else None
+    if client is None or loop is None:
+        return None
+
+    async def fetch(chat_id: str, message_id: str) -> Optional[str]:
+        channel = client.get_channel(int(chat_id)) or await client.fetch_channel(int(chat_id))
+        message = await channel.fetch_message(int(message_id))
+        ref = getattr(message, "reference", None)
+        return str(ref.message_id) if ref is not None and getattr(ref, "message_id", None) else None
+
+    def lookup(chat_id: str, message_id: str) -> Optional[str]:
+        if not (str(chat_id).isdigit() and str(message_id).isdigit()) or loop.is_closed():
+            return None
+        try:
+            if asyncio.get_running_loop() is loop:
+                return None  # never block the gateway loop on itself
+        except RuntimeError:
+            pass  # a worker thread: the normal case
+        fut = asyncio.run_coroutine_threadsafe(fetch(str(chat_id), str(message_id)), loop)
+        try:
+            return fut.result(REPLY_LOOKUP_TIMEOUT)
+        except Exception as exc:  # deleted message, no access, timeout: the agent passes the task id instead
+            fut.cancel()
+            log.info("meeting-scribe: could not read the message %s replies to: %s", message_id, exc)
+            return None
+    return lookup
+
+
 def _check_auth(state: UiState) -> Callable[[Any], bool]:
     def check(interaction: Any) -> bool:
         adapter = state.adapter
