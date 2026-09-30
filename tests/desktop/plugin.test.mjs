@@ -364,6 +364,27 @@ test('tasks tab: owner, project, due and per-destination status with links', opt
   assert.match(html, /Enviada/)
 })
 
+test('tasks tab: each open task can be assigned to a participant, any Discord id, nobody, or undone', opts, async () => {
+  const { createElement } = await import('react')
+  mod.$tab.set('tasks')
+  const d = { ...DETAIL, task_assignees: { people: [{ id: '10', name: 'Ana' }, { id: '11', name: 'Luis' }],
+    audit: [{ id: 1, item_id: 't1', actor: '11', previous_user: null, next_user: '11', at: '2026-09-26T16:00:00+00:00', undone: 0 }] } }
+  const html = await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': d }, 'es')
+  assert.match(html, /data-assign="t1"/)
+  assert.match(html, /data-value="none">Nadie \(liberarla\)/)
+  assert.match(html, /data-value="11">Luis/)
+  assert.match(html, /data-value="other">Id de usuario de Discord/)
+  assert.match(html, /Deshacer último cambio/)
+  assert.match(html, /Cambios de responsable/)
+  assert.match(html, /se le menciona una vez/)
+  const dismissed = { ...d, tasks: d.tasks.map(x => ({ ...x, status: 'dismissed' })) }
+  assert.doesNotMatch(await render(createElement(mod.MeetingDetail, { id: 'k3v7q2ab' }), { '/v1/meetings/k3v7q2ab': dismissed }), /data-assign=/)
+  assert.equal(mod.taskAssignValue('other', ' 123456789012345678 '), '123456789012345678')
+  assert.equal(mod.taskAssignValue('other', 'Ana'), '')
+  assert.equal(mod.taskAssignValue('10', ''), '10')
+  assert.equal(mod.commandLabel({ action: 'assign_task' }, (k, ...a) => k === 'processing.actions.assign_task' ? 'Assign a task' : k), 'Assign a task')
+})
+
 test('processing tab: plain-language problem, details, history and reprocess', opts, async () => {
   const { createElement } = await import('react')
   mod.$tab.set('processing')

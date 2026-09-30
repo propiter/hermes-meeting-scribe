@@ -113,6 +113,10 @@ def test_detail_notes_tasks_sinks_and_redacted_job(repo, tmp_path, meeting, note
     assert tracks["tracks"] == [{"label": "unidentified-1", "name": "Participante sin identificar", "lines": 0,
                                  "first": None, "last": None, "owner": None, "suggested_user": None,
                                  "suggestion_name": "", "suggestion_reason": ""}]
+    repo.audit_task(m.id, first, "desktop", None, "43", "2026-09-26T16:00:00+00:00")
+    who = Library(repo, tmp_path).detail(m.id)["task_assignees"]  # DESIGN §16.2: the tasks tab's picker
+    assert who["people"] == [{"id": "43", "name": "Luis"}]
+    assert [(a["item_id"], a["actor"], a["next_user"]) for a in who["audit"]] == [(first, "desktop", "43")]
 
 
 def test_detail_survives_missing_or_damaged_notes(repo, tmp_path, meeting):

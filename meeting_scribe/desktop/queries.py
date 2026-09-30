@@ -262,7 +262,7 @@ class Library:
         public["missing_audio_names"] = list(meeting.missing_audio_names)
         public["private"] = self.private(meeting)
         public["speaker_tracks"] = self.speaker_tracks(meeting)
-        return {"meeting": public, "notes": notes, "tasks": tasks, "projects": projects,
+        return {"task_assignees": self.task_assignees(meeting),"meeting": public, "notes": notes, "tasks": tasks, "projects": projects,
                 "transcript_total": self.repo.utterance_count(mid), "job": self.job(mid),
                 "history": self.history(mid),
                 "waiting_destination": redact(self.repo.kv_get(WAITING_KV + mid) or "") or None,
@@ -278,6 +278,14 @@ class Library:
         return {"tracks": [tr.to_dict() for tr in tracks(self.repo, folder, meeting)],
                 "audit": self.repo.speaker_history(meeting.id),
                 "people": [{"id": s.user_id, "name": s.name} for s in candidates(meeting)]}
+
+    def task_assignees(self, meeting: Any) -> dict[str, Any]:
+        """Who a task may be given to from the page (the participants; any Discord id is accepted too) and
+        every change so far (DESIGN §16.2)."""
+        from ..privacy import people
+
+        return {"people": [{"id": uid, "name": name} for uid, name in people(self.repo, meeting) if uid],
+                "audit": self.repo.task_history(meeting.id)}
 
     def tasks(self, mid: str) -> list[dict[str, Any]]:
         out = []

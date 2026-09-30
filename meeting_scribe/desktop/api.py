@@ -252,7 +252,9 @@ def submit_command(request: Request, meeting_id: str, body: dict[str, Any] = Bod
     """``{"request_id", "action": "reprocess", "stage": "transcribe|analyze|deliver", "confirm": true}``
     or ``{"request_id", "action": "prepare_audio", "confirm": true}`` (write the listening copy), or
     ``{"request_id", "action": "assign_speaker", "label": "unidentified-N", "user": "<id>", "confirm": true}``
-    (give an unidentified participant track to a participant, DESIGN §4.1).
+    (give an unidentified participant track to a participant, DESIGN §4.1), or
+    ``{"request_id", "action": "assign_task", "task": "<item id>", "user": "<id>|none|undo", "confirm": true}``
+    (who a task belongs to, DESIGN §16.2).
     ``confirm`` must be literally ``true``: the page asks the operator before sending it."""
     if body.get("confirm") is not True:
         raise HTTPException(400, "confirmation required")

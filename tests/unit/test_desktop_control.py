@@ -32,7 +32,15 @@ def fake_service(repo, calls, fail=None):
     def assign_speaker(mid, label, user, *, actor, admin):
         assert actor == "desktop" and admin is True
         calls.append((mid, label, user))
+    def assign_task(mid, task, user, actor):
+        assert actor.user_id == "desktop" and actor.local is True
+        calls.append((mid, task, user))
+
+    def undo_task_assignment(mid, task, actor):
+        assert actor.local is True
+        calls.append((mid, task, "undo"))
     return SimpleNamespace(repo=repo, reprocess=reprocess, prepare_audio=prepare_audio, assign_speaker=assign_speaker,
+                           assign_task=assign_task, undo_task_assignment=undo_task_assignment,
                            require=lambda mid: repo.get_meeting(mid))
 
 
@@ -69,6 +77,11 @@ def test_submit_is_idempotent_and_execution_is_gateway_side(repo, meeting):
     ("ok", {"action": "assign_speaker", "label": "unidentified-1", "user": "11; rm"}),
     ("ok", {"action": "assign_speaker", "label": "unidentified-1", "user": "99"}),  # not a participant
     ("ok", {"action": "assign_speaker", "label": "unidentified-1"}),
+    ("ok", {"action": "assign_task", "task": "a1"}),
+    ("ok", {"action": "assign_task", "task": "a1", "user": "10; rm"}),
+    ("ok", {"action": "assign_task", "task": "../a1", "user": "10"}),
+    ("ok", {"action": "assign_task", "task": "zz", "user": "10"}),  # no such task in the meeting
+    ("ok", {"action": "assign_task", "task": "a1", "user": "10", "actor": "admin"}),
 ])
 def test_submit_rejects_anything_but_the_known_commands(repo, meeting, rid, body):
     with pytest.raises(ValueError):
@@ -244,3 +257,18 @@ def test_assign_speaker_is_queued_and_run_by_the_gateway(repo, meeting):
     calls = []
     assert execute_one(fake_service(repo, calls)) is True
     assert calls == [(meeting.id, "unidentified-1", "11")] and queue.get("assign-1")["state"] == "done"
+
+
+def test_assign_task_is_queued_and_run_by_the_gateway_as_the_operator(repo, meeting):
+    from meeting_scribe.domain.models import ActionItem
+
+    repo.sync_action_items(meeting.id, (ActionItem(id="a1", title="Fix the mail"),))
+    queue = Commands(repo)
+    got = queue.submit("task-1", meeting.id, {"action": "assign_task", "task": "a1", "user": "10"})
+    assert (got["action"], got["task"], got["user"], got["state"]) == ("assign_task", "a1", "10", "queued")
+    calls = []
+    assert execute_one(fake_service(repo, calls)) is True
+    queue.submit("task-2", meeting.id, {"action": "assign_task", "task": "a1", "user": "undo"})
+    assert execute_one(fake_service(repo, calls)) is True
+    assert calls == [(meeting.id, "a1", "10"), (meeting.id, "a1", "undo")]
+    assert control.Commands(repo).get("task-2")["state"] == "done"

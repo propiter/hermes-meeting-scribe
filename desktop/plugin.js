@@ -203,7 +203,13 @@ export const LOCALES = {
         failed: 'Failed', skipped: 'Skipped', off: 'Off', posted: 'Posted', notPosted: 'Not posted'
       },
       openDiscord: 'Open in Discord', openLinear: 'Open in Linear', openKanban: 'Open the board',
-      quote: 'Said in the meeting'
+      quote: 'Said in the meeting',
+      assign: {
+        label: 'Assign to…', confirm: 'Assign', nobody: 'Nobody (release it)', undo: 'Undo last change',
+        other: 'Discord user id', otherHint: 'Someone who was not in the meeting: their Discord user id.',
+        help: 'The card in Discord is edited in place, the new assignee gets it by direct message and is mentioned once. A task already in Linear gets the new assignee there too.',
+        audit: 'Assignment changes', failed: e => `Could not assign it: ${e}`
+      }
     },
     processing: {
       current: 'Current step', history: 'History', none: 'Nothing has happened yet.',
@@ -227,7 +233,7 @@ export const LOCALES = {
       retryAuto: 'It will be retried automatically.',
       reprocess: 'Reprocess…',
       reprocessHelp: 'Redo a step and everything after it. Already published messages are updated, not duplicated.',
-      actions: { reprocess: step => `Reprocess from «${step}»`, prepare_audio: 'Prepare the audio to listen to', assign_speaker: 'Assign an unidentified participant', unknown: 'An action from this page' },
+      actions: { reprocess: step => `Reprocess from «${step}»`, prepare_audio: 'Prepare the audio to listen to', assign_speaker: 'Assign an unidentified participant', assign_task: 'Assign a task', unknown: 'An action from this page' },
       cmd: {
         queued: 'Queued: the bot starts in a few seconds.', running: 'Running…', done: 'Finished.',
         failed: message => `Failed: ${message}`,
@@ -456,7 +462,13 @@ export const LOCALES = {
         failed: 'Falló', skipped: 'Omitida', off: 'Desactivado', posted: 'Publicada', notPosted: 'Sin publicar'
       },
       openDiscord: 'Abrir en Discord', openLinear: 'Abrir en Linear', openKanban: 'Abrir el tablero',
-      quote: 'Dicho en la reunión'
+      quote: 'Dicho en la reunión',
+      assign: {
+        label: 'Asignar a…', confirm: 'Asignar', nobody: 'Nadie (liberarla)', undo: 'Deshacer último cambio',
+        other: 'Id de usuario de Discord', otherHint: 'Alguien que no estuvo en la reunión: su id de usuario de Discord.',
+        help: 'La tarjeta en Discord se edita en su sitio, el nuevo responsable la recibe por mensaje directo y se le menciona una vez. Si la tarea ya está en Linear, allí también cambia el responsable.',
+        audit: 'Cambios de responsable', failed: e => `No se pudo asignar: ${e}`
+      }
     },
     processing: {
       current: 'Etapa actual', history: 'Historial', none: 'Todavía no ha pasado nada.',
@@ -480,7 +492,7 @@ export const LOCALES = {
       retryAuto: 'Se reintentará automáticamente.',
       reprocess: 'Reprocesar…',
       reprocessHelp: 'Repite una etapa y todas las siguientes. Lo ya publicado se actualiza, no se duplica.',
-      actions: { reprocess: step => `Reprocesar desde «${step}»`, prepare_audio: 'Preparar el audio para escucharlo', assign_speaker: 'Asignar un participante sin identificar', unknown: 'Una acción de esta página' },
+      actions: { reprocess: step => `Reprocesar desde «${step}»`, prepare_audio: 'Preparar el audio para escucharlo', assign_speaker: 'Asignar un participante sin identificar', assign_task: 'Asignar una tarea', unknown: 'Una acción de esta página' },
       cmd: {
         queued: 'En cola: el bot empieza en unos segundos.', running: 'En marcha…', done: 'Terminado.',
         failed: message => `Falló: ${message}`,
@@ -1138,7 +1150,8 @@ export function MeetingDetail({ id, onBack }) {
       h(SpeakerTracks, { meeting: m, commandId: cmd, onSubmitted: setCommandId, onFinished: () => query.refetch() }),
       h(TranscriptTab, { id, total: d.transcript_total, onSeek: d.audio?.available ? seek : null }))
   }
-  else if (tab === 'tasks') panel = h(TasksTab, { tasks: d.tasks || [], destinations: d.destinations || {} })
+  else if (tab === 'tasks') panel = h(TasksTab, { tasks: d.tasks || [], destinations: d.destinations || {}, meetingId: m.id,
+    assignees: d.task_assignees || { people: [], audit: [] }, commandId: cmd, onSubmitted: setCommandId, onFinished: () => query.refetch() })
   else if (tab === 'processing') panel = h(ProcessingTab, { detail: d, commandId: cmd, onSubmitted: setCommandId, onFinished: () => query.refetch() })
   else panel = h(SummaryTab, { detail: d, tasks: openTasks, audioRef, onSubmitted: setCommandId, commandId: cmd, onFinished: () => query.refetch() })
 
@@ -1417,7 +1430,59 @@ function TranscriptTab({ id, total, onSeek }) {
 }
 
 // -- tasks --------------------------------------------------------------------------------------
-function TasksTab({ tasks, destinations }) {
+/** Who a task belongs to (DESIGN §16.2): a participant, any Discord user id, nobody, or undo the last
+ * change. Queued like every page action; the gateway edits the Discord card in place. */
+export function taskAssignValue(choice, other) {
+  if (choice === 'other') return /^[0-9]{5,25}$/.test((other || '').trim()) ? other.trim() : ''
+  return choice || ''
+}
+
+function TaskAssign({ task, meetingId, assignees, commandId, onSubmitted, onFinished }) {
+  const t = usePluginI18n(ID)
+  const [choice, setChoice] = useState('')
+  const [other, setOther] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const cmd = useCommand(commandId, onFinished)
+  const mine = cmd.data?.action === 'assign_task' && cmd.data.task === task.id
+  const running = cmd.data && ['queued', 'running'].includes(cmd.data.state) && cmd.data.action === 'assign_task'
+  const history = (assignees.audit || []).filter(row => row.item_id === task.id)
+  const submit = async user => {
+    setError('')
+    setBusy(true)
+    const rid = newRequestId()
+    try {
+      await rest(`/v1/meetings/${encodeURIComponent(meetingId)}/commands`, { method: 'POST', body: { request_id: rid, action: 'assign_task', task: task.id, user, confirm: true } })
+      onSubmitted(rid)
+    } catch (e) {
+      setError(parseError(e).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const value = taskAssignValue(choice, other)
+  return h('div', { className: 'ms-stack-sm', 'data-assign': task.id },
+    h('div', { className: 'ms-inline' },
+      h(Select, { value: choice, onValueChange: setChoice },
+        h(SelectTrigger, { size: 'sm', 'aria-label': t('tasks.assign.label') }, h(SelectValue, { placeholder: t('tasks.assign.label') })),
+        h(SelectContent, null,
+          h(SelectItem, { value: 'none' }, t('tasks.assign.nobody')),
+          (assignees.people || []).map(p => h(SelectItem, { key: p.id, value: p.id }, p.name)),
+          h(SelectItem, { value: 'other' }, t('tasks.assign.other')))),
+      choice === 'other' ? h(Input, { value: other, size: 'sm', inputMode: 'numeric', 'aria-label': t('tasks.assign.other'),
+        placeholder: t('tasks.assign.otherHint'), onChange: e => setOther(e.target.value) }) : null,
+      h(Button, { type: 'button', variant: 'secondary', size: 'sm', disabled: busy || running || !value, onClick: () => submit(value) },
+        h(Codicon, { name: running ? 'loading~spin' : 'person', size: '0.8rem' }), t('tasks.assign.confirm')),
+      history.some(row => !row.undone) ? h(Button, { type: 'button', variant: 'ghost', size: 'sm', disabled: busy || running,
+        onClick: () => submit('undo') }, t('tasks.assign.undo')) : null),
+    history.length ? h('details', null, h('summary', null, t('tasks.assign.audit')),
+      h('ul', null, history.map(row => h('li', { key: row.id },
+        `${row.at} · ${row.actor} · ${row.previous_user || '—'} → ${row.next_user || '—'}${row.undone ? ' ↩' : ''}`)))) : null,
+    mine && cmd.data.state === 'failed' ? h('p', { className: 'ms-error' }, t('tasks.assign.failed', cmd.data.error || '')) : null,
+    error ? h('p', { className: 'ms-error', role: 'alert' }, error) : null)
+}
+
+function TasksTab({ tasks, destinations, meetingId, assignees = { people: [], audit: [] }, commandId, onSubmitted = () => {}, onFinished }) {
   const t = usePluginI18n(ID)
   if (!tasks.length) return h(Empty, { icon: 'checklist' }, h('p', null, t('tasks.empty')))
   const kanbanOn = destinations.kanban && destinations.kanban !== 'off'
@@ -1443,8 +1508,9 @@ function TasksTab({ tasks, destinations }) {
           h('span', { className: 'ms-dest-name' }, t(`tasks.${r.key}`)),
           h(Pill, { tone: r.view.tone }, t(`tasks.status.${r.view.key}`)),
           r.link))),
-      task.quote ? h('blockquote', { className: 'ms-quote', title: t('tasks.quote') }, `“${task.quote}”`) : null)
-  }))
+      task.quote ? h('blockquote', { className: 'ms-quote', title: t('tasks.quote') }, `“${task.quote}”`) : null,
+      !dismissed && meetingId ? h(TaskAssign, { task, meetingId, assignees, commandId, onSubmitted, onFinished }) : null)
+  }), h('p', { className: 'ms-muted' }, t('tasks.assign.help')))
 }
 
 // -- processing ---------------------------------------------------------------------------------
