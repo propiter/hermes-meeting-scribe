@@ -472,5 +472,6 @@
   "assign.error_self_only": "Solo puedes quedarte una tarea para ti. Para dársela a otra persona, pídeselo a un dueño.",
   "assign.error_taken": "Esta tarea ya es de {detail}. Esa persona puede liberarla, o un dueño reasignarla.",
   "assign.error_not_eligible": "Solo puede tomarla alguien que estuvo en la reunión, o un miembro autorizado a usar el bot que pueda ver esta tarea.",
-  "assign.error_nothing_to_undo": "“{detail}” no tiene ninguna asignación que deshacer."
+  "assign.error_nothing_to_undo": "“{detail}” no tiene ninguna asignación que deshacer.",
+  "assign.error_cli_me": "“me” en la terminal es el único dueño del espacio, pero tiene {detail}; indica el id de usuario."
 }

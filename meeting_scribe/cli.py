@@ -1,4 +1,4 @@
-"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|private-move|export|config|google|space|route|speaker``
+"""``hermes meeting-scribe setup|doctor|status|list|show|reprocess|private-move|export|config|google|space|route|speaker|task``
 (DESIGN §4.1, §10, §17, §23).
 
 ``setup_parser`` / ``dispatch`` are pure (the runtime is injected) so they are unit-tested
@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
-from . import cli_google, cli_routes, cli_speakers, cli_spaces, doctor, llm_config
+from . import cli_google, cli_routes, cli_speakers, cli_spaces, cli_tasks, doctor, llm_config
 from .cli_spaces import CliExit, add_space_arg, selected
 from .commands import status_headline
 from .config import (DESTINATION_KEYS, LEGACY_KEYS, RETIRED_KEYS, SPEC, TASK_PLACEMENTS, Settings, canonical_key,
@@ -116,6 +116,7 @@ def setup_parser(parser: argparse.ArgumentParser) -> None:
     cli_spaces.add_parser(sub)
     cli_routes.add_parser(sub)
     cli_speakers.add_parser(sub)
+    cli_tasks.add_parser(sub)
     parser.set_defaults(_ms_parser=parser)
 
 
@@ -701,7 +702,8 @@ def _llm(args: argparse.Namespace, rt: CliRuntime) -> int:
 _COMMANDS: dict[str, Callable[[argparse.Namespace, CliRuntime], int]] = {
     "setup": _setup, "doctor": _doctor, "status": _status, "list": _list, "show": _show,
     "reprocess": _reprocess, "private-move": _private_move, "export": _export, "config": _config, "google": cli_google.dispatch, "llm": _llm,
-    "space": cli_spaces.dispatch, "route": cli_routes.dispatch, "speaker": cli_speakers.dispatch}
+    "space": cli_spaces.dispatch, "route": cli_routes.dispatch, "speaker": cli_speakers.dispatch,
+    "task": cli_tasks.dispatch}
 
 
 def dispatch(args: argparse.Namespace, rt: CliRuntime) -> int:
