@@ -18,7 +18,7 @@ from ..i18n import t
 from .render import ButtonSpec
 from .render_tasks import TaskPanel
 
-BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg|shp|shd|sha|shc|spk|scfm|sme|tak|tas|trl|tun):"
+BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg|shp|shd|sha|shc|spk|scfm|sme|tak|tas|trl|tun|pok|pno):"
                    r"(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})")
 SELECT_TEMPLATE = r"mscribe:(?P<action>psel|tsel|ssel|asel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 USER_SELECT_TEMPLATE = r"mscribe:(?P<action>ausr):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"

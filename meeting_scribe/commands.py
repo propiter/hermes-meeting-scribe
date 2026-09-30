@@ -59,6 +59,25 @@ class Caller:
     source: str = ""  # Hermes' session source (cli, tui, desktop, ...): who the operator is without a chat
     cron: bool = False  # a scheduled job: its output goes wherever the job delivers (never private meetings)
     message_id: str = ""  # the chat message that started the turn (a reply to a task card names it)
+    chat_type: str = ""  # dm | group | channel | thread
+    session_key: str = ""  # Hermes' session key: says whether the session belongs to this user alone
+    user_id_alt: str = ""
+    delegated: bool = False  # a delegate_task subagent: it runs for someone, it is nobody itself
+
+    @property
+    def per_user_session(self) -> bool:
+        """Hermes gave this conversation to this user alone, so the session identity is theirs for the
+        whole turn (DESIGN §16.3). A Discord DM is one person's. Elsewhere the session key must end with
+        the user's slot (hermes-agent ``gateway/session.py`` ``build_session_key``: a group or thread key
+        carries the participant last only when it is isolated per user); a thread or channel shared by
+        everyone (the default for threads) has no user slot: a message from someone else can run inside
+        this user's turn with this user's identity. Unknown = shared."""
+        if not self.user_id:
+            return False
+        if (self.platform or "").lower() == "discord" and self.chat_type == "dm":
+            return True
+        slot = self.session_key.rsplit(":", 1)[-1] if ":" in self.session_key else ""
+        return bool(slot) and slot in {self.user_id, self.user_id_alt}
 
     @property
     def guild_id(self) -> str:
@@ -76,6 +95,7 @@ def _labels(spaces: Sequence[Any]) -> str:
 
 
 def caller_from_session() -> Caller:
+    from agent.delegation_context import is_delegated_child_context
     from gateway.session_context import get_session_env
 
     return Caller(platform=get_session_env("HERMES_SESSION_PLATFORM"), chat_id=get_session_env("HERMES_SESSION_CHAT_ID"),
@@ -84,7 +104,11 @@ def caller_from_session() -> Caller:
                   parent_chat_id=get_session_env("HERMES_SESSION_PARENT_CHAT_ID", "") or "",
                   source=get_session_env("HERMES_SESSION_SOURCE", "") or "",
                   cron=bool(get_session_env("HERMES_CRON_SESSION", "")),
-                  message_id=get_session_env("HERMES_SESSION_MESSAGE_ID", "") or "")
+                  message_id=get_session_env("HERMES_SESSION_MESSAGE_ID", "") or "",
+                  chat_type=get_session_env("HERMES_SESSION_CHAT_TYPE", "") or "",
+                  session_key=get_session_env("HERMES_SESSION_KEY", "") or "",
+                  user_id_alt=get_session_env("HERMES_SESSION_USER_ID_ALT", "") or "",
+                  delegated=is_delegated_child_context())
 
 
 def status_headline(st: dict[str, Any], lang: str, visible: Callable[[str], bool] = lambda mid: True) -> list[str]:

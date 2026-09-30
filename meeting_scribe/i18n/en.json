@@ -475,5 +475,21 @@
   "assign.error_nothing_to_undo": "“{detail}” has no assignment to undo.",
   "assign.error_cli_me": "“me” at the terminal means the space's only owner, but it has {detail}; give the user id instead.",
   "assign.error_unknown_meeting": "No meeting {detail} here; find it with meeting_search.",
-  "assign.error_which_task": "Which task? Pass meeting_id and task_id (see meeting_task_list), or reply to the task card."
+  "assign.error_which_task": "Which task? Pass meeting_id and task_id (see meeting_task_list), or reply to the task card.",
+  "propose.header": "📝 Proposed change to the task “{title}” (meeting `{meeting}`):",
+  "propose.assign": "assign it to {what}",
+  "propose.send": "create it in {what}",
+  "propose.nobody": "nobody (release it)",
+  "propose.who_confirms": "whoever presses Confirm",
+  "propose.footer": "-# Several people share this conversation, so nothing changes until someone presses ✅ Confirm; it is done as that person, with the task card's rules. Expires in {minutes} min.",
+  "propose.pending": "Nothing has changed yet: several people share this conversation, so I posted the change with a ✅ Confirm button. Ask the user to press it (it acts as whoever presses it, with the task card's rules); it expires in {minutes} minutes.",
+  "propose.btn_confirm": "Confirm",
+  "propose.btn_cancel": "Cancel",
+  "propose.unknown": "This confirmation is not valid here.",
+  "propose.expired": "This proposal expired; ask again.",
+  "propose.used": "This proposal was already confirmed or cancelled.",
+  "propose.cancelled_you": "Cancelled; nothing changed.",
+  "propose.cancelled": "-# ✖ Cancelled by {name}.",
+  "propose.done": "-# ✅ Confirmed by {name}.",
+  "assign.error_confirm_unavailable": "I could not post the confirmation in this conversation. Use the task card's buttons instead."
 }

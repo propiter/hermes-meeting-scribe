@@ -156,6 +156,12 @@ def _target(repo: Any, meeting: Meeting, who: str, actor: Actor, name: str) -> t
     raise TaskAssignError("unknown_person", raw)
 
 
+def person(repo: Any, meeting: Meeting, who: str) -> tuple[Optional[str], str]:
+    """``(user id or None for nobody, display name)`` of an assignee other than "me" (a proposal names
+    the person before anyone confirms it); :class:`TaskAssignError` when nobody matches."""
+    return _target(repo, meeting, who, Actor(""), "")
+
+
 def authorize(repo: Any, meeting: Meeting, item: ActionItem, target: Optional[str], actor: Actor, *,
               private: bool, dm: bool) -> None:
     """Raise :class:`TaskAssignError` unless ``actor`` may give ``item`` to ``target`` (see module doc).

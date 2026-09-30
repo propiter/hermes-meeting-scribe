@@ -21,9 +21,9 @@ from ..i18n import t
 from ..pipeline.speakers import AssignError
 from ..privacy import people as _people
 from ..pipeline.task_assign import SINK_NAMES, Actor, TaskAssignError, assign_error, assign_reply
-from .auth import (ASSIGN_ACTIONS, MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, SPEAKER_ACTIONS,
-                   TASK_ACTIONS, can_view, check_dm, check_private, check_speaker, check_task)
-from .render import ButtonSpec, custom_id
+from .auth import (ASSIGN_ACTIONS, MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, PROPOSAL_ACTIONS, SHARE_ACTIONS,
+                   SPEAKER_ACTIONS, TASK_ACTIONS, can_view, check_dm, check_private, check_speaker, check_task)
+from .render import ButtonSpec, custom_id, safe_name
 
 log = logging.getLogger(__name__)
 SELECT_LIMIT = 25
@@ -207,7 +207,8 @@ class ButtonActions:
 
     async def handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
                      values: Optional[Sequence[str]] = None) -> None:
-        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS | SHARE_ACTIONS | SPEAKER_ACTIONS | ASSIGN_ACTIONS:
+        if action not in (TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS | SHARE_ACTIONS | SPEAKER_ACTIONS | ASSIGN_ACTIONS
+                          | PROPOSAL_ACTIONS):
             return
         token = _SPACE.set(await asyncio.to_thread(self._meeting_space, meeting_id))
         try:
@@ -217,6 +218,9 @@ class ButtonActions:
 
     async def _handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
                       values: Optional[Sequence[str]]) -> None:
+        if action in PROPOSAL_ACTIONS:
+            await self._proposal(interaction, action, meeting_id, item_id)
+            return
         if not await self._authorize(interaction, action, meeting_id, item_id):
             return
         if values is None:
@@ -507,3 +511,91 @@ class ButtonActions:
             return
         await interaction.followup.send(t("ui.pick_project", self.lang), view=self._project_view(meeting_id, cands),
                                         ephemeral=True)
+
+    # -- a task change the agent proposed in a shared conversation (DESIGN §16.3) --------------------------
+    async def _proposal(self, interaction: Any, action: str, meeting_id: str, pid: str) -> None:
+        """✅ runs the proposed change AS the clicker, with the task card's rules (the same calls as 🙋/👤
+        and 🟣/✅); ✖ cancels it. Only in the chat it was posted in, and behind the meeting's privacy gate.
+        A refused ✅ leaves the proposal pending: someone allowed (an owner) may still confirm it."""
+        import time
+
+        from ..pipeline import task_proposals as tp
+
+        svc, lang = self._service(), self.lang
+        proposal = await asyncio.to_thread(tp.get, svc.repo, pid)
+        here = {str(x) for x in (getattr(interaction, "channel_id", None),
+                                 getattr(getattr(interaction, "channel", None), "id", None)) if x}
+        if proposal is None or proposal.meeting_id != meeting_id or proposal.chat_id not in here:
+            await self._deny(interaction, t("propose.unknown", lang))
+            return
+        if await self._private_gate(interaction, "tak", meeting_id, proposal.item_id) is False:
+            return
+        name = str(getattr(interaction.user, "display_name", "") or "") or self._uid(interaction)
+        if action == "pno":
+            if not (self.is_owner(interaction) or self._hermes_allows(interaction)):
+                await self._deny(interaction, t("ui.not_allowed", lang))
+                return
+            if not await asyncio.to_thread(tp.cancel, svc.repo, pid, time.time(), self._uid(interaction)):
+                await self._deny(interaction, t(f"propose.{await self._why_closed(pid)}", lang))
+                return
+            await interaction.response.send_message(t("propose.cancelled_you", lang), ephemeral=True)
+            await self._close_proposal(interaction, t("propose.cancelled", lang, name=safe_name(name)))
+            return
+        claimed = await asyncio.to_thread(tp.claim, svc.repo, pid, time.time())
+        if claimed != "ok":
+            await self._deny(interaction, t(f"propose.{claimed}", lang))
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            reply = await self._run_proposal(interaction, proposal)
+        except Exception as exc:  # refused or failed: nothing changed, it stays open for someone allowed
+            await asyncio.to_thread(tp.release, svc.repo, pid, time.time())
+            (log.warning if isinstance(exc, (KeyError, LookupError, ValueError)) else log.exception)(
+                "meeting-scribe: proposal %s on %s/%s not run: %s", pid, meeting_id, proposal.item_id, exc)
+            await interaction.followup.send(clip_reply(friendly_error(exc, lang)), ephemeral=True)
+            return
+        await asyncio.to_thread(tp.finish, svc.repo, pid, time.time(), self._uid(interaction), reply)
+        await self._close_proposal(interaction, t("propose.done", lang, name=safe_name(name)))
+        await interaction.followup.send(clip_reply(reply), ephemeral=True)
+
+    async def _why_closed(self, pid: str) -> str:
+        from ..pipeline import task_proposals as tp
+
+        current = await asyncio.to_thread(tp.get, self._service().repo, pid)
+        return "expired" if current is not None and current.state == tp.EXPIRED else "used"
+
+    async def _run_proposal(self, interaction: Any, proposal: Any) -> str:
+        """The proposed change, made by the clicker exactly as the task card's buttons would make it."""
+        from ..pipeline.task_assign import ME
+
+        svc, lang, mid, iid = self._service(), self.lang, proposal.meeting_id, proposal.item_id
+        if proposal.kind == "assign":
+            actor = self.actor(interaction)
+            who = "me" if proposal.arg.lower() in ME else proposal.arg  # "me" is whoever confirms
+            done = await asyncio.to_thread(svc.assign_task, mid, iid, who, actor)
+            if done.changed:
+                try:
+                    await self._sink().announce(mid)
+                except Exception:  # saved and queued: the worker shows it on its next tick
+                    log.exception("meeting-scribe: showing the assignment of %s/%s failed", mid, iid)
+            return assign_reply(done, lang, actor.user_id)
+        item = await asyncio.to_thread(svc.repo.get_action_item, mid, iid)
+        verdict = check_task("ok" if proposal.arg == "kanban" else "lin", item, self._uid(interaction),
+                             self._owner_ids(), lang, iid)
+        if not verdict.allowed:
+            raise UserMessage(verdict.message)
+        ref = await asyncio.to_thread(svc.approve_item, mid, iid, proposal.arg)
+        try:
+            await self._sink().refresh_item(mid, iid)
+        except Exception:  # the card catches up on the next refresh; the task was created
+            log.exception("meeting-scribe: refreshing task %s/%s failed", mid, iid)
+        return t("ui.approved", lang, sink=SINK_NAMES[proposal.arg], ref=ref)
+
+    async def _close_proposal(self, interaction: Any, line: str) -> None:
+        """The proposal message keeps its text, loses its buttons and says who decided — by name, and an
+        edit notifies nobody."""
+        message = getattr(interaction, "message", None)
+        try:
+            await message.edit(content=clip_reply(f"{getattr(message, 'content', '') or ''}\n{line}"), view=None)
+        except Exception:  # cosmetic: the proposal is single use whatever its message shows
+            log.exception("meeting-scribe: closing a proposal message failed")

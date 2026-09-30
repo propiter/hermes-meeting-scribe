@@ -18,8 +18,8 @@ from ..i18n import t
 MESSAGE_LIMIT = 2000
 EMBED_LIMIT = 4096
 ACTIONS = ("ok", "lin", "no", "prj", "allk", "alll", "psel", "mine", "pg", "tsel", "shp", "shd", "sha", "shc",
-           "tak", "tas", "trl", "tun", "asel", "ausr")
-TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc|spk|ssel|scfm|sme|tak|tas|trl|tun|asel|ausr):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+           "tak", "tas", "trl", "tun", "asel", "ausr", "pok", "pno")
+TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc|spk|ssel|scfm|sme|tak|tas|trl|tun|asel|ausr|pok|pno):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _TEMPLATE_RE = re.compile(f"^{TEMPLATE}$")
 _TOKEN_RE = re.compile(r"<[@#][!&]?\d+>|\S+|\s+")
 

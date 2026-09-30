@@ -48,6 +48,9 @@ SPEAKER_ACTIONS = frozenset({"spk", "ssel", "scfm", "sme"})
 # Who a task belongs to (DESIGN §16.2): 🙋 take, 👤 open the assignee panel, release, ↩️ undo, and the
 # owners' pickers (a participant / any member). The rules are the service's (``task_assign.authorize``).
 ASSIGN_ACTIONS = frozenset({"tak", "tas", "trl", "tun", "asel", "ausr"})
+# ✅ Confirm / ✖ Cancel of a task change the agent proposed in a shared conversation (DESIGN §16.3): the
+# item slot of the custom_id is the proposal id; the change's own rules are checked for the clicker.
+PROPOSAL_ACTIONS = frozenset({"pok", "pno"})
 
 
 @dataclass(frozen=True)

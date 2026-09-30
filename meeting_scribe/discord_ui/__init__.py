@@ -116,6 +116,49 @@ def replied_to_for(runtime: Any) -> Optional[Callable[[str, str], Optional[str]]
     return lookup
 
 
+PROPOSAL_POST_TIMEOUT = 10.0
+
+
+def proposer_for(runtime: Any) -> Optional[Callable[[str, str, str, str, str], Optional[str]]]:
+    """For the agent's write tools in a shared conversation (DESIGN §16.3): ``post(chat_id, text, meeting_id,
+    proposal_id, lang)`` posts the proposed change with ✅ Confirm / ✖ Cancel in that chat, notifying nobody,
+    and returns the message id (``None``: not posted). Runs on the gateway loop from the tool's thread;
+    ``None`` while Discord is not connected."""
+    from ..i18n import t
+    from .render import ButtonSpec, custom_id
+
+    state = _STATES.get(runtime)
+    loop = state.loop if state is not None else None
+    if state is None or state.adapter is None or loop is None:
+        return None
+
+    async def send(chat_id: str, text: str, meeting_id: str, pid: str, lang: str) -> str:
+        channel = await state.adapter._resolve_channel(int(chat_id))
+        view = state.kit.view([ButtonSpec(t("propose.btn_confirm", lang), custom_id("pok", meeting_id, pid), "success",
+                                          0, "✅"),
+                               ButtonSpec(t("propose.btn_cancel", lang), custom_id("pno", meeting_id, pid), "secondary",
+                                          0, "✖️")])
+        message = await channel.send(text, view=view, **state.kit.mention_kwargs(()))
+        return str(message.id)
+
+    def post(chat_id: str, text: str, meeting_id: str, pid: str, lang: str) -> Optional[str]:
+        if not str(chat_id).isdigit() or loop.is_closed():
+            return None
+        try:
+            if asyncio.get_running_loop() is loop:
+                return None  # never block the gateway loop on itself
+        except RuntimeError:
+            pass  # a worker thread: the normal case
+        fut = asyncio.run_coroutine_threadsafe(send(str(chat_id), text, meeting_id, pid, lang), loop)
+        try:
+            return fut.result(PROPOSAL_POST_TIMEOUT)
+        except Exception as exc:  # no access to the chat, timeout: the agent says the card's buttons remain
+            fut.cancel()
+            log.warning("meeting-scribe: could not post the confirmation of %s in %s: %s", pid, chat_id, exc)
+            return None
+    return post
+
+
 def _check_auth(state: UiState) -> Callable[[Any], bool]:
     def check(interaction: Any) -> bool:
         adapter = state.adapter

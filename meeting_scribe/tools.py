@@ -3,12 +3,16 @@ raise: the agent reads ``{"error": ...}`` and can recover (e.g. by searching fir
 
 ``meeting_search``/``meeting_get``/``meeting_task_list`` read; ``meeting_task_assign`` and
 ``meeting_task_send`` act AS the Discord user whose message started the turn (:class:`Caller`, read from
-Hermes' session context), with the same rules as the task card's buttons — never as an administrator.
-Without a Discord user in the session (the Hermes CLI/TUI, a cron job, another platform) they refuse:
-the operator has ``hermes meeting-scribe task assign`` and the Desktop."""
+Hermes' session context), with the same rules as the task card's buttons — never as an administrator —
+but only in a conversation that is that user's alone (``Caller.per_user_session``). In a conversation
+several people share (a thread, by default) the turn's identity may be someone else's, so they post the
+change for confirmation instead and whoever presses ✅ makes it as themselves (``pipeline.task_proposals``).
+Without a Discord conversation (the Hermes CLI/TUI, a cron job, another platform) they refuse: the
+operator has ``hermes meeting-scribe task assign`` and the Desktop. Results never carry a live mention."""
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable, Mapping, Optional
 
 from .pipeline.service import MeetingService
@@ -16,6 +20,9 @@ from .privacy import Reader
 from .storage.artifacts import fmt_ts, read_notes, read_transcript
 
 TOOLSET = "meeting_scribe"
+#: ``post(chat_id, text, meeting_id, proposal_id, lang)`` -> the id of the Discord message it posted with
+#: the ✅ Confirm / ✖ Cancel buttons (``None``: not posted) — ``discord_ui.proposer_for``.
+Poster = Callable[[str, str, str, str, str], Optional[str]]
 PARTS = ("notes", "transcript", "tasks", "meta")
 TARGETS = ("linear", "kanban")
 _TASK_REF = {"type": "string", "maxLength": 80,
@@ -87,8 +94,40 @@ SCHEMAS: dict[str, dict[str, Any]] = {
 SCHEMAS["meeting_search"]["parameters"]["additionalProperties"] = False
 
 
+_MENTION = re.compile(r"<@[!&]?([0-9]+)>")
+
+
 def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+def inert(value: Any, names: Mapping[str, str]) -> Any:
+    """``value`` with every ``<@id>`` in its strings replaced by the person's visible name (or an inert
+    ``@id``). A task tool's result is relayed by the model into the chat, where Hermes' Discord adapter
+    lets user mentions notify: the card already carries the ONE mention of an assignment (DESIGN §16.2),
+    a tool result never adds another."""
+    from .discord_ui.render import safe_name
+
+    if isinstance(value, str):
+        return _MENTION.sub(lambda m: safe_name(names.get(m[1]) or "") or "@\u200b" + m[1], value)
+    if isinstance(value, dict):
+        return {k: inert(v, names) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [inert(v, names) for v in value]
+    return value
+
+
+def _names(service: MeetingService, meeting: Any) -> dict[str, str]:
+    """Discord id -> visible name of the people a task tool may talk about: the space's person links, the
+    meeting's people and whoever its tasks name."""
+    from .privacy import people
+
+    out = {str(link["discord_user_id"]): str(link.get("name") or "") for link in service.repo.list_links(meeting.space)
+           if link.get("name")}
+    out.update({a.owner_speaker_id: a.owner_name for a in service.repo.list_action_items(meeting.id)
+                if a.owner_speaker_id and a.owner_name})
+    out.update({uid: name for uid, name in people(service.repo, meeting) if uid and name})
+    return out
 
 
 def _session_guild() -> str:
@@ -132,7 +171,8 @@ class MeetingTools:
                  guild: Callable[[], str] = _session_guild, reader: Callable[[], Reader] = _session_reader,
                  caller: Callable[[], Optional[Any]] = _session_caller,
                  owners: Callable[[str], Any] = lambda space: (),
-                 replied_to: Callable[[], Optional[Callable[[str, str], Optional[str]]]] = lambda: None) -> None:
+                 replied_to: Callable[[], Optional[Callable[[str, str], Optional[str]]]] = lambda: None,
+                 proposer: Callable[[], Optional[Poster]] = lambda: None) -> None:
         self._service = service
         self._max = max_utterances
         self._guild = guild
@@ -140,6 +180,7 @@ class MeetingTools:
         self._caller = caller
         self._owners = owners
         self._replied_to = replied_to
+        self._proposer = proposer
 
     def _space(self, service: MeetingService) -> str:
         return service.space_for(self._guild() or None)
@@ -228,31 +269,33 @@ class MeetingTools:
             service = self._service()
             meeting, _card = self._meeting(service, args)
             if meeting is None:
-                return _json({"error": f"no meeting {args.get('meeting_id')!r}; use meeting_search"})
+                return _out({"error": f"no meeting {args.get('meeting_id')!r}; use meeting_search"})
             from .pipeline.task_assign import repo_delivered
 
             tasks = [{"id": a.id, "title": a.title, "assignee": a.owner_speaker_id, "assignee_name": a.owner_name,
                       "status": a.status.value, "due": a.due, "project": a.project,
                       "sent_to": [s for s in TARGETS if repo_delivered(service.repo, meeting.id, a.id, s)]}
                      for a in service.repo.list_action_items(meeting.id)]
-            return _json({"meeting": {"id": meeting.id, "title": meeting.title}, "tasks": tasks})
+            return _out({"meeting": {"id": meeting.id, "title": meeting.title}, "tasks": tasks},
+                        _names(service, meeting))
         except Exception as exc:  # tool contract
-            return _json({"error": f"{type(exc).__name__}: {exc}"})
+            return _out({"error": f"{type(exc).__name__}: {exc}"})
 
     def _who(self, service: MeetingService, meeting: Any) -> Any:
         """What this turn proves about the person asking (DESIGN §16.3), or ``None``: nobody is known.
-        Only a Discord turn names a person; Hermes answered it, so Hermes authorizes that person. They
-        "see" the task where they are chatting: in one of the channels/threads holding the meeting's notes
-        or cards (a private meeting: only its private channel — :meth:`Reader.may_read`)."""
+        Only a Discord turn in a conversation that is THIS person's alone names them (a shared one goes
+        through a confirmation instead, :meth:`_shared`); Hermes answered it, so Hermes authorizes that
+        person. They "see" the task where they are chatting: in one of the channels/threads holding the
+        meeting's notes or cards (a private meeting: only its private channel — :meth:`Reader.may_read`)."""
         from . import privacy
         from .domain.models import is_discord_user_id
         from .pipeline.task_assign import Actor, meeting_places
 
         caller = self._caller()
-        if caller is None or caller.cron or (caller.platform or "").lower() != "discord":
+        if not _discord_chat(caller) or caller.delegated or not caller.per_user_session:
             return None
         uid = str(caller.user_id or "")
-        if not is_discord_user_id(uid) or not caller.chat_id:
+        if not is_discord_user_id(uid):
             return None
         places = {str(x) for x in (caller.chat_id, caller.thread_id, caller.parent_chat_id) if x}
         sees = bool(places & meeting_places(service.repo, meeting.id))
@@ -263,8 +306,14 @@ class MeetingTools:
         owners = {str(o) for o in self._owners(meeting.space)}
         return Actor(uid, admin=uid in owners, authorized=True, sees=sees)
 
-    def _task(self, service: MeetingService, args: Mapping[str, Any]) -> tuple[Any, Any, Any, str]:
-        """``(meeting, item, actor, lang)`` of a write tool; raises what the agent should read."""
+    def _shared(self) -> bool:
+        """A Discord conversation whose session identity may not be the asker's (DESIGN §16.3): a thread or
+        channel several people share, or a subagent working for someone. Writes there need a confirmation."""
+        caller = self._caller()
+        return _discord_chat(caller) and (caller.delegated or not caller.per_user_session)
+
+    def _task(self, service: MeetingService, args: Mapping[str, Any]) -> tuple[Any, Any, str]:
+        """``(meeting, item, lang)`` of a write tool; raises what the agent should read."""
         from .pipeline.task_assign import TaskAssignError
 
         meeting, card = self._meeting(service, args)
@@ -272,28 +321,39 @@ class MeetingTools:
             raise TaskAssignError("which_task")
         if meeting is None:
             raise TaskAssignError("unknown_meeting", str(args.get("meeting_id") or args.get("message_id")))
+        ref = str(args.get("task_id") or "") or (card.item_id if card is not None else "")
+        return meeting, service.resolve_task(meeting, ref), service.settings(meeting.space).ui_language
+
+    def _actor(self, service: MeetingService, meeting: Any) -> Any:
+        from .pipeline.task_assign import TaskAssignError
+
         actor = self._who(service, meeting)
         if actor is None:
             raise TaskAssignError("no_identity")
-        ref = str(args.get("task_id") or "") or (card.item_id if card is not None else "")
-        return meeting, service.resolve_task(meeting, ref), actor, service.settings(meeting.space).ui_language
+        return actor
 
     def task_assign(self, args: Mapping[str, Any], **_: Any) -> str:
-        from .pipeline.task_assign import TaskAssignError, assign_reply
+        from .pipeline.task_assign import ME, NOBODY, TaskAssignError, assign_reply, person
 
         service = self._service()
-        lang = "en"
+        lang, names = "en", {}
         try:
             lang = self._lang(service)
-            meeting, item, actor, lang = self._task(service, args)
-            done = service.assign_task(meeting.id, item.id, str(args.get("assignee") or ""), actor)
-            return _json({"ok": True, "changed": done.changed, "meeting_id": meeting.id, "task_id": item.id,
-                          "assignee": done.user, "sinks": done.sinks,
-                          "message": assign_reply(done, lang, actor.user_id)})
+            meeting, item, lang = self._task(service, args)
+            names = _names(service, meeting)
+            who = str(args.get("assignee") or "").strip()
+            if self._shared():
+                shown = ("" if who.lower() in ME | NOBODY else person(service.repo, meeting, who)[1])
+                return _out(self._propose(service, meeting, item, "assign", who, shown, lang), names)
+            actor = self._actor(service, meeting)
+            done = service.assign_task(meeting.id, item.id, who, actor)
+            return _out({"ok": True, "changed": done.changed, "meeting_id": meeting.id, "task_id": item.id,
+                         "assignee": done.user, "sinks": done.sinks,
+                         "message": assign_reply(done, lang, actor.user_id)}, names)
         except TaskAssignError as exc:
-            return _json({"error": _assign_error(exc, lang), "code": exc.code})
+            return _out({"error": _assign_error(exc, lang), "code": exc.code}, names)
         except Exception as exc:  # tool contract
-            return _json({"error": f"{type(exc).__name__}: {exc}"})
+            return _out({"error": f"{type(exc).__name__}: {exc}"}, names)
 
     def task_send(self, args: Mapping[str, Any], **_: Any) -> str:
         """The 🟣 Linear / ✅ Kanban button, pressed by the person asking (``discord_ui.auth`` rules)."""
@@ -303,31 +363,68 @@ class MeetingTools:
         from .pipeline.task_assign import TaskAssignError, queue_refresh
 
         service = self._service()
-        lang = "en"
+        lang, names = "en", {}
         target = str(args.get("target") or "")
         if target not in TARGETS:
-            return _json({"error": f"target must be one of {', '.join(TARGETS)}"})
+            return _out({"error": f"target must be one of {', '.join(TARGETS)}"})
         try:
             lang = self._lang(service)
-            meeting, item, actor, lang = self._task(service, args)
+            meeting, item, lang = self._task(service, args)
+            names = _names(service, meeting)
+            if self._shared():
+                return _out(self._propose(service, meeting, item, "send", target, "", lang), names)
+            actor = self._actor(service, meeting)
             if not actor.sees and service.is_private(meeting):
                 raise TaskAssignError("private_only")
             refusal = self._dm_refusal(service, meeting, item, actor, lang)
             if refusal:
-                return _json({"error": refusal})
+                return _out({"error": refusal}, names)
             verdict = check_task("ok" if target == "kanban" else "lin", item, actor.user_id,
                                  frozenset(str(o) for o in self._owners(meeting.space)), lang, item.id)
             if not verdict.allowed:
-                return _json({"error": verdict.message})
+                return _out({"error": verdict.message}, names)
             ref = service.approve_item(meeting.id, item.id, target)
             queue_refresh(service.repo, meeting.id, item.id)  # the card shows the result (an edit, no ping)
             name = "Linear" if target == "linear" else "Kanban"
-            return _json({"ok": True, "meeting_id": meeting.id, "task_id": item.id, "target": target, "ref": ref,
-                          "message": t("ui.approved", lang, sink=name, ref=ref)})
+            return _out({"ok": True, "meeting_id": meeting.id, "task_id": item.id, "target": target, "ref": ref,
+                         "message": t("ui.approved", lang, sink=name, ref=ref)}, names)
         except TaskAssignError as exc:
-            return _json({"error": _assign_error(exc, lang), "code": exc.code})
+            return _out({"error": _assign_error(exc, lang), "code": exc.code}, names)
         except Exception as exc:  # tool contract: the same plain words as the button
-            return _json({"error": friendly_error(exc, lang)})
+            return _out({"error": friendly_error(exc, lang)}, names)
+
+    def _propose(self, service: MeetingService, meeting: Any, item: Any, kind: str, arg: str, shown: str,
+                 lang: str) -> dict[str, Any]:
+        """Post the change in the chat with ✅ Confirm / ✖ Cancel instead of making it (DESIGN §16.3): whoever
+        presses ✅ makes it, as themselves. Only where this chat already sees the meeting (``_meeting`` read it
+        through the same privacy gate), never for a direct-messages meeting (it has no shared chat)."""
+        import time
+
+        from . import privacy
+        from .discord_ui.render import safe_name
+        from .i18n import t
+        from .pipeline import task_proposals
+        from .pipeline.task_assign import NOBODY, SINK_NAMES, TaskAssignError
+
+        if privacy.is_dm(service.repo, service.settings(meeting.space), meeting):
+            raise TaskAssignError("dm_meeting")
+        poster = self._proposer()
+        caller = self._caller()
+        if poster is None:
+            raise TaskAssignError("confirm_unavailable")
+        what = (SINK_NAMES[arg] if kind == "send" else safe_name(shown) if shown
+                else t("propose.nobody" if arg.lower() in NOBODY else "propose.who_confirms", lang))
+        chat = str(caller.thread_id or caller.chat_id)
+        proposal = task_proposals.create(service.repo, time.time(), meeting.id, item.id, kind, arg.strip(), chat,
+                                         str(caller.user_id or ""))
+        text = task_proposals.describe(kind, safe_name(item.title), meeting.id, what, lang)
+        message = poster(chat, text, meeting.id, proposal.id, lang)
+        if not message:
+            raise TaskAssignError("confirm_unavailable")
+        service.repo.set_task_proposal_message(proposal.id, str(message))
+        return {"status": "pending_confirmation", "code": "pending_confirmation", "meeting_id": meeting.id,
+                "task_id": item.id, "proposal_id": proposal.id, "expires_in_minutes": task_proposals.TTL_SECONDS // 60,
+                "message": t("propose.pending", lang, minutes=task_proposals.TTL_SECONDS // 60)}
 
     @staticmethod
     def _dm_refusal(service: MeetingService, meeting: Any, item: Any, actor: Any, lang: str) -> str:
@@ -340,6 +437,17 @@ class MeetingTools:
         if not actor.sees or str(item.owner_speaker_id or "") != actor.user_id:
             return t("dm.only_own_tasks", lang)
         return ""
+
+
+def _discord_chat(caller: Any) -> bool:
+    """A Discord conversation turn (not the CLI/TUI, a cron job, another platform or nothing bound)."""
+    return (caller is not None and not caller.cron and (caller.platform or "").lower() == "discord"
+            and bool(caller.chat_id))
+
+
+def _out(obj: Any, names: Optional[Mapping[str, str]] = None) -> str:
+    """A task tool's JSON result, with no live mention in it (:func:`inert`)."""
+    return _json(inert(obj, names or {}))
 
 
 def _assign_error(exc: Any, lang: str) -> str:

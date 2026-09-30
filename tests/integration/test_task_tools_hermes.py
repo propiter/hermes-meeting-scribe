@@ -85,12 +85,14 @@ def test_a_cron_or_other_platform_session_cannot_write_either(manager):
 
 
 def test_the_discord_user_bound_by_hermes_is_who_takes_the_task(manager):
-    """The identity comes from Hermes' own session binding (what the gateway sets for each Discord turn)."""
+    """The identity comes from Hermes' own session binding (what the gateway sets for each Discord turn), in
+    a conversation Hermes keys to this user alone (``thread_sessions_per_user: true``: the user slot last)."""
     from gateway.session_context import clear_session_vars, set_session_vars
     from tools.registry import registry
 
     service, meeting = _published_meeting()
-    tokens = set_session_vars(platform="discord", chat_id="7001", user_id="10", cron_session="")
+    tokens = set_session_vars(platform="discord", chat_id="7001", chat_type="thread", user_id="10", cron_session="",
+                              session_key="agent:main:discord:thread:7001:7001:10")
     try:
         out = json.loads(registry.dispatch("meeting_task_assign", {"message_id": "8001", "assignee": "me"}))
         other = json.loads(registry.dispatch("meeting_task_assign", {"message_id": "8001", "assignee": "<@11>"}))

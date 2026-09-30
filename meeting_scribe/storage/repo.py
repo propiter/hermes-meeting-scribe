@@ -105,6 +105,14 @@ _MIGRATIONS: tuple[str, ...] = (  # schema changes after the baseline, in order 
     ALTER TABLE item_overrides ADD COLUMN owner_user TEXT;
     ALTER TABLE item_overrides ADD COLUMN owner_name TEXT;
     """,
+    # 104: a task change the agent proposed in a shared conversation, run only when someone confirms it
+    # with a Discord button (DESIGN §16.3): single use, expires, and says who confirmed it
+    """CREATE TABLE task_proposals (
+      id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL, kind TEXT NOT NULL, arg TEXT NOT NULL, chat_id TEXT NOT NULL,
+      message_id TEXT, session_user TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, expires_at REAL NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending', decided_by TEXT, decided_at REAL, result TEXT);
+    """,
 )
 SCHEMA_VERSION = BASELINE + len(_MIGRATIONS)
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
@@ -518,6 +526,30 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
 
     def mark_task_audit_undone(self, audit_id: int) -> None:
         self._x("UPDATE task_audit SET undone=1 WHERE id=?", (audit_id,))
+
+    # -- task changes waiting for a confirmation (DESIGN §16.3) ----------------------------------
+    def add_task_proposal(self, pid: str, meeting_id: str, item_id: str, kind: str, arg: str, chat_id: str,
+                          session_user: str, created_at: float, expires_at: float) -> None:
+        self._x("INSERT INTO task_proposals (id, meeting_id, item_id, kind, arg, chat_id, session_user, created_at,"
+                " expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (pid, meeting_id, item_id, kind, arg, chat_id, session_user, created_at, expires_at))
+
+    def get_task_proposal(self, pid: str) -> Optional[dict[str, Any]]:
+        row = self._x("SELECT * FROM task_proposals WHERE id=?", (pid,)).fetchone()
+        return dict(row) if row else None
+
+    def set_task_proposal_message(self, pid: str, message_id: str) -> None:
+        self._x("UPDATE task_proposals SET message_id=? WHERE id=?", (message_id, pid))
+
+    def move_task_proposal(self, pid: str, *, frm: str, to: str, now: float, by: Optional[str] = None,
+                           result: Optional[str] = None, unexpired: bool = False) -> bool:
+        """Compare-and-set of a proposal's state (``frm`` -> ``to``, recording who decided and what came of
+        it): ``False`` when another click got there first, or (``unexpired``) it has expired. One
+        statement, so two clicks never both win."""
+        cur = self._x("UPDATE task_proposals SET state=?, decided_by=?, decided_at=?, result=?"
+                      " WHERE id=? AND state=? AND (? = 0 OR expires_at > ?)",
+                      (to, by, now if by else None, result, pid, frm, int(unexpired), now))
+        return cur.rowcount == 1
 
     def moved_items(self, meeting_id: str) -> set[str]:
         """Ids of the tasks a person pinned to a channel with 📁 (``set_item_override``)."""

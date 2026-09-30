@@ -71,8 +71,12 @@ def world(prepo, layout, settings, clock, meeting):
     return service, live.id, sinks, state, tools
 
 
-def discord(user, chat=THREAD, parent="7000", message=""):
-    return Caller(platform="discord", chat_id=chat, user_id=user, parent_chat_id=parent, scope_id="", message_id=message)
+def discord(user, chat=THREAD, parent="7000", message="", shared=False):
+    """A Discord turn. By default the conversation is this user's alone (Hermes keys the session with the
+    user slot last, e.g. ``thread_sessions_per_user: true``); ``shared``: one session for everyone."""
+    key = f"agent:main:discord:thread:{chat}" + ("" if shared else f":{user}")
+    return Caller(platform="discord", chat_id=chat, user_id=user, parent_chat_id=parent, scope_id="", message_id=message,
+                  chat_type="thread", session_key=key)
 
 
 def call(tools, name, **args):
@@ -141,7 +145,7 @@ def test_saying_i_am_an_admin_changes_nothing(world):
     service, mid, sinks, state, tools = world
     state["caller"] = discord(ANA)
     out = call(tools, "task_assign", meeting_id=mid, task_id="report", assignee="me")
-    assert out["code"] == "taken" and "<@11>" in out["error"]
+    assert out["code"] == "taken" and "Luis" in out["error"] and "<@" not in out["error"]
     out = call(tools, "task_assign", meeting_id=mid, task_id="fix-mail", assignee=LUIS)
     assert out["code"] == "self_only"
     out = call(tools, "task_send", meeting_id=mid, task_id="report", target="linear")

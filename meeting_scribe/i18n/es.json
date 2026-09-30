@@ -475,5 +475,21 @@
   "assign.error_nothing_to_undo": "“{detail}” no tiene ninguna asignación que deshacer.",
   "assign.error_cli_me": "“me” en la terminal es el único dueño del espacio, pero tiene {detail}; indica el id de usuario.",
   "assign.error_unknown_meeting": "Aquí no hay ninguna reunión {detail}; búscala con meeting_search.",
-  "assign.error_which_task": "¿Qué tarea? Indica meeting_id y task_id (ver meeting_task_list), o responde a la tarjeta de la tarea."
+  "assign.error_which_task": "¿Qué tarea? Indica meeting_id y task_id (ver meeting_task_list), o responde a la tarjeta de la tarea.",
+  "propose.header": "📝 Cambio propuesto en la tarea “{title}” (reunión `{meeting}`):",
+  "propose.assign": "asignarla a {what}",
+  "propose.send": "crearla en {what}",
+  "propose.nobody": "nadie (liberarla)",
+  "propose.who_confirms": "quien pulse Confirmar",
+  "propose.footer": "-# Varias personas comparten esta conversación, así que no cambia nada hasta que alguien pulse ✅ Confirmar; se hace como esa persona, con las reglas de la tarjeta de la tarea. Caduca en {minutes} min.",
+  "propose.pending": "Aún no ha cambiado nada: varias personas comparten esta conversación, así que publiqué el cambio con un botón ✅ Confirmar. Pide al usuario que lo pulse (actúa como quien lo pulse, con las reglas de la tarjeta de la tarea); caduca en {minutes} minutos.",
+  "propose.btn_confirm": "Confirmar",
+  "propose.btn_cancel": "Cancelar",
+  "propose.unknown": "Esta confirmación no es válida aquí.",
+  "propose.expired": "Esta propuesta caducó; vuelve a pedirlo.",
+  "propose.used": "Esta propuesta ya se confirmó o se canceló.",
+  "propose.cancelled_you": "Cancelado; no cambió nada.",
+  "propose.cancelled": "-# ✖ Cancelado por {name}.",
+  "propose.done": "-# ✅ Confirmado por {name}.",
+  "assign.error_confirm_unavailable": "No pude publicar la confirmación en esta conversación. Usa los botones de la tarjeta de la tarea."
 }

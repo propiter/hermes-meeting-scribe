@@ -106,6 +106,10 @@ def test_cron_session_from_hermes_fails_closed(world, monkeypatch):
     pkg.session_context = mod
     monkeypatch.setitem(sys.modules, "gateway", pkg)
     monkeypatch.setitem(sys.modules, "gateway.session_context", mod)
+    delegation = types.ModuleType("agent.delegation_context")
+    delegation.is_delegated_child_context = lambda: False
+    monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.delegation_context", delegation)
     service, _, mid = world
     tools = MeetingTools(lambda: service)
     assert "error" in json.loads(tools.get({"meeting_id": mid, "part": "transcript"}))
