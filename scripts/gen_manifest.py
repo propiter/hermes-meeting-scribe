@@ -43,7 +43,7 @@ HEADER = {
         "url": "https://linear.app/settings/account/security",
         "secret": True,
     }],
-    "provides_tools": ["meeting_search", "meeting_get"],
+    "provides_tools": ["meeting_search", "meeting_get", "meeting_task_list", "meeting_task_assign", "meeting_task_send"],
     "provides_hooks": [],
 }
 

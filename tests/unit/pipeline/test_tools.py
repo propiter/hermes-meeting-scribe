@@ -7,7 +7,7 @@ from .test_commands import make, processed
 
 def test_schemas_are_function_shaped():
     names = {s["name"] for s in SCHEMAS.values()}
-    assert names == {"meeting_search", "meeting_get"}
+    assert names == {"meeting_search", "meeting_get", "meeting_task_list", "meeting_task_assign", "meeting_task_send"}
     for s in SCHEMAS.values():
         assert s["parameters"]["type"] == "object" and s["description"]
 

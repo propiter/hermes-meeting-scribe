@@ -20,7 +20,7 @@ from ..domain.models import Candidate
 from ..i18n import t
 from ..pipeline.speakers import AssignError
 from ..privacy import people as _people
-from ..pipeline.task_assign import Actor, TaskAssignError
+from ..pipeline.task_assign import SINK_NAMES, Actor, TaskAssignError, assign_error, assign_reply
 from .auth import (ASSIGN_ACTIONS, MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, SPEAKER_ACTIONS,
                    TASK_ACTIONS, can_view, check_dm, check_private, check_speaker, check_task)
 from .render import ButtonSpec, custom_id
@@ -36,7 +36,6 @@ def clip_reply(text: str, limit: int = REPLY_LIMIT) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
-_SINK_NAMES = {"kanban": "Kanban", "linear": "Linear"}
 
 
 class UserMessage(ValueError):
@@ -47,7 +46,7 @@ def friendly_error(exc: BaseException, lang: str) -> str:
     """What the clicker reads when an action fails: plain words, never the exception text (that goes
     to the log, where the administrator finds it)."""
     if isinstance(exc, SinkUnavailable):
-        return t("ui.error_sink_unavailable", lang, sink=_SINK_NAMES.get(exc.sink, exc.sink.title()))
+        return t("ui.error_sink_unavailable", lang, sink=SINK_NAMES.get(exc.sink, exc.sink.title()))
     if isinstance(exc, ItemDismissed):
         return t("ui.error_dismissed", lang)
     if isinstance(exc, DirectMessageUnavailable):
@@ -69,28 +68,6 @@ def friendly_error(exc: BaseException, lang: str) -> str:
     if isinstance(exc, (KeyError, LookupError)):
         return t("ui.error_not_found", lang)
     return t("ui.action_failed", lang)
-
-
-def assign_error(exc: TaskAssignError, lang: str) -> str:
-    """Why a task could not be assigned, in the reader's words (mentions shown, never pinged)."""
-    detail = f"<@{exc.detail}>" if exc.detail.isdigit() else exc.detail
-    return t(f"assign.error_{exc.code}", lang, detail=detail)
-
-
-def assign_reply(done: Any, lang: str, actor: str) -> str:
-    """What the person who assigned reads: the change, and what happened in Linear/Kanban."""
-    if not done.changed:
-        text = t("assign.unchanged", lang, title=done.title)
-    elif done.user is None:
-        text = t("assign.released", lang, title=done.title)
-    elif done.user == actor:
-        text = t("assign.taken", lang, title=done.title)
-    else:
-        who = f"<@{done.user}>" if str(done.user).isdigit() else done.name
-        text = t("assign.given", lang, title=done.title, user=who)
-    for sink, status in sorted((done.sinks or {}).items()):
-        text += "\n" + t(f"assign.sink_{status}", lang, sink=_SINK_NAMES.get(sink, sink))
-    return text
 
 
 def _from_panel(interaction: Any) -> bool:
@@ -312,11 +289,11 @@ class ButtonActions:
         if action in ("ok", "lin"):
             sink = "kanban" if action == "ok" else "linear"
             ref = svc.approve_item(meeting_id, item_id, sink)
-            return t("ui.approved", lang, sink=_SINK_NAMES[sink], ref=ref)
+            return t("ui.approved", lang, sink=SINK_NAMES[sink], ref=ref)
         if action in ("allk", "alll"):
             sink = "kanban" if action == "allk" else "linear"
             res = svc.approve_all(meeting_id, sink)
-            text = t("ui.approved_all", lang, sink=_SINK_NAMES[sink], count=len(res.delivered))
+            text = t("ui.approved_all", lang, sink=SINK_NAMES[sink], count=len(res.delivered))
             if res.errors:
                 log.warning("meeting-scribe: approving all of %s to %s: %s", meeting_id, sink, "; ".join(res.errors))
                 text += "\n" + t("ui.approved_partial", lang, failed=len(res.errors))

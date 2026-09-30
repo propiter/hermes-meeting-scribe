@@ -293,12 +293,17 @@ class MeetingService:
         """Give a task to someone, take it or release it (see :mod:`.task_assign` for who may)."""
         from .task_assign import assign
 
-        return assign(self, meeting_id, item_id, who, actor, name=name)
+        done = assign(self, meeting_id, item_id, who, actor, name=name)
+        if done.changed:
+            self.runner._wake.set()  # the gateway's worker shows it in Discord on its next tick
+        return done
 
     def undo_task_assignment(self, meeting_id: str, item_id: str, actor: Any) -> Any:
         from .task_assign import undo
 
-        return undo(self, meeting_id, item_id, actor)
+        done = undo(self, meeting_id, item_id, actor)
+        self.runner._wake.set()
+        return done
 
     def resolve_task(self, meeting: Meeting, ref: str) -> ActionItem:
         """A task of ``meeting`` by id, unique id prefix, or the id of the Discord message that shows it."""

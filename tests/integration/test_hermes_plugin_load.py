@@ -19,6 +19,7 @@ import pytest
 pytestmark = pytest.mark.integration
 plugins_mod = pytest.importorskip("hermes_cli.plugins", reason="Hermes is not importable (set PYTHONPATH)")
 yaml = pytest.importorskip("yaml")
+TOOLS = {"meeting_search", "meeting_get", "meeting_task_list", "meeting_task_assign", "meeting_task_send"}
 
 REPO = Path(__file__).resolve().parents[2]
 IGNORE = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".pytest_cache", "*.pyc", "tests")
@@ -56,13 +57,13 @@ def manager(hermes_home):
     with_suppress = [n for n in ("meeting-scribe",) if n in mgr._plugins]
     for name in with_suppress:
         mgr.unload(name)
-    assert {e.name for e in registry._snapshot_entries()} - before <= {"meeting_search", "meeting_get"}
+    assert {e.name for e in registry._snapshot_entries()} - before <= TOOLS
 
 
 def test_plugin_loads_and_registers(manager, hermes_home):
     loaded = manager._plugins["meeting-scribe"]
     assert loaded.enabled is True and loaded.module is not None, getattr(loaded, "error", None)
-    assert set(loaded.tools_registered) == {"meeting_search", "meeting_get"}
+    assert set(loaded.tools_registered) == TOOLS
     assert {"meeting", "meet", "rec"} <= set(manager._plugin_commands)
     assert "meeting-scribe" in manager._cli_commands
     assert "meeting_scribe" in manager._aux_tasks

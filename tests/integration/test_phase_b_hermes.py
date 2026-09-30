@@ -205,7 +205,7 @@ async def _factory_on_real_bot(manager):
     adapter._allowed_user_ids, adapter._allowed_role_ids = set(), set()
     factory(bot, adapter)
     try:
-        assert len(bot._connection._view_store._dynamic_items) == 2
+        assert len(bot._connection._view_store._dynamic_items) == 3  # buttons, selects, member picker
         import meeting_scribe.plugin as plugin
 
         rt = next(iter(plugin.RUNTIMES.values()))

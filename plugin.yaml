@@ -30,6 +30,9 @@ optional_env:
 provides_tools:
 - meeting_search
 - meeting_get
+- meeting_task_list
+- meeting_task_assign
+- meeting_task_send
 provides_hooks: []
 config_schema:
   autojoin_enabled:

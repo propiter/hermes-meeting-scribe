@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from meeting_scribe import home, plugin
+from meeting_scribe.tools import SCHEMAS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -78,7 +79,7 @@ def ctx(tmp_path, monkeypatch):
 def test_register_wires_everything(ctx):
     rt = plugin.register(ctx, ROOT)
     assert ctx.aux == {"meeting_scribe": "Meeting Scribe"}
-    assert set(ctx.tools) == {"meeting_search", "meeting_get"}
+    assert set(ctx.tools) == set(SCHEMAS)
     assert all(v[0] == "meeting_scribe" for v in ctx.tools.values())
     assert set(ctx.commands) == {"meeting", "meet", "rec"}
     assert ctx.commands["meeting"][1]  # args hint so Discord shows an argument field
@@ -99,7 +100,7 @@ def test_register_degrades_without_discord(ctx, monkeypatch):
     for mod in [m for m in sys.modules if m.startswith("meeting_scribe.discord_ui")]:
         monkeypatch.delitem(sys.modules, mod)  # force a fresh import that hits the missing discord
     rt = plugin.register(ctx, ROOT)
-    assert set(ctx.tools) == {"meeting_search", "meeting_get"} and "meeting-scribe" in ctx.cli
+    assert set(ctx.tools) == set(SCHEMAS) and "meeting-scribe" in ctx.cli
     assert not ctx.platform_handlers.get("discord") and rt is not None
 
 
@@ -150,7 +151,7 @@ def test_broken_phase_b_install_does_not_break_core(ctx, monkeypatch):
         raise RuntimeError("discord.py missing")
     monkeypatch.setitem(sys.modules, "meeting_scribe.capture", SimpleNamespace(install=boom))
     plugin.register(ctx, ROOT)
-    assert set(ctx.tools) == {"meeting_search", "meeting_get"}
+    assert set(ctx.tools) == set(SCHEMAS)
 
 
 def test_unload_closes_runtime_and_drops_registry(tmp_path, monkeypatch):

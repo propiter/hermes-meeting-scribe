@@ -165,11 +165,11 @@ def register(ctx: Any, plugin_root: Path) -> Optional[Runtime]:
             runtime.close()  # stops the pipeline thread and closes SQLite (review W3)
         on_unload(meeting_scribe_runtime_close)
 
-    tools = MeetingTools(runtime.service)
-    ctx.register_tool("meeting_search", TOOLSET, SCHEMAS["meeting_search"], tools.search,
-                      description=SCHEMAS["meeting_search"]["description"], emoji="🎙️")
-    ctx.register_tool("meeting_get", TOOLSET, SCHEMAS["meeting_get"], tools.get,
-                      description=SCHEMAS["meeting_get"]["description"], emoji="🎙️")
+    tools = MeetingTools(runtime.service, owners=runtime.owners)
+    for name, handler in (("meeting_search", tools.search), ("meeting_get", tools.get),
+                          ("meeting_task_list", tools.task_list), ("meeting_task_assign", tools.task_assign),
+                          ("meeting_task_send", tools.task_send)):
+        ctx.register_tool(name, TOOLSET, SCHEMAS[name], handler, description=SCHEMAS[name]["description"], emoji="🎙️")
 
     commands = MeetingCommands(runtime.service, runtime.settings, capture=lambda: runtime.capture,
                                membership=lambda: _membership(runtime), owners=runtime.owners)

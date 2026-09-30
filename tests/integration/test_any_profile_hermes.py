@@ -22,6 +22,7 @@ import pytest
 pytestmark = pytest.mark.integration
 plugins_mod = pytest.importorskip("hermes_cli.plugins", reason="Hermes is not importable (set PYTHONPATH)")
 yaml = pytest.importorskip("yaml")
+TOOLS = {"meeting_search", "meeting_get", "meeting_task_list", "meeting_task_assign", "meeting_task_send"}
 
 REPO = Path(__file__).resolve().parents[2]
 IGNORE = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".pytest_cache", "*.pyc", "tests")
@@ -96,7 +97,7 @@ def load(monkeypatch):
     for mgr in managers:
         if "meeting-scribe" in mgr._plugins:
             mgr.unload("meeting-scribe")
-    assert {e.name for e in registry._snapshot_entries()} - before <= {"meeting_search", "meeting_get"}
+    assert {e.name for e in registry._snapshot_entries()} - before <= TOOLS
 
 
 def test_the_owner_profile_runs_the_plugin_and_writes_to_its_own_data(root, load):
@@ -107,7 +108,7 @@ def test_the_owner_profile_runs_the_plugin_and_writes_to_its_own_data(root, load
     mgr = load(root / "profiles" / "owner")
     loaded = mgr._plugins["meeting-scribe"]
     assert loaded.enabled and loaded.module is not None, loaded.error
-    assert set(loaded.tools_registered) == {"meeting_search", "meeting_get"}
+    assert set(loaded.tools_registered) == TOOLS
     assert {"meeting", "meet", "rec"} <= set(mgr._plugin_commands)
     assert json.loads(registry.dispatch("meeting_search", {"query": "x"})) == {"results": []}
     assert (root / "profiles" / "owner" / "plugin-data" / "meeting-scribe" / "index.sqlite").exists()

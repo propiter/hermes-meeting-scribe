@@ -35,6 +35,9 @@ capabilities:
   provides_tools:
   - meeting_search
   - meeting_get
+  - meeting_task_list
+  - meeting_task_assign
+  - meeting_task_send
   provides_hooks: []
   provides_middleware: []
   requires_env: []

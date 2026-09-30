@@ -32,6 +32,7 @@ from ..domain.names import match_person
 from ..storage.artifacts import read_notes, write_notes
 
 log = logging.getLogger(__name__)
+SINK_NAMES = {"kanban": "Kanban", "linear": "Linear"}
 ANNOUNCE_KV = "tasks.announce."  # + meeting id -> {item id: {"to", "from": [...], "actor"}}
 NOBODY = frozenset({"none", "nobody", "unassigned", "nadie"})
 ME = frozenset({"me", "yo", "mí", "mi"})
@@ -101,6 +102,24 @@ def find_card(repo: Any, message_id: str) -> Optional[Card]:
             ptr = json.loads(row["external_id"])
             return Card(m["meeting"], m["item"], str(ptr.get("channel") or ""), m["user"] or "")
     return None
+
+
+def meeting_places(repo: Any, meeting_id: str) -> set[str]:
+    """The Discord channels, threads and forum posts where the meeting's notes and task cards are (not
+    the direct messages): someone chatting in one of them sees its tasks."""
+    out: set[str] = set()
+    prefix = f"mtg:{meeting_id}:"
+    for row in repo.list_deliveries(meeting_id, sink="discord", prefix=prefix):
+        suffix = str(row["key"])[len(prefix):]
+        if suffix.startswith(("dm:", privacy.DM_COPY_PREFIX, "withdraw:", "pinged:")):
+            continue
+        try:
+            ptr = json.loads(row.get("external_id") or "null")
+        except ValueError:
+            continue
+        if isinstance(ptr, dict):
+            out |= {str(ptr[k]) for k in ("channel", "thread", "forum") if ptr.get(k)}
+    return out
 
 
 def item_for_message(repo: Any, meeting_id: str, message_id: str) -> Optional[str]:
@@ -307,3 +326,29 @@ def undo(service: Any, meeting_id: str, item_id: str, actor: Actor) -> TaskAssig
         done = _apply(service, meeting, item, previous, name, actor.user_id, True)
         repo.mark_task_audit_undone(int(last["id"]))
         return done
+
+
+def assign_error(exc: TaskAssignError, lang: str) -> str:
+    """Why a task could not be assigned, in the reader's words (mentions shown, never pinged)."""
+    from ..i18n import t
+
+    detail = f"<@{exc.detail}>" if exc.detail.isdigit() else exc.detail
+    return t(f"assign.error_{exc.code}", lang, detail=detail)
+
+
+def assign_reply(done: Any, lang: str, actor: str) -> str:
+    """What the person who assigned reads: the change, and what happened in Linear/Kanban."""
+    from ..i18n import t
+
+    if not done.changed:
+        text = t("assign.unchanged", lang, title=done.title)
+    elif done.user is None:
+        text = t("assign.released", lang, title=done.title)
+    elif done.user == actor:
+        text = t("assign.taken", lang, title=done.title)
+    else:
+        who = f"<@{done.user}>" if str(done.user).isdigit() else done.name
+        text = t("assign.given", lang, title=done.title, user=who)
+    for sink, status in sorted((done.sinks or {}).items()):
+        text += "\n" + t(f"assign.sink_{status}", lang, sink=SINK_NAMES.get(sink, sink))
+    return text
