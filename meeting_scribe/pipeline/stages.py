@@ -164,6 +164,10 @@ class Stages:
             replace(a, owner_track_id=previous[a.id].owner_track_id)
             if a.id in previous and a.owner_speaker_id == previous[a.id].owner_speaker_id else a
             for a in items))
+        owners = self.repo.owner_overrides(meeting.id)  # a person decided who has these (DESIGN §16.2)
+        notes = replace(notes, action_items=tuple(
+            replace(a, owner_speaker_id=owners[a.id][0], owner_name=owners[a.id][1], owner_track_id=None)
+            if a.id in owners else a for a in notes.action_items))
         resolver = ProjectResolver(self.settings(meeting.space).projects_min_confidence, self.repo)
         res = resolver.resolve(meeting, candidates, notes.project, notes.project_confidence)
         project = res.candidate.name if res.candidate else None

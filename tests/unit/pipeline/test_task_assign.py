@@ -134,6 +134,8 @@ def test_the_assignment_survives_a_new_analysis(world):
     service.reprocess(mid, Stage.ANALYZE)
     drain(runner)
     assert service.repo.get_action_item(mid, "fix-mail").owner_speaker_id == ANA
+    notes = read_notes(service.folder(service.require(mid)))  # the files say the same (notes.md, Obsidian)
+    assert next(a for a in notes.action_items if a.id == "fix-mail").owner_speaker_id == ANA
 
 
 def test_a_private_meeting_needs_its_channel_and_a_dm_meeting_refuses_chat(world):

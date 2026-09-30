@@ -281,3 +281,29 @@ def test_close_does_not_deadlock_with_a_poller_waiting_for_the_runtime_lock(tmp_
     assert time.monotonic() - t0 < 5
     assert not poller.running
     assert not any("closed database" in (r.getMessage() + str(r.exc_info)) for r in caplog.records)
+
+
+def test_the_worker_pulse_shows_assignments_made_elsewhere_in_discord(tmp_path):
+    """DESIGN §16.2: a change from the CLI, Desktop or the agent waits in the database until the gateway's
+    worker (the only process connected to Discord) shows it; a failure keeps it queued."""
+    from meeting_scribe.pipeline.task_assign import ANNOUNCE_KV
+
+    rt = Runtime(host(tmp_path)[0])
+    service = rt.service()
+    service.repo.kv_set(ANNOUNCE_KV + "m1", '{"a1": {"to": "10"}}')
+    shown = []
+
+    class DiscordSink:
+        name = "discord"
+
+        def announce_now(self, meeting_id):
+            shown.append(meeting_id)
+            if len(shown) == 1:
+                raise RuntimeError("503")
+            return 1
+
+    assert rt.announce_assignments(service) == 0  # no Discord sink in this process: nothing to do
+    rt.add_sink(DiscordSink())
+    assert rt.announce_assignments(service) == 0 and shown == ["m1"]  # failed: logged, retried next pulse
+    assert rt.announce_assignments(service) == 1 and shown == ["m1", "m1"]
+    rt.close()
