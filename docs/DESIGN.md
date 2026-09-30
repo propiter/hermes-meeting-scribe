@@ -864,6 +864,10 @@ them use the bot), `sees` (they can see where the task lives), `local` (the oper
   assignee so a re-analysis keeps it; `action_items` and `notes.json` are rewritten; `task_audit` keeps
   who, when, from whom to whom (`undone` marks an undone row). Assigning the same person again changes
   nothing (no audit row, nothing re-rendered, no Linear call).
+- **The queue is atomic**: every read-modify-write of `kv tasks.announce.<meeting>` (an assignment, a
+  refresh after a task went to Linear, the sink taking what it showed) runs in ONE `BEGIN IMMEDIATE`
+  transaction, and each write carries a higher `seq`, so a record queued again while the sink is showing
+  the previous one is never dropped as already shown.
 - **Shown in Discord in place** (`DiscordNotesSink.announce`, queued in `kv tasks.announce.<meeting>`):
   the card is EDITED (an edit notifies nobody); only when someone else chose the new assignee, and that
   person was never notified of this task before (`pinged:<item>`, shared with the first publication),
@@ -909,6 +913,52 @@ them use the bot), `sees` (they can see where the task lives), `local` (the oper
   for the meeting's space; a private meeting's issue carries the task only, §19.2), and then the card is
   re-rendered in place (no ping). A direct-messages meeting: only one's own task from one's own copy.
 - **Errors** are short, in the space's language, and say what to do (`assign.error_*`).
+- **No live mention in a result.** The model relays what a tool returns into the chat, and Hermes'
+  Discord adapter lets user mentions notify. The card already carries the ONE mention of an assignment
+  (§16.2), so every string of every task tool result has its `<@id>` replaced by the person's name (the
+  space's links, the meeting's people, the task's assignee) or an inert `@id` (`tools.inert`).
+- **Shared conversations: confirm, never trust the turn's identity.** A Discord thread is ONE Hermes
+  session for every user by default (`thread_sessions_per_user: false`), and so is a channel with
+  `group_sessions_per_user: false`. When a member writes while another member's turn runs, the gateway
+  runs that message inside the running turn — redirected/steered (`busy_input_mode: interrupt`) or as a
+  queued follow-up (`TurnRunner._run_agent_queued_followup`, hermes-agent `gateway/run_turn.py`) — and the
+  session context is only bound once per turn (`_set_session_env`, `gateway/run_turn.py:2053`), so
+  `HERMES_SESSION_USER_ID` still names the first member: the second one would act with the first one's
+  rights (an owner's). The plugin cannot fix the host, and does not need to know which member it is:
+  - **Detection** (`Caller.per_user_session`): a Discord DM is one person's; anywhere else the session
+    key must END with the user's slot. `build_session_key` (hermes-agent `gateway/session.py:682`) appends
+    the participant id last only when the session is isolated per user (`isolate_user`, lines 710/720;
+    the same rule as `is_shared_multi_user_session`, line 642); the key is bound as `HERMES_SESSION_KEY`
+    (`gateway/run.py:4280`). No key, or no user slot: shared (fail closed).
+  - **In a shared conversation**, and for a `delegate_task` subagent (`agent.delegation_context
+    .is_delegated_child_context`: it works for someone, its session identity is not a person asking), the
+    write tools do not act. They check what can be checked without trusting anyone (the meeting is visible
+    from this chat through the same privacy gate, the task exists, the named person resolves), store a
+    **proposal** (`pipeline/task_proposals.py`, table `task_proposals`, migration 104: meeting, task,
+    kind `assign|send`, argument, chat, the session's user kept for the record only, expiry) and post it
+    in the chat with ✅ Confirm / ✖ Cancel (`pok`/`pno` persistent buttons; `allowed_mentions` none, the
+    text names people with `safe_name`). The tool returns `status: pending_confirmation` and the model
+    tells the user to press it.
+  - **✅ acts as whoever presses it**, proved by Discord's interaction: `assign` runs
+    `MeetingService.assign_task` with `ButtonActions.actor(interaction)` (`me` resolves to the clicker;
+    giving it to someone else needs an owner), `send` runs `auth.check_task` for the clicker and then
+    `approve_item` — exactly the card's 🙋/👤 and 🟣/✅. Only in the chat it was posted in, behind the
+    private gate of every button (§19.2). A refused ✅ leaves the proposal pending (an owner may still
+    confirm it); ✖ needs an owner or someone Hermes authorizes.
+  - **Single use, expires, survives restarts, audited**: a compare-and-set on its state (`pending →
+    running → done`, `pending → cancelled|expired`) so two clicks never both run it; 15 minutes; rows in
+    SQLite and buttons keyed by `custom_id`; `decided_by`, `decided_at` and `result` say who confirmed or
+    cancelled it and what came of it, and the assignment itself lands in `task_audit` as the clicker.
+    The message loses its buttons and says who decided (by name).
+  - A **direct-messages meeting** gets no proposal (`dm_meeting`): it has no shared chat. A **cron** job or
+    anything outside a Discord conversation cannot propose either (`no_identity`). Without Discord connected
+    the tool says so (`confirm_unavailable`) and points to the card.
+  - **Per-user conversations** (a DM with the bot, `thread_sessions_per_user: true`,
+    `group_sessions_per_user: true` outside threads) keep acting directly as the session's user: there
+    every message of the session is that user's.
+  - Why not require `thread_sessions_per_user: true`: it would split every thread into one agent per
+    person, which is not what teams want in a meeting's thread; the confirmation keeps one conversation and
+    moves the proof of identity to where Discord gives it.
 
 ## 17. Google Meet import and transcript attachment (unreleased)
 

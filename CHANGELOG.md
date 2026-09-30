@@ -21,7 +21,10 @@ All notable changes to this project are documented here. The format follows
   `meeting_task_send` (Linear / Kanban) use the Discord user Hermes bound to the turn and the same rules
   as the buttons — a user can never gain rights by what they write. A reply to a task card needs no ids.
   Without a Discord user (Hermes CLI, cron, other platforms) they refuse to write. All tool schemas are
-  now closed (`additionalProperties: false`).
+  now closed (`additionalProperties: false`). In a conversation several people share (a Discord thread,
+  by default) they never act on the turn's identity: they post the change with ✅ Confirm / ✖ Cancel, and
+  it is made as whoever presses ✅ (single use, expires in 15 minutes, recorded with who confirmed it).
+  Their results name people instead of mentioning them.
 
 - **Everything of a meeting in one place** (`delivery_tasks_placement`, per space; `setup` asks, a
   choice in Desktop, explained by `doctor`). `meeting` (**new default**): the summary, the transcript,
