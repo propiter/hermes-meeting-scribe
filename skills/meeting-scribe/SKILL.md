@@ -1,6 +1,6 @@
 ---
 name: meeting-scribe
-description: Look up recorded meetings; assign and send their tasks as the asker.
+description: Look up meetings; assign and send their tasks.
 version: 0.2.0
 author: Pedro Rodriguez (propiter), Hermes Agent
 license: MIT
