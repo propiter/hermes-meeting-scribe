@@ -15,6 +15,10 @@ shares) someone else's task, owners included; everyone already has the whole mee
 MY task in its project channel) is the only share button; Kanban keeps its owners-only rule; 📁 Move
 is not offered nor accepted (it would pick among the bot's channels, private ones included).
 
+Who a task belongs to (``tak``/``tas``/``trl``/``tun``/``asel``/``ausr``, DESIGN §16.2) is decided by
+``pipeline.task_assign.authorize`` with what the click proves: the clicker's id, whether they are an
+owner, whether Hermes authorizes them and whether they can see the card's channel.
+
 "Who is <unidentified participant>?" (``spk``, then the picker ``ssel``, DESIGN §4.1) is open to the
 people who were in the meeting and to the owners — in a private meeting inside its channel, in a
 direct-messages meeting only in the clicker's own copy.
@@ -41,6 +45,9 @@ OPEN_ACTIONS = frozenset({"mine", "pg"})
 MEETING_OWNER_ONLY = frozenset({"allk"})
 MEETING_ACTIONS = frozenset({"allk", "alll", "psel"})
 SPEAKER_ACTIONS = frozenset({"spk", "ssel", "scfm", "sme"})
+# Who a task belongs to (DESIGN §16.2): 🙋 take, 👤 open the assignee panel, release, ↩️ undo, and the
+# owners' pickers (a participant / any member). The rules are the service's (``task_assign.authorize``).
+ASSIGN_ACTIONS = frozenset({"tak", "tas", "trl", "tun", "asel", "ausr"})
 
 
 @dataclass(frozen=True)

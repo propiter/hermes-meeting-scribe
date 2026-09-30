@@ -518,6 +518,23 @@ class TaskPublisher:
             log.info("meeting-scribe: task message %s gone (%s)", ptr.get("message"), exc)
             return False
 
+    async def ping_assignee(self, board: Board, view: TaskView, uid: str, ptrs: Pointers) -> bool:
+        """Notify ``uid`` ONCE that a task was given to them (DESIGN §16.2): a short reply under the task's
+        message, sent only if they can see that channel and were never notified of this task before
+        (its first publication, or an earlier assignment). ``pinged:<item>`` remembers who was."""
+        pinged = await ptrs.load(f"{PINGED_PREFIX}{view.item.id}") or {}
+        users = [str(u) for u in pinged.get("users") or ()]
+        ptr = await ptrs.load(f"task:{view.item.id}")
+        if uid in users or not ptr:
+            return False
+        channel = await self.msgs.channel(ptr["channel"])
+        if not self.shown(channel, board.private)(uid):
+            return False
+        text = t("tasks.assigned_ping", self.o.lang, user=f"<@{uid}>", title=view.item.title)
+        await self.msgs.send(channel, spec=MessageSpec(text, mentions=(uid,)))
+        await ptrs.save(f"{PINGED_PREFIX}{view.item.id}", {**pinged, "users": [*users, uid]})
+        return True
+
     # -- DMs ------------------------------------------------------------------------------------
     async def _user(self, uid: str) -> Any:
         client = getattr(self.adapter, "_client", None)

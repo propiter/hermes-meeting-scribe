@@ -81,7 +81,7 @@ def test_each_kit_has_its_own_classes_and_register_adds_them():
     assert a.button_cls is not b.button_cls
     bot = SimpleNamespace(added=[], add_dynamic_items=lambda *c: bot.added.extend(c))
     a.register(bot)
-    assert bot.added == [a.button_cls, a.select_cls]
+    assert bot.added == [a.button_cls, a.select_cls, a.user_select_cls]
     assert issubclass(a.button_cls, discord.ui.DynamicItem)
 
 

@@ -13,6 +13,7 @@ the first one from the existing setup (see :func:`meeting_scribe.spaces.bootstra
 from __future__ import annotations
 
 import contextlib
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -39,6 +40,8 @@ from .sinks.obsidian import ObsidianSink
 from .storage.layout import Layout
 from .storage.repo import Repository
 from .transcribe.client import SubprocessTranscriber
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .google.importer import MeetImporter, MeetPoller
@@ -243,6 +246,24 @@ class Runtime:
 
         control.pulse(service.repo)
         self.reconcile_meet_pollers()
+        self.announce_assignments(service)
+
+    def announce_assignments(self, service: MeetingService) -> int:
+        """Show in Discord the task assignments made elsewhere (CLI, Desktop, the agent, another
+        process): the gateway's worker is the only one connected to Discord (DESIGN §16.2)."""
+        from .pipeline.task_assign import meetings_to_announce
+
+        shown = 0
+        sinks = [s for s in self._extra_sinks if callable(getattr(s, "announce_now", None))]
+        if not sinks:
+            return 0
+        for meeting_id in meetings_to_announce(service.repo):
+            for sink in sinks:
+                try:
+                    shown += sink.announce_now(meeting_id)
+                except Exception:  # kept queued: the next pulse retries; other meetings still go
+                    log.exception("meeting-scribe: showing the task assignments of %s failed", meeting_id)
+        return shown
 
     def reconcile_meet_pollers(self, *, force: bool = False) -> bool:
         """Start/stop pollers for spaces created/deleted elsewhere, at most once per

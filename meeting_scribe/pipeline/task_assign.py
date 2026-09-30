@@ -216,12 +216,35 @@ def _apply(service: Any, meeting: Meeting, item: ActionItem, target: Optional[st
 
 def _queue_announce(repo: Any, meeting_id: str, item_id: str, previous: Optional[str], target: Optional[str],
                     actor_id: str) -> None:
-    """What Discord still has to show for this change (read by the Discord sink, see module doc)."""
+    """What Discord still has to show for this change (read by the Discord sink, see module doc).
+    ``from``: whose panels lost the task; ``ping``: the new assignee is someone else than who acted."""
     pending = pending_announcements(repo, meeting_id)
-    rec = pending.get(item_id) or {"from": []}
+    rec = pending.get(item_id) or {}
     old = [u for u in [*rec.get("from", []), previous] if u and u != target]
-    pending[item_id] = {"to": target, "from": list(dict.fromkeys(old)), "actor": actor_id}
+    pending[item_id] = {"to": target, "from": list(dict.fromkeys(old)), "actor": actor_id,
+                        "ping": bool(target) and target != actor_id}
     repo.kv_set(ANNOUNCE_KV + meeting_id, json.dumps(pending, sort_keys=True))
+
+
+def queue_refresh(repo: Any, meeting_id: str, item_id: str) -> None:
+    """Re-render a task's card in place (e.g. it went to Linear), pinging nobody."""
+    pending = pending_announcements(repo, meeting_id)
+    item = repo.get_action_item(meeting_id, item_id)
+    rec = pending.get(item_id) or {"from": [], "ping": False, "actor": ""}
+    pending[item_id] = {**rec, "to": item.owner_speaker_id if item is not None else None}
+    repo.kv_set(ANNOUNCE_KV + meeting_id, json.dumps(pending, sort_keys=True))
+
+
+def take_announcements(repo: Any, meeting_id: str, done: dict[str, dict[str, Any]]) -> None:
+    """Forget the announcements in ``done`` that did not change meanwhile (a newer one stays queued)."""
+    with repo.transaction():
+        pending = pending_announcements(repo, meeting_id)
+        left = {k: v for k, v in pending.items() if done.get(k) != v}
+        repo.kv_set(ANNOUNCE_KV + meeting_id, json.dumps(left, sort_keys=True) if left else None)
+
+
+def meetings_to_announce(repo: Any) -> list[str]:
+    return [key[len(ANNOUNCE_KV):] for key in repo.kv_prefix(ANNOUNCE_KV)]
 
 
 def pending_announcements(repo: Any, meeting_id: str) -> dict[str, dict[str, Any]]:

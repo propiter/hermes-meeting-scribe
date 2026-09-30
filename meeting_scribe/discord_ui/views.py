@@ -18,9 +18,10 @@ from ..i18n import t
 from .render import ButtonSpec
 from .render_tasks import TaskPanel
 
-BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg|shp|shd|sha|shc|spk|scfm|sme):(?P<meeting>[a-z0-9]{1,16}):"
-                   r"(?P<item>[A-Za-z0-9_-]{1,40})")
-SELECT_TEMPLATE = r"mscribe:(?P<action>psel|tsel|ssel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+BUTTON_TEMPLATE = (r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|mine|pg|shp|shd|sha|shc|spk|scfm|sme|tak|tas|trl|tun):"
+                   r"(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})")
+SELECT_TEMPLATE = r"mscribe:(?P<action>psel|tsel|ssel|asel):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+USER_SELECT_TEMPLATE = r"mscribe:(?P<action>ausr):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _STYLES = {"success": discord.ButtonStyle.success, "primary": discord.ButtonStyle.primary,
            "danger": discord.ButtonStyle.danger, "secondary": discord.ButtonStyle.secondary}
 
@@ -76,11 +77,30 @@ class ViewKit:
                 values = list((getattr(interaction, "data", None) or {}).get("values") or ())
                 await kit.handler.handle(interaction, self.action, self.meeting_id, self.item_id, values)
 
+        class ScribeUserSelect(discord.ui.DynamicItem[discord.ui.UserSelect],  # type: ignore[misc]
+                               template=USER_SELECT_TEMPLATE):
+            """Any member of the server (owners giving a task to someone who was not in the meeting)."""
+
+            def __init__(self, select: discord.ui.UserSelect) -> None:
+                super().__init__(select)
+                m = re.fullmatch(USER_SELECT_TEMPLATE, select.custom_id or "")
+                assert m is not None
+                self.action, self.meeting_id, self.item_id = m["action"], m["meeting"], m["item"]
+
+            @classmethod
+            async def from_custom_id(cls, interaction: Any, item: Any, match: re.Match[str]) -> "ScribeUserSelect":
+                return cls(discord.ui.UserSelect(custom_id=item.custom_id))
+
+            async def callback(self, interaction: Any) -> None:
+                values = [str(v) for v in (getattr(interaction, "data", None) or {}).get("values") or ()]
+                await kit.handler.handle(interaction, self.action, self.meeting_id, self.item_id, values)
+
         self.button_cls = ScribeButton
         self.select_cls = ScribeSelect
+        self.user_select_cls = ScribeUserSelect
 
     def register(self, bot: Any) -> None:
-        bot.add_dynamic_items(self.button_cls, self.select_cls)
+        bot.add_dynamic_items(self.button_cls, self.select_cls, self.user_select_cls)
 
     def _button(self, spec: ButtonSpec, *, row: Optional[int]) -> Any:
         button = discord.ui.Button(label=_clip(spec.label, 80), custom_id=spec.custom_id,
@@ -132,6 +152,24 @@ class ViewKit:
                                    max_values=1)
         view = discord.ui.View(timeout=None)
         view.add_item(self.select_cls(select))
+        return view
+
+    def assign_view(self, meeting_id: str, item_id: str, options: Sequence[tuple[str, str]],
+                    buttons: Sequence[ButtonSpec] = ()) -> discord.ui.View:
+        """Owners: who gets this task — a participant (or nobody) from the list, or any member of the
+        server from the member picker; plus extra buttons (↩️ undo) (DESIGN §16.2)."""
+        lang = getattr(self.handler, "lang", "en")
+        view = discord.ui.View(timeout=None)
+        if options:
+            opts = [discord.SelectOption(label=_clip(name), value=uid) for uid, name in options][:25]
+            view.add_item(self.select_cls(discord.ui.Select(
+                custom_id=f"mscribe:asel:{meeting_id}:{item_id}", options=opts, min_values=1, max_values=1,
+                placeholder=_clip(t("tasks.pick_participant", lang)), row=0)))
+        view.add_item(self.user_select_cls(discord.ui.UserSelect(
+            custom_id=f"mscribe:ausr:{meeting_id}:{item_id}", min_values=1, max_values=1,
+            placeholder=_clip(t("tasks.pick_member", lang)), row=1)))
+        for spec in buttons:
+            view.add_item(self._button(spec, row=2))
         return view
 
     def send_kwargs(self) -> dict[str, Any]:

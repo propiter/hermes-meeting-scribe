@@ -36,8 +36,21 @@ def test_task_message_has_its_own_buttons_on_one_row(meeting):
     spec = render_task(meeting, tv(1), OPTS)
     assert "Task 1" in spec.content and "<@11>" in spec.content and "orion" in spec.content
     assert ids(spec.buttons) == ["mscribe:ok:k3v7q2ab:a0000000001", "mscribe:lin:k3v7q2ab:a0000000001",
-                                 "mscribe:no:k3v7q2ab:a0000000001", "mscribe:prj:k3v7q2ab:a0000000001"]
+                                 "mscribe:no:k3v7q2ab:a0000000001", "mscribe:prj:k3v7q2ab:a0000000001",
+                                 "mscribe:tas:k3v7q2ab:a0000000001"]
     assert {b.row for b in spec.buttons} == {0}
+
+
+def test_an_unassigned_task_offers_i_ll_take_it_and_a_dm_copy_offers_nothing(meeting):
+    """DESIGN §16.2: 🙋 on a task without assignee, 👤 on one that has one, neither in a DM copy."""
+    spec = render_task(meeting, tv(3, owner=None), OPTS)
+    [take] = [b for b in spec.buttons if ":tak:" in b.custom_id]
+    assert take.label == "I'll take it" and take.emoji == "🙋" and not any(":tas:" in c for c in ids(spec.buttons))
+    es = replace(OPTS, lang="es")
+    assert [b.label for b in render_task(meeting, tv(3, owner=None), es).buttons if ":tak:" in b.custom_id] == [
+        "Me la quedo"]
+    no_assign = replace(OPTS, can_assign=False)
+    assert not any(":tak:" in c or ":tas:" in c for c in ids(render_task(meeting, tv(3, owner=None), no_assign).buttons))
 
 
 def test_kanban_button_only_on_owner_tasks(meeting):

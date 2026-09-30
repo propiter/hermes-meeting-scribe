@@ -171,7 +171,7 @@ def _detach_from_bot(state: UiState) -> None:
     remove_items = getattr(bot, "remove_dynamic_items", None)
     if callable(remove_items):
         try:
-            remove_items(state.kit.button_cls, state.kit.select_cls)
+            remove_items(state.kit.button_cls, state.kit.select_cls, state.kit.user_select_cls)
         except Exception as exc:
             log.debug("meeting-scribe: removing dynamic items on unload failed: %s", exc)
     state.bot_ref = None
@@ -223,7 +223,9 @@ def install(ctx: Any, runtime: Any) -> UiState:
                             project_view=lambda mid, cands: holder["s"].kit.project_view(mid, cands),
                             move_view=lambda mid, iid, opts: holder["s"].kit.move_view(mid, iid, opts),
                             buttons_view=lambda specs: holder["s"].kit.view(specs),
-                            speaker_view=lambda mid, label, opts: holder["s"].kit.speaker_view(mid, label, opts))
+                            speaker_view=lambda mid, label, opts: holder["s"].kit.speaker_view(mid, label, opts),
+                            assign_view=lambda mid, iid, opts, buttons: holder["s"].kit.assign_view(mid, iid, opts,
+                                                                                                    buttons))
     kit = ViewKit(actions)
     sink = DiscordNotesSink(settings=runtime.settings, service=runtime.service, adapter=lambda: holder["s"].adapter,
                             loop=lambda: holder["s"].loop, options=_render_options(runtime), views=kit,

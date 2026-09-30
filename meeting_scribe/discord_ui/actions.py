@@ -19,8 +19,10 @@ from ..domain.errors import (ChannelUnavailable, DirectMessageUnavailable, Forum
 from ..domain.models import Candidate
 from ..i18n import t
 from ..pipeline.speakers import AssignError
-from .auth import (MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, SPEAKER_ACTIONS, TASK_ACTIONS,
-                   check_dm, check_private, check_speaker, check_task)
+from ..privacy import people as _people
+from ..pipeline.task_assign import Actor, TaskAssignError
+from .auth import (ASSIGN_ACTIONS, MEETING_ACTIONS, MEETING_OWNER_ONLY, OPEN_ACTIONS, SHARE_ACTIONS, SPEAKER_ACTIONS,
+                   TASK_ACTIONS, can_view, check_dm, check_private, check_speaker, check_task)
 from .render import ButtonSpec, custom_id
 
 log = logging.getLogger(__name__)
@@ -62,9 +64,33 @@ def friendly_error(exc: BaseException, lang: str) -> str:
         return str(exc)
     if isinstance(exc, AssignError):
         return t(f"speakers.error_{exc.code}", lang, detail=exc.detail)
+    if isinstance(exc, TaskAssignError):
+        return assign_error(exc, lang)
     if isinstance(exc, (KeyError, LookupError)):
         return t("ui.error_not_found", lang)
     return t("ui.action_failed", lang)
+
+
+def assign_error(exc: TaskAssignError, lang: str) -> str:
+    """Why a task could not be assigned, in the reader's words (mentions shown, never pinged)."""
+    detail = f"<@{exc.detail}>" if exc.detail.isdigit() else exc.detail
+    return t(f"assign.error_{exc.code}", lang, detail=detail)
+
+
+def assign_reply(done: Any, lang: str, actor: str) -> str:
+    """What the person who assigned reads: the change, and what happened in Linear/Kanban."""
+    if not done.changed:
+        text = t("assign.unchanged", lang, title=done.title)
+    elif done.user is None:
+        text = t("assign.released", lang, title=done.title)
+    elif done.user == actor:
+        text = t("assign.taken", lang, title=done.title)
+    else:
+        who = f"<@{done.user}>" if str(done.user).isdigit() else done.name
+        text = t("assign.given", lang, title=done.title, user=who)
+    for sink, status in sorted((done.sinks or {}).items()):
+        text += "\n" + t(f"assign.sink_{status}", lang, sink=_SINK_NAMES.get(sink, sink))
+    return text
 
 
 def _from_panel(interaction: Any) -> bool:
@@ -79,8 +105,11 @@ class ButtonActions:
                  project_view: Callable[[str, Sequence[Candidate]], Any],
                  move_view: Callable[[str, str, Sequence[tuple[str, str]]], Any],
                  buttons_view: Callable[[Sequence[ButtonSpec]], Any] = lambda _specs: None,
-                 speaker_view: Callable[[str, str, Sequence[tuple[str, str]]], Any] = lambda *_a: None) -> None:
+                 speaker_view: Callable[[str, str, Sequence[tuple[str, str]]], Any] = lambda *_a: None,
+                 assign_view: Callable[[str, str, Sequence[tuple[str, str]], Sequence[ButtonSpec]], Any] =
+                 lambda *_a: None) -> None:
         self._buttons_view = buttons_view
+        self._assign_view = assign_view
         self._speaker_view = speaker_view
         self._service = service
         self._settings = settings
@@ -164,7 +193,7 @@ class ButtonActions:
         gate = await self._private_gate(interaction, action, meeting_id, item_id)
         if gate is not None:
             return gate
-        if action in OPEN_ACTIONS:
+        if action in OPEN_ACTIONS or action in ASSIGN_ACTIONS:  # the assignment rules are the service's
             return True
         if action in SPEAKER_ACTIONS:
             if not await self._speaker_gate(interaction, meeting_id):
@@ -201,7 +230,7 @@ class ButtonActions:
 
     async def handle(self, interaction: Any, action: str, meeting_id: str, item_id: str,
                      values: Optional[Sequence[str]] = None) -> None:
-        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS | SHARE_ACTIONS | SPEAKER_ACTIONS:
+        if action not in TASK_ACTIONS | OPEN_ACTIONS | MEETING_ACTIONS | SHARE_ACTIONS | SPEAKER_ACTIONS | ASSIGN_ACTIONS:
             return
         token = _SPACE.set(await asyncio.to_thread(self._meeting_space, meeting_id))
         try:
@@ -224,6 +253,10 @@ class ButtonActions:
             return
         if action in SHARE_ACTIONS:
             await self._share(interaction, action, meeting_id, item_id)
+            return
+        if action in ASSIGN_ACTIONS:
+            await (self._offer_assignee(interaction, meeting_id, item_id) if action == "tas"
+                   else self._assign_task(interaction, action, meeting_id, item_id, list(values or ())))
             return
         if action in SPEAKER_ACTIONS:
             if action == "scfm":
@@ -355,6 +388,72 @@ class ButtonActions:
             await interaction.edit_original_response(view=view)
         else:
             await interaction.followup.send(view=view, ephemeral=True)
+
+    # -- who a task belongs to (DESIGN §16.2) ---------------------------------------------------------
+    def actor(self, interaction: Any) -> Actor:
+        """What this click proves about the clicker; nothing typed by anyone widens it."""
+        return Actor(self._uid(interaction), admin=self.is_owner(interaction),
+                     authorized=self._hermes_allows(interaction), sees=can_view(interaction),
+                     name=str(getattr(interaction.user, "display_name", "") or ""))
+
+    async def _offer_assignee(self, interaction: Any, meeting_id: str, item_id: str) -> None:
+        """👤: owners pick who gets the task; its assignee may release it; anyone else is told whose it is."""
+        from ..pipeline.task_assign import participants
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        svc, lang, uid = self._service(), self.lang, self._uid(interaction)
+        item = await asyncio.to_thread(svc.repo.get_action_item, meeting_id, item_id)
+        if item is None:
+            await interaction.followup.send(t("tasks.unknown", lang, item=item_id), ephemeral=True)
+            return
+        owner = item.owner_speaker_id or ""
+        if not self.is_owner(interaction):
+            if owner and owner == uid:
+                release = ButtonSpec(t("ui.btn_release", lang), custom_id("trl", meeting_id, item_id), "secondary",
+                                     0, "↩️")
+                await interaction.followup.send(t("assign.yours", lang, title=item.title),
+                                                view=self._buttons_view([release]), ephemeral=True)
+            elif owner:
+                await interaction.followup.send(t("assign.error_taken", lang, detail=f"<@{owner}>"
+                                                  if owner.isdigit() else item.owner_name or owner), ephemeral=True)
+            else:
+                await interaction.followup.send(t("assign.take_hint", lang), ephemeral=True)
+            return
+        meeting = await asyncio.to_thread(svc.require, meeting_id)
+        people = dict(await asyncio.to_thread(lambda: [(p, n) for p, n in _people(svc.repo, meeting) if p]))
+        known = await asyncio.to_thread(participants, svc.repo, meeting)
+        options = [("none", t("notes.unassigned", lang))] + [(p, people.get(p, p)) for p in known]
+        history = await asyncio.to_thread(svc.repo.task_history, meeting_id, item_id)
+        extra = ([ButtonSpec(t("ui.btn_undo", lang), custom_id("tun", meeting_id, item_id), "secondary", 2, "↩️")]
+                 if any(not h["undone"] for h in history) else [])
+        await interaction.followup.send(t("assign.pick", lang, title=item.title),
+                                        view=self._assign_view(meeting_id, item_id, options[:SELECT_LIMIT], extra),
+                                        ephemeral=True)
+
+    async def _assign_task(self, interaction: Any, action: str, meeting_id: str, item_id: str,
+                           values: list[str]) -> None:
+        """🙋 take (always the clicker, whatever the message says), release, undo, or an owner's pick."""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        actor, svc = self.actor(interaction), self._service()
+        try:
+            if action == "tun":
+                done = await asyncio.to_thread(svc.undo_task_assignment, meeting_id, item_id, actor)
+            else:
+                who = {"tak": "me", "trl": "none"}.get(action) or (values[0] if values else "")
+                if not who:
+                    raise UserMessage(t("ui.no_selection", self.lang))
+                done = await asyncio.to_thread(svc.assign_task, meeting_id, item_id, who, actor)
+            reply = assign_reply(done, self.lang, actor.user_id)
+        except (KeyError, LookupError, ValueError) as exc:
+            log.warning("meeting-scribe: assigning task %s/%s refused: %s", meeting_id, item_id, exc)
+            await interaction.followup.send(clip_reply(friendly_error(exc, self.lang)), ephemeral=True)
+            return
+        if done.changed:
+            try:
+                await self._sink().announce(meeting_id)
+            except Exception:  # the change is saved and queued: the worker shows it on its next tick
+                log.exception("meeting-scribe: showing the assignment of %s/%s failed", meeting_id, item_id)
+        await interaction.followup.send(clip_reply(reply), ephemeral=True)
 
     # -- unidentified participants (DESIGN §4.1) -----------------------------------------------------
     async def _offer_speakers(self, interaction: Any, meeting_id: str, label: str) -> None:

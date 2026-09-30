@@ -134,7 +134,8 @@ class DmDelivery:
                                      getattr(self.pub.views, "file", None), self.lang,
                                      max_bytes=int(s.delivery_transcript_max_mb) * 1024 * 1024)
         mine = [v for v in board.views if str(v.item.owner_speaker_id or "") == uid]
-        no_move = replace(self.pub.o, has_candidates=False)  # no 📁 Move in a DM (DESIGN §19.3)
+        # no 📁 Move and no assignment from a DM copy (DESIGN §19.3, §16.2)
+        no_move = replace(self.pub.o, has_candidates=False, can_assign=False)
         await self._put(p, "index", user, channel, render_dm_index(board.meeting, board.views, uid, self.lang))
         for view in mine:
             await self._put(p, f"task:{view.item.id}", user, channel, render_task(board.meeting, view, no_move))

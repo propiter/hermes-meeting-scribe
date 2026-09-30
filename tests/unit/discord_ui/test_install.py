@@ -97,7 +97,7 @@ async def test_factory_attaches_listeners_items_and_starts_pipeline(rt, monkeypa
     ctx.handlers["discord"][0](bot, adapter)
     assert rt.capture.adapter is adapter and rt.capture.loop is asyncio.get_running_loop()
     assert len(bot.listeners["on_voice_state_update"]) == 1
-    assert len(bot.dynamic_items) == 2
+    assert len(bot.dynamic_items) == 3
     assert rt.pipeline_running()
     ok, detail = rt.capture_status()
     assert ok and "ready" in detail

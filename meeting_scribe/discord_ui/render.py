@@ -17,8 +17,9 @@ from ..i18n import t
 
 MESSAGE_LIMIT = 2000
 EMBED_LIMIT = 4096
-ACTIONS = ("ok", "lin", "no", "prj", "allk", "alll", "psel", "mine", "pg", "tsel", "shp", "shd", "sha", "shc")
-TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc|spk|ssel|scfm|sme):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
+ACTIONS = ("ok", "lin", "no", "prj", "allk", "alll", "psel", "mine", "pg", "tsel", "shp", "shd", "sha", "shc",
+           "tak", "tas", "trl", "tun", "asel", "ausr")
+TEMPLATE = r"mscribe:(?P<action>ok|lin|no|prj|allk|alll|psel|mine|pg|tsel|shp|shd|sha|shc|spk|ssel|scfm|sme|tak|tas|trl|tun|asel|ausr):(?P<meeting>[a-z0-9]{1,16}):(?P<item>[A-Za-z0-9_-]{1,40})"
 _TEMPLATE_RE = re.compile(f"^{TEMPLATE}$")
 _TOKEN_RE = re.compile(r"<[@#][!&]?\d+>|\S+|\s+")
 
@@ -49,6 +50,7 @@ class RenderOptions:
     linear_on: bool
     is_owner_item: Callable[[ActionItem], bool]
     has_candidates: bool = True
+    can_assign: bool = True  # 🙋/👤 on the task card (DESIGN §16.2); never in a direct-messages copy
 
 
 def custom_id(action: str, meeting_id: str, item_id: str) -> str:

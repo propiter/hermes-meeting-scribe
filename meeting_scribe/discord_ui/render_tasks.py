@@ -127,6 +127,10 @@ def task_buttons(meeting: Meeting, view: TaskView, o: RenderOptions) -> tuple[Bu
     out.append(ButtonSpec(t("ui.btn_dismiss", o.lang), custom_id("no", meeting.id, item.id), "secondary", 0, "❌"))
     if o.has_candidates:
         out.append(ButtonSpec(t("ui.btn_move", o.lang), custom_id("prj", meeting.id, item.id), "secondary", 0, "📁"))
+    if o.can_assign:  # DESIGN §16.2: take an unassigned task; change who has one
+        out.append(ButtonSpec(t("ui.btn_take", o.lang), custom_id("tak", meeting.id, item.id), "success", 0, "🙋")
+                   if not item.owner_speaker_id else
+                   ButtonSpec(t("ui.btn_assignee", o.lang), custom_id("tas", meeting.id, item.id), "secondary", 0, "👤"))
     return tuple(out)
 
 

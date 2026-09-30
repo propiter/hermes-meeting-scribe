@@ -321,6 +321,59 @@ class DiscordNotesSink:
             await pub.dm(board, view.item.owner_speaker_id, ptrs, send=False)
         await pub.refresh_index(board, ptrs)
 
+    # -- task assignments (DESIGN §16.2) -------------------------------------------------------------
+    def announce_now(self, meeting_id: str) -> int:
+        """Pipeline thread: show the queued assignments of ``meeting_id`` in Discord (see :meth:`announce`)."""
+        loop = self._loop()
+        if self._adapter() is None or loop is None or loop.is_closed():
+            return 0  # kept queued until Discord is connected
+        return asyncio.run_coroutine_threadsafe(self.announce(meeting_id), loop).result(self._timeout)
+
+    async def announce(self, meeting_id: str) -> int:
+        """Show every queued assignment of a meeting: its card edited IN PLACE (an edit notifies nobody),
+        ONE mention of the new assignee when someone else gave it to them and they were never notified
+        of this task, the new assignee's DM panel (posted once, edited afterwards), the panels of whoever
+        lost it, and the index counts. Returns how many tasks were shown."""
+        from ..pipeline.task_assign import pending_announcements, take_announcements
+
+        async with self._lock(meeting_id):
+            pending = await asyncio.to_thread(pending_announcements, self._service().repo, meeting_id)
+            if not pending:
+                return 0
+            got = await self.board(meeting_id)
+            if got is None:
+                await asyncio.to_thread(take_announcements, self._service().repo, meeting_id, pending)
+                return 0
+            pub, board = got
+            ptrs = Pointers(pub.repo, meeting_id)
+            if await pub.is_dm(board.meeting):
+                await self._refresh(meeting_id)  # every participant's copy is re-rendered (edits; no pings)
+            elif await ptrs.load("notes"):  # never published: its first delivery shows the assignee
+                for item_id, rec in pending.items():
+                    await self._announce_one(pub, board, ptrs, item_id, rec)
+                await pub.refresh_index(board, ptrs)
+            await asyncio.to_thread(take_announcements, self._service().repo, meeting_id, pending)
+            return len(pending)
+
+    async def _announce_one(self, pub: TaskPublisher, board: Any, ptrs: Pointers, item_id: str, rec: dict) -> None:
+        view = board.view(item_id)
+        if view is None:
+            return
+        if not await pub.edit_task(board.meeting, view, ptrs):
+            await self._refresh(board.meeting.id)  # never posted there yet: laid out again, pinging nobody
+        target = str(rec.get("to") or "")
+        if rec.get("ping") and is_discord_user_id(target):
+            await pub.ping_assignee(board, view, target, ptrs)
+        if board.private:
+            await sync_copies(pub, board, ptrs)
+            return
+        if pub.settings.delivery_dm_assignees:
+            if is_discord_user_id(target):
+                await pub.dm(board, target, ptrs, send=True)  # an existing panel is edited, never duplicated
+            for uid in rec.get("from") or ():
+                if is_discord_user_id(uid) and await ptrs.load(f"dm:{uid}"):
+                    await pub.dm(board, str(uid), ptrs, send=False)
+
     # -- private meetings (DESIGN §19.2) ------------------------------------------------------------
     async def private_place(self, meeting_id: str) -> Optional[set[str]]:
         """The channel ids a private meeting lives in (``None``: not private) — button authorization."""
