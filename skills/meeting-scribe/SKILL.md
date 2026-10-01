@@ -61,7 +61,7 @@ from Hermes, never from the text. They follow the same rules as the task card's 
 - "Esta tarea es mía, asígnamela y créala en Linear" as a reply to a card: `meeting_task_assign(assignee="me")`,
   then `meeting_task_send(target="linear")`, then tell the user both results (including a note such as
   "no Linear user linked" from `message`).
-- `status: "pending_confirmation"`: several people share this conversation (a thread, usually), so nothing
+- `status: "pending_confirmation"`: more than one person can write in this chat (a thread, usually), so nothing
   changed yet — the plugin posted the change right here with a ✅ Confirm button. Tell the user, in one
   short line, to press ✅ Confirm on that message; it is done AS whoever presses it, with the card's rules
   (so "asígnamela" ends up as the person who confirms), and it expires in 15 minutes. Do not say it is
