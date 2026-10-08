@@ -120,6 +120,24 @@ def _check_voice_client(vc_cls: type, conn_cls: Optional[type], problems: list[s
         problems.append(f"VoiceConnectionState.__init__ not introspectable: {exc}")
 
 
+def resolve_check_auth(mod: Any) -> Optional[Callable[..., Any]]:
+    """Hermes' component (button) authorization helper.
+
+    Lives in the Discord adapter module up to 2026-10-06; upstream c3f3589efb moved it to
+    ``plugins.platforms.discord.adapter_component_auth``. Look in both places.
+    """
+    fn = getattr(mod, "_component_check_auth", None)
+    if callable(fn):
+        return fn
+    try:
+        from plugins.platforms.discord.adapter_component_auth import (  # type: ignore[import-not-found]
+            _component_check_auth as fn,
+        )
+    except Exception:
+        return None
+    return fn if callable(fn) else None
+
+
 def probe(receiver_cls: Optional[type], adapter_cls: Optional[type], conn_cls: Optional[type],
           check_auth: Optional[Callable[..., Any]], dave: Any = None,
           voice_client_cls: Optional[type] = None) -> CompatResult:
@@ -168,7 +186,7 @@ def probe_hermes() -> CompatResult:
     except ImportError:  # no DAVE support installed: discord.py then negotiates voice without E2EE
         davey = None
     res = probe(getattr(mod, "VoiceReceiver", None), getattr(mod, "DiscordAdapter", None), conn,
-                getattr(mod, "_component_check_auth", None), davey, vc_cls)
+                resolve_check_auth(mod), davey, vc_cls)
     if not extra:
         return res
     return CompatResult(False, extra + tuple(p for p in res.problems if "VoiceConnectionState not" not in p),

@@ -22,7 +22,7 @@ from ..config import Settings
 from ..domain.text import is_ascii_digits
 from ..i18n import t
 from ..spaces import GuildUnassigned
-from .compat import CompatResult, probe
+from .compat import CompatResult, probe, resolve_check_auth
 from .receiver import scribe_receiver_class
 from .voice_client import scribe_voice_client_class
 from .session import Busy, RecordingSession, SessionDeps, Writer
@@ -37,7 +37,7 @@ def compat_for_adapter(adapter: Any) -> CompatResult:
     """Probe the classes of the adapter module actually loaded in this gateway."""
     mod = sys.modules.get(type(adapter).__module__)
     conn, vc_cls = _voice_classes()
-    return probe(getattr(mod, "VoiceReceiver", None), type(adapter), conn, getattr(mod, "_component_check_auth", None),
+    return probe(getattr(mod, "VoiceReceiver", None), type(adapter), conn, resolve_check_auth(mod),
                  voice_client_cls=vc_cls)
 
 

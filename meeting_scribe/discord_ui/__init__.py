@@ -23,6 +23,7 @@ import weakref
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
 
+from ..capture.compat import resolve_check_auth
 from ..domain.models import ActionItem, Meeting
 from .actions import ButtonActions
 from .channel_watch import ChannelWatch
@@ -162,7 +163,7 @@ def proposer_for(runtime: Any) -> Optional[Callable[[str, str, str, str, str], O
 def _check_auth(state: UiState) -> Callable[[Any], bool]:
     def check(interaction: Any) -> bool:
         adapter = state.adapter
-        fn = getattr(sys.modules.get(type(adapter).__module__), "_component_check_auth", None) if adapter else None
+        fn = resolve_check_auth(sys.modules.get(type(adapter).__module__)) if adapter else None
         if not callable(fn):
             return False  # fail closed: without Hermes' helper only owners may click
         return bool(fn(interaction, getattr(adapter, "_allowed_user_ids", set()),
