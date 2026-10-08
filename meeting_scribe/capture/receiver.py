@@ -357,6 +357,13 @@ def scribe_receiver_class(base: type) -> type:
         def refresh_connection(self) -> None:
             """Re-read DAVE session / transport key (cheap attribute reads; called every tick)."""
             conn = self._vc._connection
+            resolve = getattr(self, "_resolve_credentials", None)
+            if callable(resolve):  # Hermes >= 2026-10: credentials are read-only properties over _creds
+                try:
+                    resolve(conn)
+                except TypeError:  # MISSING while the voice websocket is mid-handshake; keep the old key
+                    pass
+                return
             self._dave_session = getattr(conn, "dave_session", None)
             try:
                 self._secret_key = bytes(conn.secret_key)
