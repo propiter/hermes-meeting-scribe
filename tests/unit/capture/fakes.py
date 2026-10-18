@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import struct
 import threading
+import time
 from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
@@ -37,6 +38,13 @@ class FakeVoiceReceiver:
         self._last_packet_time: dict[int, float] = {}
         self._decoders: dict[int, Any] = {}
         self._paused = False
+        self._dave_passthrough_until = 0.0
+        self.passthrough_grants: list[float] = []
+
+    def note_dave_passthrough_window(self, seconds: float) -> None:
+        """Mirror of Hermes' adapter: unmapped-SSRC frames pass through until this deadline."""
+        self._dave_passthrough_until = time.monotonic() + seconds
+        self.passthrough_grants.append(seconds)
 
     def start(self) -> None:
         conn = self._vc._connection

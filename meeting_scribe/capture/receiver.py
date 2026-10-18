@@ -9,7 +9,10 @@ timeline. Nothing else of the packet path is copied; the compat probe verifies t
 Unmapped SSRCs (DESIGN §4.1). Hermes learns who owns an SSRC only from the voice SPEAKING event
 (op 5), and Discord does not always send it — e.g. for people already talking when the bot joins.
 Hermes then skips DAVE for that SSRC and hands the still end-to-end encrypted payload to the Opus
-decoder. We swap ``_decoders`` for :class:`_Decoders`: for an unmapped SSRC it returns a
+decoder — but ONLY inside a plaintext-passthrough window; outside it Hermes drops the frame
+(``dave_unmapped_dropped``) and the person ends up with no track at all. The session therefore keeps
+that window open for as long as it records (``ScribeReceiver._keep_passthrough_open``).
+We swap ``_decoders`` for :class:`_Decoders`: for an unmapped SSRC it returns a
 :class:`_Retainer` instead of a real decoder, so the payload Hermes produced after the transport
 (NaCl) layer is *kept* — never decoded as noise — while the SSRC is identified:
 
@@ -250,6 +253,12 @@ def scribe_receiver_class(base: type) -> type:
         RETAIN_SECONDS = 4 * 3600.0  # per-SSRC retention window: a whole default-length meeting
         RETAIN_SSRC_MAX_BYTES = 256 * 1024 * 1024  # per SSRC (~4 h at 64 kbps with overhead)
         RETAIN_MAX_BYTES = 1024 * 1024 * 1024  # all SSRCs together
+        # Hermes DROPS a DAVE frame whose SSRC it cannot map to a user (no SPEAKING, no sole-member
+        # inference) while E2EE is active, unless a plaintext-passthrough window is open. Those are
+        # exactly the frames this receiver identifies by key, so the session keeps the window open:
+        # ``refresh_connection`` re-grants it every tick. Per receiver instance, so the agent's own
+        # voice path is untouched, and far above the 0.5 s tick so a stalled loop stays open.
+        PASSTHROUGH_WINDOW_SECONDS = 120.0
 
         def __init__(self, voice_client: Any, *, clock: Clock = time.monotonic,
                      codec: Optional[Any] = None) -> None:
@@ -355,7 +364,9 @@ def scribe_receiver_class(base: type) -> type:
                 self._present = present
 
         def refresh_connection(self) -> None:
-            """Re-read DAVE session / transport key (cheap attribute reads; called every tick)."""
+            """Re-read DAVE session / transport key (cheap attribute reads; called every tick), and
+            keep Hermes' plaintext-passthrough window open (:meth:`_keep_passthrough_open`)."""
+            self._keep_passthrough_open()
             conn = self._vc._connection
             resolve = getattr(self, "_resolve_credentials", None)
             if callable(resolve):  # Hermes >= 2026-10: credentials are read-only properties over _creds
@@ -369,6 +380,37 @@ def scribe_receiver_class(base: type) -> type:
                 self._secret_key = bytes(conn.secret_key)
             except TypeError:  # MISSING while the voice websocket is mid-handshake; keep the old key
                 pass
+
+        def _keep_passthrough_open(self) -> None:
+            """Re-grant Hermes' unmapped-SSRC passthrough window, or the audio never reaches us.
+
+            Hermes drops a DAVE frame whose SSRC it cannot map to a user — ``dave_unmapped_dropped``
+            — while E2EE is active, because Opus would decode ciphertext into noise. That is exactly
+            the audio this receiver identifies by trying each candidate's key, so without the window
+            a person Discord sent no SPEAKING for gets no track at all. The window is per receiver
+            instance and replace-semantic upstream, so it lapses by itself if this loop stops.
+
+            A missing or refusing knob is not fatal (identification still runs on whatever Hermes
+            passes through), but it is LOUD once per session: this is the seam that broke silently
+            upstream and cost every participant but the one who re-joined their audio.
+            """
+            grant = getattr(self, "note_dave_passthrough_window", None)
+            if not callable(grant):
+                self._warn_passthrough(f"Hermes' receiver has no note_dave_passthrough_window")
+                return
+            try:
+                grant(self.PASSTHROUGH_WINDOW_SECONDS)
+            except Exception as exc:  # a compat call must never end the recording
+                self._warn_passthrough(f"the passthrough window was refused: {exc!r}")
+
+        def _warn_passthrough(self, why: str) -> None:
+            """Once per session: without the window Hermes drops unmapped-SSRC audio on the floor."""
+            if getattr(self, "_passthrough_warned", False):
+                return
+            self._passthrough_warned = True
+            log.warning("meeting-scribe: %s, so Hermes will DROP the audio of anyone it cannot map "
+                        "to an SSRC (no SPEAKING, no sole-member inference). Recording continues; "
+                        "those participants may end up without a track.", why)
 
         def _dave_frame(self, payload: bytes) -> bool:
             return bool(self._dave_session) and payload[-2:] == DAVE_MAGIC

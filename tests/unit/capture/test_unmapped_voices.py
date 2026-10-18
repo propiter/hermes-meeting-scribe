@@ -319,3 +319,30 @@ def test_stop_releases_retained_audio_but_keeps_the_report(clock):
     rx.stop()
     assert rx._retained_bytes == 0 and not rx._pending[700].frames
     assert rx.voice_report().undecided == {700: 5}
+
+
+# -- the passthrough window Hermes needs open for any of the above to see the frames -----------------
+def test_every_refresh_keeps_the_passthrough_window_open(clock):
+    """Hermes DROPS an unmapped DAVE frame (``dave_unmapped_dropped``) unless its plaintext-passthrough
+    window is open, and those frames are the only ones this receiver can identify by key. The session
+    ticks every 0.5 s, so re-granting on every refresh is what makes the window survive the meeting."""
+    rx = make(clock, dave=FakeDave([A, B]))
+    rx.refresh_connection()
+    rx.refresh_connection()
+    assert rx.passthrough_grants == [rx.PASSTHROUGH_WINDOW_SECONDS] * 2
+    assert rx.PASSTHROUGH_WINDOW_SECONDS > 1.0  # comfortably above the tick: a stalled loop stays open
+
+
+def test_passthrough_grant_is_optional_and_never_ends_the_recording(clock):
+    """An adapter without the knob (or one that refuses the call) must not break identification."""
+    rx = make(clock, dave=FakeDave([A, B]))
+    rx.note_dave_passthrough_window = None  # type: ignore[method-assign]
+    rx.refresh_connection()
+    rx.note_dave_passthrough_window = _boom  # type: ignore[method-assign]
+    rx.refresh_connection()
+    talk_dave(rx, clock, 500, A, 3)
+    assert sorted(rx.drain()) == [A]
+
+
+def _boom(seconds: float) -> None:
+    raise RuntimeError("this adapter does not allow it")
