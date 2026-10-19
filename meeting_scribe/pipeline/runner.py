@@ -303,16 +303,51 @@ class PipelineRunner:
         return True
 
     def _claim(self) -> Optional[Any]:
-        """Lease the next ready job; a transcribe job only while a transcription slot is free."""
+        """Lease the next ready job; a transcribe job only while a transcription slot is free, and a
+        delivery job only where a sink is connected."""
         with self._claim_lock:
-            full = self._transcribing >= self.max_transcriptions
-            job = self.repo.claim_next_job(now=self.clock.now(), owner=self.owner,
-                                           skip_stages=(Stage.TRANSCRIBE,) if full else ())
+            skip: list[Stage] = []
+            if self._transcribing >= self.max_transcriptions:
+                skip.append(Stage.TRANSCRIBE)
+            if not self._sinks_ready():
+                skip.append(Stage.DELIVER)
+            job = self.repo.claim_next_job(now=self.clock.now(), owner=self.owner, skip_stages=tuple(skip))
             if job is not None:
                 self._active += 1
                 if job.stage is Stage.TRANSCRIBE:
                     self._transcribing += 1
             return job
+
+    def _sinks_ready(self) -> bool:
+        """True when a sink is connected in THIS process, so a delivery can actually happen here.
+
+        Every gateway that loads the plugin runs a worker, but only the one that owns the platform
+        adapter can deliver. A worker without it claims the delivery, gets ``deferred`` back and hands
+        the job over — so the job bounces between workers and the notes never reach the room
+        (measured: one delivery retried for 40 minutes, every attempt landing on the gateway with no
+        Discord adapter). Leaving the stage unclaimed lets the worker that can do the job take it;
+        with no sink connected anywhere the job simply waits, which is what ``deferred`` means.
+
+        A sink that cannot answer (a fake in a test, an older sink) counts as ready: the probe must
+        never be the reason a delivery is not attempted.
+        """
+        try:
+            sinks = self.stages.sinks()
+        except Exception:
+            log.warning("meeting-scribe: sink list unavailable; not skipping delivery", exc_info=True)
+            return True
+        for sink in sinks:
+            probe = getattr(sink, "active", None)
+            if probe is None:
+                return True
+            try:
+                if probe():
+                    return True
+            except Exception:
+                log.warning("meeting-scribe: sink %r availability probe failed; not skipping delivery",
+                            getattr(sink, "name", sink), exc_info=True)
+                return True
+        return False
 
     def _release_transcription(self) -> None:
         with self._claim_lock:
