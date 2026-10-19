@@ -322,6 +322,8 @@ advertencia.
 | `transcribe_cpu_threads` | int | `0` | Hilos de CPU para whisper (0 = núcleos menos 2). |
 | `transcribe_language` | str | `auto` | Código de idioma (auto = detectar; mejor fijarlo). |
 | `transcribe_beam_size` | int | `5` | Tamaño del beam al decodificar. |
+| `min_speech_seconds` | int | `45` | Voz por debajo de esto en una sala más corta que el ajuste siguiente significa gente entrando y saliendo: la reunión se descarta y no se publica nada. 0 lo desactiva. |
+| `min_empty_minutes` | int | `3` | Una sala abierta menos que esto y que casi no dijo nada es una conexión, no una reunión. Una sala MÁS LARGA nunca se descarta por estar callada: eso es una captura rota, y descartarla la escondería. |
 
 #### Análisis
 

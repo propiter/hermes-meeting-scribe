@@ -91,6 +91,13 @@ SPEC: dict[str, Opt] = {
     "transcribe_cpu_threads": Opt("int", 0, "transcription", minimum=0, scope="global"),
     "transcribe_language": Opt("str", "auto", "transcription"),
     "transcribe_beam_size": Opt("int", 5, "transcription", minimum=1, maximum=10, scope="global"),
+    # A meeting that lasted seconds and holds no voice is a connection, not a meeting: it ends as
+    # ``empty`` — nothing published, no LLM pass. A LONG meeting with no voice is the opposite: the
+    # audio or the transcription broke. Measured over 52 published meetings: the noise ones held
+    # 0.7-29.6 s of speech, the shortest real meeting 67.7 s, so 45 s sits in the middle of the gap.
+    # 0 on ``min_speech_seconds`` disables the floor.
+    "min_speech_seconds": Opt("int", 45, "transcription", minimum=0, scope="global"),
+    "min_empty_minutes": Opt("int", 3, "transcription", minimum=0, scope="global"),
     # analysis
     "analysis_language": Opt("str", "auto", "analysis"),
     "analysis_chunk_chars": Opt("int", 12000, "analysis", minimum=2000, scope="global"),
@@ -338,6 +345,8 @@ class Settings:
     transcribe_cpu_threads: int
     transcribe_language: str
     transcribe_beam_size: int
+    min_speech_seconds: int
+    min_empty_minutes: int
     analysis_language: str
     analysis_chunk_chars: int
     analysis_timeout_seconds: int

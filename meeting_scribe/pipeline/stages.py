@@ -158,8 +158,21 @@ class Stages:
         if assigned:
             utterances = sorted(relabel(utterances, assigned, {s.user_id: s.name for s in meeting.speakers}),
                                 key=lambda u: (u.t0, u.speaker_id))
+        settings = self.settings(meeting.space)
         if not utterances:
             raise EmptyRecording("the transcription found no speech")
+        # A connection is not a meeting: a room open for seconds that held a few words is people
+        # joining and leaving, not something to publish. Measured over 52 published meetings: the
+        # ones with nothing in them held 0.7-29.6 s of speech and the shortest real meeting 67.7 s,
+        # so 45 s sits in the middle of the gap. The duration guard is what keeps this honest — a
+        # LONG room is never discarded for being quiet, only a connection is, because a room that
+        # stayed and said nothing is a broken capture and deleting it would hide that.
+        speech = sum(max(0.0, u.t1 - u.t0) for u in utterances)
+        minutes = ((meeting.ended_at - meeting.started_at).total_seconds() / 60
+                   if meeting.ended_at else 0.0)
+        if (settings.min_speech_seconds and speech < settings.min_speech_seconds
+                and minutes < settings.min_empty_minutes):
+            raise EmptyRecording(f"{speech:.0f}s of speech in a {minutes:.1f}-minute meeting")
         speakers = spoken_speakers(meeting.speakers, utterances)
         if len(speakers) != len(meeting.speakers):  # silent "unidentified participant" tracks drop out
             kept = {s.user_id for s in speakers}

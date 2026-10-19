@@ -144,6 +144,23 @@ config_schema:
     group: transcription
     minimum: 1
     maximum: 10
+  min_speech_seconds:
+    type: int
+    default: 45
+    label: Minimum speech (seconds)
+    description: 'Speech below this in a room shorter than the next setting means people joining and leaving:
+      the meeting is discarded and nothing is published. 0 disables it.'
+    group: transcription
+    minimum: 0
+  min_empty_minutes:
+    type: int
+    default: 3
+    label: Connection, not a meeting (minutes)
+    description: A room open for less than this that held almost no speech is a connection, not a meeting.
+      A LONGER room is never discarded for being quiet — that is a broken capture, and discarding it would
+      hide it.
+    group: transcription
+    minimum: 0
   analysis_language:
     type: str
     default: auto
