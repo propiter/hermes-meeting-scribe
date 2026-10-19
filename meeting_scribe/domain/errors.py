@@ -30,6 +30,16 @@ class EmptyRecording(Exception):
     publishing anything."""
 
 
+class NotAMeeting(EmptyRecording):
+    """A room open for seconds that held a few words: people joining and leaving, not a meeting.
+
+    A kind of ``EmptyRecording`` — not a failure, never retried, nothing published, no LLM pass — but
+    it goes further than ``empty``: ``empty`` keeps the folder as the trace of a recording nobody
+    spoke in, while a connection is erased whole. There is nothing in it worth finding later, and it
+    never published anything, so there is nothing outside to remove either.
+    """
+
+
 class NothingToReprocess(ValueError):
     """The meeting was discarded because no audio was captured; there is nothing to redo."""
 

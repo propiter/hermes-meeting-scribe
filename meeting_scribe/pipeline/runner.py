@@ -24,7 +24,7 @@ from dataclasses import replace
 from datetime import timedelta
 from typing import Any, Callable, ContextManager, Iterable, Optional, Sequence
 
-from ..domain.errors import EmptyRecording, NothingToReprocess
+from ..domain.errors import EmptyRecording, NotAMeeting, NothingToReprocess
 from ..domain.models import (
     KV_MOVE_FROM_DM, SOURCE_DISCORD, STAGE_ORDER, Meeting, MeetingState, Stage, rewind_target, running_state, stage_after,
 )
@@ -449,6 +449,9 @@ class PipelineRunner:
                 meeting = self.stages.run(stage, meeting)
                 output = _OUTPUT[stage]
                 meeting = self.stages.persist(meeting.with_state(output) if output else meeting)
+        except NotAMeeting as exc:  # a connection, not a meeting: it leaves nothing behind
+            self._forget(job_id, meeting_id, stage, exc)
+            return
         except EmptyRecording as exc:  # nobody was heard: a terminal outcome, never retried
             self._discard(job_id, meeting_id, stage, exc)
             return
@@ -474,6 +477,13 @@ class PipelineRunner:
         self.stages.discard(self._meeting(meeting_id))
         self.repo.complete_job(job_id)
         self._emit(meeting_id, "discarded", {"stage": stage.value})
+
+    def _forget(self, job_id: int, meeting_id: str, stage: Stage, exc: Exception) -> None:
+        """Erase a connection whole. Unlike ``_discard`` it leaves no row, so there is no job to close."""
+        log.info("meeting-scribe %s forgotten at %s: a connection, not a meeting (%s)",
+                 meeting_id, stage.value, exc)
+        self.stages.forget(self._meeting(meeting_id))
+        self._emit(meeting_id, "forgotten", {"stage": stage.value})
 
     def _defer(self, job_id: int, meeting_id: str, stage: Stage, exc: Exception) -> bool:
         """Re-queue without using an attempt; ``False`` once the wait exceeded ``DEFER_MAX_SECONDS``.

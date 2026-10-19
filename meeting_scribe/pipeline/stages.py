@@ -20,7 +20,7 @@ from ..audio.archive import build_archive
 from ..audio.ffmpeg import Ffmpeg
 from ..audio.playback import build_playback
 from ..config import Settings
-from ..domain.errors import EmptyRecording
+from ..domain.errors import EmptyRecording, NotAMeeting
 from ..domain.models import Meeting, MeetingState, SinkResult, Speaker, Stage, Utterance, is_unidentified
 from ..domain.ports import Analyzer, ProjectCatalog, Sink, Transcriber
 from ..storage.artifacts import (
@@ -144,6 +144,18 @@ class Stages:
         self.repo.replace_utterances(meeting.id, [])
         return self.persist(meeting.with_state(MeetingState.EMPTY))
 
+    def forget(self, meeting: Meeting) -> None:
+        """Erase a meeting that turned out to hold nothing at all (DESIGN §9): a connection.
+
+        ``discard`` keeps the folder as the trace of a recording nobody spoke in; this keeps nothing,
+        because there is nothing in it worth finding later and it never published anything. The folder
+        is removed only when it sits inside the layout root, so a bad path cannot reach outside it.
+        """
+        folder = self.folder(meeting)
+        if folder.is_dir() and self.layout.root().resolve() in folder.resolve().parents:
+            shutil.rmtree(folder, ignore_errors=True)
+        self.repo.forget_meeting(meeting.id)
+
     def run(self, stage: Stage, meeting: Meeting) -> Meeting:
         return {Stage.TRANSCRIBE: self.transcribe, Stage.ANALYZE: self.analyze,
                 Stage.DELIVER: self.deliver, Stage.ARCHIVE: self.archive}[stage](meeting)
@@ -172,7 +184,7 @@ class Stages:
                    if meeting.ended_at else 0.0)
         if (settings.min_speech_seconds and speech < settings.min_speech_seconds
                 and minutes < settings.min_empty_minutes):
-            raise EmptyRecording(f"{speech:.0f}s of speech in a {minutes:.1f}-minute meeting")
+            raise NotAMeeting(f"{speech:.0f}s of speech in a {minutes:.1f}-minute meeting")
         speakers = spoken_speakers(meeting.speakers, utterances)
         if len(speakers) != len(meeting.speakers):  # silent "unidentified participant" tracks drop out
             kept = {s.user_id for s in speakers}

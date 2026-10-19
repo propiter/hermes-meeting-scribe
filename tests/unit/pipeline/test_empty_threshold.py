@@ -2,9 +2,8 @@
 
 Measured over 52 published meetings: the ones with nothing in them held 0.7-29.6 s of speech and the
 shortest real meeting 67.7 s — a 38-second gap, with the floor at 45 s in the middle of it. The
-room's own duration tells the two apart, and it is what keeps the rule honest: a LONG room is never
-discarded for being quiet, because a room that stayed and said nothing is a broken capture, and
-discarding it would hide that.
+room's own duration is what keeps the rule honest: a LONG room is never thrown away for being quiet,
+because a room that stayed and said nothing is a broken capture, and erasing it would hide that.
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ def _transcriber(speech_seconds: float):
 @pytest.fixture
 def run(prepo, layout, settings, clock, meeting):
     """Run one meeting end to end, choosing how much was said and how long the room was open."""
-    def go(*, speech: float, minutes: float, cfg=None):
+    def go(*, speech: float, minutes: float, cfg=None) -> str:
         use = cfg or settings
         runner, _, _, _ = build(prepo, layout, use, clock, transcriber=_transcriber(speech))
         service = MeetingService(prepo, layout, runner, use, clock=clock, item_sinks=lambda: {},
@@ -41,34 +40,45 @@ def run(prepo, layout, settings, clock, meeting):
             speakers=(Speaker("10", "Ana"),)))
         service.finish_recording(live.id)
         drain(runner)
-        return service.require(live.id)
+        return live.id
     return go
 
 
-def test_a_connection_with_a_few_seconds_of_speech_is_not_a_meeting(run):
+def test_a_connection_leaves_nothing_behind(run, prepo, layout):
     """Measured: "no", "Pero esa cara...", "me conecto ya" — 6.5 s in a 15-second connection."""
-    assert run(speech=6.5, minutes=0.25).state is MeetingState.EMPTY
+    mid = run(speech=6.5, minutes=0.25)
+
+    assert prepo.get_meeting(mid) is None  # no row to list, export or search
+    assert prepo.utterance_count(mid) == 0
+    assert list((layout.root() / "meetings").rglob(f"*_{mid}")) == []  # no folder either
 
 
-def test_a_long_room_is_never_discarded_for_being_quiet(run):
+def test_a_long_room_is_never_thrown_away_for_being_quiet(run, prepo):
     """Measured: 37 minutes on the clock, 9.4 s transcribed — a broken capture, not an empty room.
-    Discarding it would delete the only evidence that the audio was lost."""
-    assert run(speech=9.4, minutes=37).state is MeetingState.DONE
+    Erasing it would delete the only evidence that the audio was lost."""
+    mid = run(speech=9.4, minutes=37)
+
+    assert prepo.get_meeting(mid).state is MeetingState.DONE
 
 
-def test_a_real_meeting_is_untouched(run):
+def test_a_real_meeting_is_untouched(run, prepo):
     """Measured: the shortest real meeting on record holds 67.7 s of speech."""
-    assert run(speech=67.7, minutes=30).state is MeetingState.DONE
+    mid = run(speech=67.7, minutes=30)
+
+    assert prepo.get_meeting(mid).state is MeetingState.DONE
 
 
-def test_the_floor_can_be_turned_off(run):
+def test_the_floor_can_be_turned_off(run, prepo):
     cfg = lambda space=None: settings_from_mapping(  # noqa: E731 - a settings(space) callable
         {"audio_retention": "none", "min_speech_seconds": 0})
-    assert run(speech=6.5, minutes=0.25, cfg=cfg).state is MeetingState.DONE
+
+    assert prepo.get_meeting(run(speech=6.5, minutes=0.25, cfg=cfg)).state is MeetingState.DONE
 
 
-def test_nothing_at_all_is_still_discarded_with_the_floor_off(run):
-    """No utterance keeps the old outcome whatever the floor says: there is nothing to analyse."""
+def test_nothing_at_all_keeps_the_old_outcome_with_the_floor_off(run, prepo):
+    """No utterance is a different situation: it stays ``empty``, which keeps the folder as its trace
+    — the designed behaviour for a recording nobody spoke in."""
     cfg = lambda space=None: settings_from_mapping(  # noqa: E731
         {"audio_retention": "none", "min_speech_seconds": 0})
-    assert run(speech=0.0, minutes=0.25, cfg=cfg).state is MeetingState.EMPTY
+
+    assert prepo.get_meeting(run(speech=0.0, minutes=0.25, cfg=cfg)).state is MeetingState.EMPTY
