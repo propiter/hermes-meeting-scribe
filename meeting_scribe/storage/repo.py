@@ -424,6 +424,30 @@ class Repository(JobsMixin, DeliveriesMixin, SpacesMixin):
     def delete_speaker(self, meeting_id: str, user_id: str) -> None:
         self._x("DELETE FROM speakers WHERE meeting_id=? AND user_id=?", (meeting_id, user_id))
 
+    # Everything a meeting owns, and every marker that carries its id. A forgotten meeting must not
+    # leave a stray key behind for the next sweep to act on.
+    MEETING_TABLES = ("utterances_fts", "utterances", "speakers", "deliveries", "action_items",
+                      "item_sinks", "item_overrides", "desktop_commands", "speaker_audit",
+                      "task_audit", "task_proposals", "jobs")
+    MEETING_KV_PREFIXES = ("pipeline.deferred_since.", "pipeline.waiting_destination.",
+                           "pipeline.sinks_done.", "pipeline.republish_identity.",
+                           "speakers.assigned.", "tasks.announce.", "privacy.private.",
+                           "privacy.dm_unreachable.", "privacy.withdraw_pending.",
+                           "discord.move_from_dm.", "discord.dm_notes.")
+
+    def forget_meeting(self, meeting_id: str) -> None:
+        """Erase a meeting and everything pointing at it, in one transaction (DESIGN §9).
+
+        For a meeting that turned out to hold nothing — a connection, not a meeting — so that nothing
+        is left to list, export, search or act on. Callers must remove the copies OUTSIDE the database
+        first: the Discord message ids live in ``deliveries``, and this is the table that holds them.
+        """
+        self._tx([(f"DELETE FROM {table} WHERE meeting_id=?", (meeting_id,))
+                  for table in self.MEETING_TABLES]
+                 + [("DELETE FROM meetings WHERE id=?", (meeting_id,))]
+                 + [("DELETE FROM kv WHERE key=?", (prefix + meeting_id,))
+                    for prefix in self.MEETING_KV_PREFIXES])
+
     # -- utterances + FTS -----------------------------------------------------------------------
     def replace_utterances(self, meeting_id: str, utterances: Sequence[Utterance]) -> None:
         with self._lock:
