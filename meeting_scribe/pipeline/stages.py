@@ -21,7 +21,7 @@ from ..audio.ffmpeg import Ffmpeg
 from ..audio.playback import build_playback
 from ..config import Settings
 from ..domain.errors import EmptyRecording
-from ..domain.models import Meeting, MeetingState, SinkResult, Stage
+from ..domain.models import Meeting, MeetingState, SinkResult, Speaker, Stage, Utterance, is_unidentified
 from ..domain.ports import Analyzer, ProjectCatalog, Sink, Transcriber
 from ..storage.artifacts import (
     NOTES_JSON, read_notes, read_transcript, write_meta, write_notes, write_transcript, write_transcript_md,
@@ -37,6 +37,23 @@ ProgressCb = Callable[[str, str, float], None]  # meeting_id, track, fraction
 log = logging.getLogger(__name__)
 REPUBLISH_KV = "pipeline.republish_identity."
 SINKS_DONE_KV = "pipeline.sinks_done."  # meeting id -> {"notes": sha256, "sinks": [...]} (review M4)
+
+
+def spoken_speakers(speakers: Sequence[Speaker], utterances: Sequence[Utterance]) -> tuple[Speaker, ...]:
+    """The participants, minus the ``unidentified-N`` tracks that never said a word.
+
+    A Discord connection that only streams silence still gets its own track: the receiver cannot know
+    it will never speak, so it labels the SSRC after ``UNIDENTIFIED_AFTER`` seconds and names the
+    label after its owner (or leaves it as "Participante sin identificar N"). Keeping that label in
+    the participant list repeats someone who already has a track of their own — and invents a
+    participant who never spoke. Measured on a real meeting: eight such tracks, every one at -91 dB,
+    listed next to the eight people who actually talked.
+
+    A label stays a participant only while the transcript keeps a line of its own: one whose lines
+    were relabeled to its owner, or that produced none, is not a person the notes may name.
+    """
+    spoken = {u.speaker_id for u in utterances}
+    return tuple(s for s in speakers if not is_unidentified(s.user_id) or s.user_id in spoken)
 
 
 class StageError(RuntimeError):
@@ -136,8 +153,6 @@ class Stages:
         folder = self.folder(meeting)
         cb = (lambda track, frac: self.progress(meeting.id, track, frac)) if self.progress else None
         utterances = self.transcriber.transcribe(meeting, folder, cb)
-        from ..domain.models import is_unidentified
-
         utterances = [replace(u, track_id=u.speaker_id) if is_unidentified(u.speaker_id) else u for u in utterances]
         assigned = assignments(self.repo, meeting.id)  # tracks given to their owner after the meeting
         if assigned:
@@ -145,6 +160,12 @@ class Stages:
                                 key=lambda u: (u.t0, u.speaker_id))
         if not utterances:
             raise EmptyRecording("the transcription found no speech")
+        speakers = spoken_speakers(meeting.speakers, utterances)
+        if len(speakers) != len(meeting.speakers):  # silent "unidentified participant" tracks drop out
+            kept = {s.user_id for s in speakers}
+            for gone in (s.user_id for s in meeting.speakers if s.user_id not in kept):
+                self.repo.delete_speaker(meeting.id, gone)  # save_meeting upserts, it never removes
+            meeting = self.persist(replace(meeting, speakers=speakers))
         write_transcript(folder, utterances)
         write_transcript_md(folder, meeting, utterances, self.settings(meeting.space).ui_language)
         self.repo.replace_utterances(meeting.id, utterances)
