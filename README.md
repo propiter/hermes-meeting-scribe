@@ -314,6 +314,7 @@ invalid value falls back to its default, and `doctor` reports it as a warning.
 | `transcribe_cpu_threads` | int | `0` | CPU threads for whisper (0 = cores minus 2). |
 | `transcribe_language` | str | `auto` | Language code (auto = detect; pin it if you can). |
 | `transcribe_beam_size` | int | `5` | Beam size for decoding. |
+| `transcribe_vocabulary` | list | `[]` | Names whisper mishears (brands, products, people), comma-joined. They go to the decoder as its prompt, so they are heard right from the start. |
 | `min_speech_seconds` | int | `45` | Speech below this in a room shorter than the next setting means people joining and leaving: the meeting is discarded and nothing is published. 0 disables it. |
 | `min_empty_minutes` | int | `3` | A room open for less than this that held almost no speech is a connection, not a meeting. A LONGER room is never discarded for being quiet — that is a broken capture, and discarding it would hide it. |
 

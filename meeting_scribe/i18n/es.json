@@ -149,6 +149,8 @@
   "cfg.transcribe_language.label": "Idioma hablado",
   "cfg.transcribe_model.help": "Modelo de faster-whisper (tiny/base/small/medium/large-v3/turbo).",
   "cfg.transcribe_model.label": "Modelo Whisper",
+  "cfg.transcribe_vocabulary.label": "Vocabulario",
+  "cfg.transcribe_vocabulary.help": "Nombres que whisper oye mal (marcas, productos, personas), separados por comas. Van al decodificador como su prompt, así se oyen bien desde el principio.",
   "cfg.ui_language.help": "Idioma de los mensajes del bot.",
   "cfg.ui_language.label": "Idioma del bot",
   "cli.config_unset": "{key} eliminado: vuelve a aplicarse el valor predeterminado.",

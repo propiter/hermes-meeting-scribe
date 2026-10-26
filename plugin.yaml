@@ -144,6 +144,13 @@ config_schema:
     group: transcription
     minimum: 1
     maximum: 10
+  transcribe_vocabulary:
+    type: list
+    default: []
+    label: Vocabulary
+    description: Names whisper mishears (brands, products, people), comma-joined. They go to the decoder
+      as its prompt, so they are heard right from the start.
+    group: transcription
   min_speech_seconds:
     type: int
     default: 45

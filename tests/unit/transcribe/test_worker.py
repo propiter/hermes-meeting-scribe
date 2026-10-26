@@ -49,6 +49,24 @@ def test_language_pinned(tmp_path):
     assert model.calls[0][1]["language"] == "es"
 
 
+def test_vocabulary_reaches_the_decoder(tmp_path):
+    """The names the client listed must arrive as whisper's ``initial_prompt``, not be dropped."""
+    job = _job(tmp_path, 1)
+    payload = json.loads(job.read_text())
+    payload["initial_prompt"] = "Zellia, Tomfic, Wompi"
+    job.write_text(json.dumps(payload))
+    model = FakeModel()
+    worker.run_job(job, model_factory=lambda j: model)
+    assert model.calls[0][1]["initial_prompt"] == "Zellia, Tomfic, Wompi"
+
+
+def test_no_vocabulary_means_no_prompt(tmp_path):
+    """An unset list must not become an empty string: whisper treats "" as an actual prompt."""
+    model = FakeModel()
+    worker.run_job(_job(tmp_path, 1), model_factory=lambda j: model)
+    assert model.calls[0][1]["initial_prompt"] is None
+
+
 def test_resume_skips_done_tracks(tmp_path):
     job = _job(tmp_path)
     (tmp_path / "0.json").write_text(json.dumps({"speaker_id": "0", "done": True, "segments": []}))

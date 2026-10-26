@@ -3,7 +3,7 @@ import sys
 import pytest
 
 from meeting_scribe.config import settings_from_mapping
-from meeting_scribe.transcribe.client import SubprocessTranscriber, TranscriptionError, worker_timeout
+from meeting_scribe.transcribe.client import SubprocessTranscriber, TranscriptionError, worker_timeout, vocabulary_prompt
 
 FAKE_WORKER = r"""
 import json, sys, time
@@ -79,6 +79,13 @@ def test_tracks_restored_from_archive(ff, fake_worker, make_track, tmp_path, mee
     utts = _transcriber(ff, fake_worker).transcribe(meeting, folder)
     assert {u.speaker_id for u in utts} == {"10", "11"}
     assert not (folder / "tracks").exists()  # restored copies are temporary
+
+
+def test_vocabulary_prompt_is_comma_joined_and_trimmed():
+    """Blank entries vanish and the prompt stays inside the decoder's context."""
+    assert vocabulary_prompt([" Zellia ", "Tomfic", "", "  ", "Wompi"]) == "Zellia, Tomfic, Wompi"
+    assert vocabulary_prompt(()) == ""
+    assert len(vocabulary_prompt(["x" * 400])) == 200
 
 
 def test_timeout_scales_with_duration_and_model():

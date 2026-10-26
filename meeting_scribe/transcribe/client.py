@@ -46,6 +46,16 @@ def worker_timeout(audio_seconds: float, model: str, *, floor: float = 600.0) ->
     return max(floor, audio_seconds * realtime_factor(model) * 4 + 300)
 
 
+def vocabulary_prompt(terms: Sequence[str]) -> str:
+    """The names for whisper's ``initial_prompt``, comma-joined.
+
+    The prompt biases the decoder toward the *tokens* that follow it, which is what stops an unseen
+    brand from being heard as a common word. Kept short on purpose: the decoder's context is finite
+    and a long prompt crowds out the audio it is supposed to condition.
+    """
+    return ", ".join(t.strip() for t in terms if t and t.strip())[:200]
+
+
 def _segments(raw: Sequence[Mapping[str, Any]]) -> list[RawSegment]:
     return [RawSegment(start=float(s["start"]), end=float(s["end"]), text=str(s["text"]),
                        avg_logprob=float(s.get("avg_logprob", 0.0)), no_speech_prob=float(s.get("no_speech_prob", 0.0)),
@@ -106,6 +116,9 @@ class SubprocessTranscriber:
                "compute_type": settings.transcribe_compute_type, "cpu_threads": settings.effective_cpu_threads,
                "language": settings.transcribe_language, "beam_size": settings.transcribe_beam_size,
                "progress": str(work / "progress.json"), **self._extra}
+        prompt = vocabulary_prompt(settings.transcribe_vocabulary)
+        if prompt:  # omitted when unset, so the job stays byte-identical for the common case
+            job["initial_prompt"] = prompt
         job_path = work / "job.json"
         job_path.write_text(json.dumps(job), encoding="utf-8")
         self._run(job_path, work / "progress.json", worker_timeout(total, settings.transcribe_model,

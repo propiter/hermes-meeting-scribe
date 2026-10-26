@@ -149,6 +149,8 @@
   "cfg.transcribe_language.label": "Spoken language",
   "cfg.transcribe_model.help": "faster-whisper model (tiny/base/small/medium/large-v3/turbo).",
   "cfg.transcribe_model.label": "Whisper model",
+  "cfg.transcribe_vocabulary.label": "Vocabulary",
+  "cfg.transcribe_vocabulary.help": "Names whisper mishears (brands, products, people), comma-joined. They go to the decoder as its prompt, so they are heard right from the start.",
   "cfg.ui_language.help": "Language of bot messages.",
   "cfg.ui_language.label": "Bot language",
   "cli.config_unset": "{key} removed: the default value applies again.",

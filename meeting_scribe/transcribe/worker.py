@@ -6,7 +6,7 @@ instance (sharing Hermes' STT singleton would thrash the gateway's voice-mode mo
 
 Contract (all paths absolute):
   job.json  {"tracks": [{"speaker_id", "wav", "out"}], "model", "device", "compute_type",
-             "cpu_threads", "language", "beam_size", "progress"}
+             "cpu_threads", "language", "beam_size", "progress", "initial_prompt"?}
   <out>     {"speaker_id", "done": true, "language", "duration", "segments": [{"start", "end",
              "text", "avg_logprob", "no_speech_prob", "words": [{"start","end","word","probability"}]}]}
   progress  {"done": [speaker_id...], "current", "fraction", "error"?}
@@ -83,7 +83,8 @@ def run_job(job_path: Path, model_factory: Callable[[dict], Any] = load_model) -
         _write(progress, {"done": done, "current": track["speaker_id"], "fraction": len(done) / len(tracks)})
         segments, info = model.transcribe(
             track["wav"], language=language, beam_size=int(job.get("beam_size", 5)), vad_filter=True,
-            word_timestamps=True, condition_on_previous_text=False)
+            word_timestamps=True, condition_on_previous_text=False,
+            initial_prompt=job.get("initial_prompt") or None)
         result = {"speaker_id": track["speaker_id"], "segments": [_segment(s) for s in segments],
                   "language": getattr(info, "language", None), "duration": getattr(info, "duration", None),
                   "done": True}

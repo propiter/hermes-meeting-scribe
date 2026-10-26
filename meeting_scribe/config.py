@@ -91,6 +91,13 @@ SPEC: dict[str, Opt] = {
     "transcribe_cpu_threads": Opt("int", 0, "transcription", minimum=0, scope="global"),
     "transcribe_language": Opt("str", "auto", "transcription"),
     "transcribe_beam_size": Opt("int", 5, "transcription", minimum=1, maximum=10, scope="global"),
+    # A name the decoder has never seen (a brand, a product) is heard as whatever common word of the
+    # language sounds closest: this corpus wrote "Celia" for Zellia and "TomFix" for Tomfic, and the
+    # wrong name then travels into every note, task and search hit. Listing the real names feeds them
+    # to whisper as its ``initial_prompt``, the only lever that acts BEFORE the mistake is written.
+    # Empty means no prompt at all, and the list belongs to the install: never bake in the names of
+    # one client, since every client's meetings run through the same plugin.
+    "transcribe_vocabulary": Opt("list", (), "transcription"),
     # A meeting that lasted seconds and holds no voice is a connection, not a meeting: it ends as
     # ``empty`` — nothing published, no LLM pass. A LONG meeting with no voice is the opposite: the
     # audio or the transcription broke. Measured over 52 published meetings: the noise ones held
@@ -345,6 +352,7 @@ class Settings:
     transcribe_cpu_threads: int
     transcribe_language: str
     transcribe_beam_size: int
+    transcribe_vocabulary: tuple[str, ...]
     min_speech_seconds: int
     min_empty_minutes: int
     analysis_language: str
